@@ -21,7 +21,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS files (
     label       TEXT,
     kind        TEXT NOT NULL,
     ord         INTEGER NOT NULL DEFAULT 0,
-    added_at    TEXT NOT NULL DEFAULT (datetime('now'))
+    added_at    TEXT NOT NULL DEFAULT (datetime('now')),
+    missing     INTEGER NOT NULL DEFAULT 0  -- 一致性检查标记（task #14 T1）
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
@@ -322,9 +323,23 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
+    """v3 → v4：``files`` 表新增 ``missing`` 列（task #14 T1 库一致性检查）。
+
+    用户跑「检查库一致性」后选择"标记为缺失" → 给文件加 missing=1，UI 展示
+    ⚠ 图标提示文件不在物理位置。幂等。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(files)").fetchall()}
+    if "missing" not in cols:
+        conn.execute(
+            "ALTER TABLE files ADD COLUMN missing INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (1, 2, _migrate_v1_to_v2),
     (2, 3, _migrate_v2_to_v3),
+    (3, 4, _migrate_v3_to_v4),
 ]
 
 

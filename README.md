@@ -149,6 +149,18 @@ app/
 
 > Developer end-to-end self-check scripts live in [`selftests/`](./selftests/README.md) (run manually, not in CI).
 
+## Moving & Syncing Your Library
+
+Each LLM Cabinet library is **one self-contained directory** (containing `cabinet.db` + `library/` + a `.llm-cabinet` marker). **No export/import needed to relocate**:
+
+1. Close LLM Cabinet
+2. In your file manager, **cut & paste** the entire library directory to the new location (other drive, network drive, USB stick)
+3. Reopen LLM Cabinet, choose **Library → Switch Library** and pick the new location
+
+Cross-device syncing (OneDrive / Dropbox / etc.) works the same way. **Caveat**: only one client may have the library open at a time (SQLite single-writer lock). Keep the app closed while the sync agent finishes uploading to avoid write conflicts.
+
+For point-in-time snapshots, use **Tools → 📦 Backup this library** to zip the whole directory; restore with **Tools → 📥 Restore library from backup** by picking the zip + an empty target directory.
+
 ## FAQ
 
 ### Taskbar icon looks wrong on first launch

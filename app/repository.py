@@ -535,6 +535,23 @@ class Repository:
             cur.execute("UPDATE files SET ord=? WHERE id=?", (i, fid))
         self.conn.commit()
 
+    def set_file_missing(self, fid: int, missing: bool) -> None:
+        """标记/取消文件缺失标记（task #14 T1）。"""
+        self.conn.execute(
+            "UPDATE files SET missing=? WHERE id=?",
+            (1 if missing else 0, fid),
+        )
+        self.conn.commit()
+
+    def clear_all_missing_flags(self) -> int:
+        """清空所有 missing 标记（一致性检查重新跑时用），返回受影响行数。"""
+        cur = self.conn.execute(
+            "UPDATE files SET missing=0 WHERE missing=1"
+        )
+        self.conn.commit()
+        return cur.rowcount or 0
+
+
     # ------------------------------------------------------------------ settings
     def get_setting(self, key: str, default: str = "") -> str:
         row = self.conn.execute(
@@ -760,6 +777,11 @@ class Repository:
 
     @staticmethod
     def _row_to_file(row: sqlite3.Row) -> FileItem:
+        # missing 列在 v3 → v4 才加上；老 db 用 try/except 兼容（理论上迁移已跑）
+        try:
+            missing_v = bool(row["missing"])
+        except (IndexError, KeyError):
+            missing_v = False
         return FileItem(
             id=row["id"],
             project_id=row["project_id"],
@@ -769,4 +791,5 @@ class Repository:
             kind=row["kind"] or "other",
             ord=row["ord"] or 0,
             added_at=row["added_at"] or "",
+            missing=missing_v,
         )

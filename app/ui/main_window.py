@@ -200,6 +200,19 @@ class MainWindow(QMainWindow):
         act_imp.triggered.connect(lambda _checked=False: self._lib_import_api())
         m_lib.addAction(act_imp)
 
+        # 「工具」菜单（task #14）：库一致性检查 / 备份 / 恢复
+        m_tools = bar.addMenu("工具(&T)")
+        act_check = QAction("🔍 检查库一致性...", self)
+        act_check.triggered.connect(lambda _c=False: self._tools_check_consistency())
+        m_tools.addAction(act_check)
+        m_tools.addSeparator()
+        act_backup = QAction("📦 备份此库...", self)
+        act_backup.triggered.connect(lambda _c=False: self._tools_backup_library())
+        m_tools.addAction(act_backup)
+        act_restore = QAction("📥 从备份恢复库...", self)
+        act_restore.triggered.connect(lambda _c=False: self._tools_restore_library())
+        m_tools.addAction(act_restore)
+
     def _lib_rebuild_recent_menu(self) -> None:
         """重建「最近打开」子菜单。每个条目支持右键菜单（移除/删除/改名）。"""
         if self.cabinet_config is None:
@@ -562,6 +575,223 @@ class MainWindow(QMainWindow):
 
         lst.customContextMenuRequested.connect(_on_menu)
         dlg.exec()
+
+    # ============================================================ 工具菜单（task #14）
+    def _tools_check_consistency(self) -> None:
+        """库一致性检查（task #14 T1）。"""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import (
+            QButtonGroup, QDialog, QDialogButtonBox, QHeaderView, QLabel,
+            QMessageBox, QProgressDialog, QRadioButton, QTableWidget,
+            QTableWidgetItem, QVBoxLayout,
+        )
+        from ..library_check import (
+            apply_consistency_action, run_consistency_check,
+        )
+
+        prog = QProgressDialog("正在扫描库...", "取消", 0, 100, self)
+        prog.setWindowTitle("检查库一致性")
+        prog.setWindowModality(_Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.show()
+
+        def _on_prog(done, total, _name):
+            if total > 0:
+                prog.setMaximum(total)
+                prog.setValue(done)
+
+        try:
+            rep = run_consistency_check(self.repo, self.library, progress=_on_prog)
+        except Exception as e:
+            prog.close()
+            QMessageBox.critical(self, "检查失败", str(e))
+            return
+        prog.close()
+
+        # 报告对话框
+        dlg = QDialog(self)
+        dlg.setWindowTitle("库一致性检查报告")
+        dlg.resize(720, 480)
+        v = QVBoxLayout(dlg)
+
+        summary = QLabel(
+            f"扫描总文件数：{rep.total_files}<br>"
+            f"📦 仓储文件：完整 {rep.n_storage - len(rep.storage_missing)} / {rep.n_storage}"
+            + (f"，<b>失效 {len(rep.storage_missing)}</b>" if rep.storage_missing else "")
+            + f"<br>🔗 链接文件：完整 {rep.n_link - len(rep.link_missing)} / {rep.n_link}"
+            + (f"，<b>失效 {len(rep.link_missing)}</b>" if rep.link_missing else "")
+        )
+        summary.setTextFormat(_Qt.RichText)
+        v.addWidget(summary)
+
+        if rep.total_missing == 0:
+            v.addWidget(QLabel("🎉 全部文件物理存在，未发现失效项。"))
+            bb = QDialogButtonBox(QDialogButtonBox.Close)
+            bb.rejected.connect(dlg.reject)
+            bb.accepted.connect(dlg.accept)
+            v.addWidget(bb)
+            dlg.exec()
+            return
+
+        # 失效清单表
+        tbl = QTableWidget(rep.total_missing, 4)
+        tbl.setHorizontalHeaderLabels(["项目", "文件", "存储模式", "原始路径"])
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        tbl.setAlternatingRowColors(True)
+        h = tbl.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Interactive)
+        h.setSectionResizeMode(1, QHeaderView.Interactive)
+        h.setSectionResizeMode(2, QHeaderView.Fixed)
+        h.setSectionResizeMode(3, QHeaderView.Stretch)
+        tbl.setColumnWidth(0, 140)
+        tbl.setColumnWidth(1, 180)
+        tbl.setColumnWidth(2, 80)
+        for r, entry in enumerate(rep.storage_missing + rep.link_missing):
+            tbl.setItem(r, 0, QTableWidgetItem(entry.project_title))
+            tbl.setItem(r, 1, QTableWidgetItem(entry.file_name))
+            tbl.setItem(r, 2, QTableWidgetItem(entry.storage_label))
+            tbl.setItem(r, 3, QTableWidgetItem(entry.resolved))
+        v.addWidget(tbl, 1)
+
+        v.addWidget(QLabel("处理：选择如何对这些失效文件做后续处理"))
+        rb_noop = QRadioButton("仅查看，不动数据")
+        rb_mark = QRadioButton("标记为缺失（文件表显示 ⚠ 图标）")
+        rb_del = QRadioButton("从项目中移除（保留磁盘上别处的文件）")
+        rb_noop.setChecked(True)
+        bg = QButtonGroup(dlg)
+        bg.addButton(rb_noop); bg.addButton(rb_mark); bg.addButton(rb_del)
+        v.addWidget(rb_noop); v.addWidget(rb_mark); v.addWidget(rb_del)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("应用")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+        action = "noop"
+        if rb_mark.isChecked():
+            action = "mark"
+        elif rb_del.isChecked():
+            action = "delete"
+        if action == "noop":
+            return
+        n_marked, n_deleted = apply_consistency_action(self.repo, rep, action)
+        QMessageBox.information(
+            self, "完成",
+            f"已处理：标记 {n_marked} 个 / 移除 {n_deleted} 个。",
+        )
+        self.refresh_projects()
+
+    def _tools_backup_library(self) -> None:
+        """备份当前库（task #14 T2）。"""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import (
+            QFileDialog, QMessageBox, QProgressDialog,
+        )
+        from ..library_check import backup_library
+        from datetime import datetime as _dt
+        from pathlib import Path as _Path
+
+        if self.library_root is None:
+            QMessageBox.warning(self, "不可用", "当前库目录未知，无法备份。")
+            return
+
+        # 默认文件名：<libname>-YYYYMMDD-HHMMSS.zip
+        handle = (
+            self.cabinet_config.find(self.library_root)
+            if self.cabinet_config else None
+        )
+        label = handle.display_name if handle else _Path(self.library_root).name
+        ts = _dt.now().strftime("%Y%m%d-%H%M%S")
+        default_name = f"{label}-{ts}.zip"
+        last_dir = self.repo.get_setting("last_backup_dir", "") or str(_Path.home())
+        target, _ = QFileDialog.getSaveFileName(
+            self, "选择备份保存位置",
+            str(_Path(last_dir) / default_name),
+            "ZIP 备份 (*.zip)",
+        )
+        if not target:
+            return
+
+        # 闪存 WAL 到主 db（如果用了 WAL 模式）
+        try:
+            self.repo.conn.execute("PRAGMA wal_checkpoint(FULL)")
+        except Exception:
+            pass
+
+        prog = QProgressDialog("正在打包库目录...", None, 0, 0, self)
+        prog.setWindowTitle("备份库")
+        prog.setWindowModality(_Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.show()
+        try:
+            out = backup_library(_Path(self.library_root), _Path(target))
+        except Exception as e:
+            prog.close()
+            QMessageBox.critical(self, "备份失败", str(e))
+            return
+        prog.close()
+        try:
+            self.repo.set_setting("last_backup_dir", str(_Path(target).parent))
+        except Exception:
+            pass
+        QMessageBox.information(
+            self, "完成", f"备份完成：\n{out}\n大小：{_human_size(out.stat().st_size)}",
+        )
+
+    def _tools_restore_library(self) -> None:
+        """从备份恢复一个库（解到新目录，然后用『切换库』流程打开）。"""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import (
+            QFileDialog, QMessageBox, QProgressDialog,
+        )
+        from ..library_check import restore_library
+        from pathlib import Path as _Path
+
+        zip_path, _ = QFileDialog.getOpenFileName(
+            self, "选择备份 zip", "", "ZIP 备份 (*.zip);;所有文件 (*)",
+        )
+        if not zip_path:
+            return
+        target_dir = QFileDialog.getExistingDirectory(
+            self, "选择解压目标目录（须为空目录）",
+        )
+        if not target_dir:
+            return
+
+        # 校验目标空
+        tp = _Path(target_dir)
+        if any(tp.iterdir()):
+            QMessageBox.warning(
+                self, "目录不为空",
+                f"目标目录非空：{target_dir}\n请选一个空目录或新建目录。",
+            )
+            return
+
+        prog = QProgressDialog("正在解压...", None, 0, 0, self)
+        prog.setWindowTitle("恢复库")
+        prog.setWindowModality(_Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.show()
+        try:
+            root = restore_library(_Path(zip_path), tp)
+        except Exception as e:
+            prog.close()
+            QMessageBox.critical(self, "恢复失败", str(e))
+            return
+        prog.close()
+
+        ans = QMessageBox.question(
+            self, "恢复完成",
+            f"已恢复到：{root}\n是否立即切换到这个库？",
+        )
+        if ans == QMessageBox.Yes and self.cabinet_config is not None:
+            self.cabinet_config.touch(root)
+            self.cabinet_config.save()
+            self._confirm_and_restart_to(root)
 
     # ============================================================ toolbar
     def _build_toolbar(self) -> None:
@@ -1130,7 +1360,15 @@ class MainWindow(QMainWindow):
         from .files_table_columns import INDEX_BY_KEY as _COL_IDX
         for r, f in enumerate(files):
             name = Path(f.path).name
-            it_name = QTableWidgetItem(f"{kind_icons.get(f.kind, '📦')}  {name}")
+            kind_icon = kind_icons.get(f.kind, "📦")
+            # task #14 T1：missing 标记 → 文件名前加 ⚠
+            warn_prefix = "⚠ " if f.missing else ""
+            it_name = QTableWidgetItem(f"{warn_prefix}{kind_icon}  {name}")
+            if f.missing:
+                it_name.setToolTip(
+                    "此文件被标记为缺失（库一致性检查发现物理路径不存在）。\n"
+                    "再次跑「工具 → 检查库一致性」可重新评估。"
+                )
             it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
             it_name.setData(Qt.UserRole, f.id)
             it_label = QTableWidgetItem(f.label)

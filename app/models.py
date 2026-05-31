@@ -79,6 +79,7 @@ class FileItem:
     kind: str = "other"
     ord: int = 0
     added_at: str = ""
+    missing: bool = False           # task #14 T1：库一致性检查标记
 
 
 # ============================================================ LLM

@@ -60,7 +60,7 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     repo_a = Repository(connect(db_a))
     repos.append(repo_a)
 
-    t.assert_eq("SCHEMA_VERSION = 3", SCHEMA_VERSION, 3)
+    t.assert_true("SCHEMA_VERSION ≥ 3（fields.prompt_hint 自此引入）", SCHEMA_VERSION >= 3)
 
     # 全新库：fields 表含 prompt_hint 列且默认空
     cols = {r[1] for r in repo_a.conn.execute("PRAGMA table_info(fields)").fetchall()}
