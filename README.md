@@ -138,6 +138,12 @@ app/
     └── widgets.py
 ```
 
+## FAQ
+
+### Taskbar icon looks wrong on first launch
+
+The first time you launch a new build of the exe, the Windows taskbar may briefly show a default / generic icon instead of the app icon. **Just close the program and reopen it once** — the icon will be correct from then on. This is a well-known interaction between the Windows icon cache and PyInstaller onefile builds; functionality is not affected.
+
 ## License
 
 [MIT](LICENSE) © 2026 vortexer99
