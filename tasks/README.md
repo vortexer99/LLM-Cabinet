@@ -11,7 +11,7 @@
 | [05-data-paths-migration-and-export.md](./05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖，归档保留） |
 | [06-tags-hierarchy-folding.md](./06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
 | [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 文件级摘要（手动导入 + 本地预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
-| [08-multiple-libraries-switch.md](./08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | 待做 |
+| [08-multiple-libraries-switch.md](./08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | ✅ 2026-06-01 |
 | [09-project-export-basic.md](./09-project-export-basic.md) | 项目导出（基础版，T7 最小子集） | S | P1 | ✅ 2026-05-31 |
 | [10-folder-batch-import.md](./10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
 | [11-field-prompt-and-library-wizard.md](./11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导（含可扩展向导框架） | M | P1/P2 | 待做 |

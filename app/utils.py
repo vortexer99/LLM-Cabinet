@@ -298,6 +298,16 @@ def app_icon_path() -> Path | None:
     return None
 
 
+def human_size(n: int | float) -> str:
+    """字节数转人类可读，如 1.5 MB / 3 GB。"""
+    f = float(n)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if f < 1024:
+            return f"{f:.1f} {unit}" if unit != "B" else f"{int(f)} B"
+        f /= 1024
+    return f"{f:.1f} PB"
+
+
 def app_data_dir() -> Path:
     """返回应用数据目录（Windows 下为 ``%APPDATA%/LLMCabinet``）。
 

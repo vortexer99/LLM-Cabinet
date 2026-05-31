@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 from ..library import Library
 from ..models import FileItem, Project
 from ..repository import Repository
-from ..utils import detect_kind, open_with_default_app, reveal_in_explorer
+from ..utils import detect_kind, human_size as _human_size, open_with_default_app, reveal_in_explorer
 from .dnd import FilesTableDnD, ProjectViewDnD
 from .files_table_columns import (
     COLUMNS as FILES_COLUMNS,
@@ -107,14 +107,32 @@ class NoElideDelegate(QStyledItemDelegate):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, repo: Repository, library: Library, db_path=None, llm_queue=None):
+    def __init__(
+        self,
+        repo: Repository,
+        library: Library,
+        db_path=None,
+        llm_queue=None,
+        cabinet_config=None,
+        library_root=None,
+    ):
         super().__init__()
         self.repo = repo
         self.library = library
         self.db_path = db_path
         self.llm_queue = llm_queue
+        # task #08 多库切换
+        self.cabinet_config = cabinet_config       # CabinetConfig | None
+        self.library_root = library_root           # Path | None；当前活动库根目录
+        self._pending_switch_to = None             # 关闭后由 main() 检测的"重启切换"目标
 
-        self.setWindowTitle("LLM Cabinet  ·  AI 项目化文件管理器")
+        # 标题栏带上当前库 label，方便用户知道在哪个库
+        title = "LLM Cabinet  ·  AI 项目化文件管理器"
+        if cabinet_config is not None and library_root is not None:
+            handle = cabinet_config.find(library_root)
+            if handle is not None and handle.display_name:
+                title = f"LLM Cabinet — {handle.display_name}"
+        self.setWindowTitle(title)
         self.resize(1400, 880)
         # 显式给主窗口设图标（QApplication.setWindowIcon 通常会被继承，
         # 这里冗余设置以兼容某些 Qt 版本）
@@ -127,6 +145,7 @@ class MainWindow(QMainWindow):
         self._current_project_id: int | None = None
         self._current_file_id: int | None = None
 
+        self._build_menubar()
         self._build_toolbar()
         self._build_ui()
         self._install_dnd()
@@ -141,6 +160,408 @@ class MainWindow(QMainWindow):
             self.llm_queue.suggestions_added.connect(self._on_llm_suggestions_added)
             self.llm_queue.task_failed.connect(self._on_llm_task_failed)
             self._on_llm_counts(self.llm_queue.active_count())
+
+    # ============================================================ menubar (task #08)
+    def _build_menubar(self) -> None:
+        """主菜单栏。当前仅含「库」菜单（多库切换）。"""
+        if self.cabinet_config is None:
+            # 单库模式（理论上不应出现，但保留兜底，避免无菜单/崩溃）
+            return
+
+        bar = self.menuBar()
+        m_lib = bar.addMenu("库(&L)")
+
+        from PySide6.QtGui import QAction, QKeySequence
+        act_switch = QAction("切换库...", self)
+        act_switch.setShortcut(QKeySequence("Ctrl+Shift+O"))
+        act_switch.triggered.connect(lambda _checked=False: self._lib_switch())
+        m_lib.addAction(act_switch)
+
+        act_new = QAction("新建库...", self)
+        act_new.setShortcut(QKeySequence("Ctrl+Shift+N"))
+        act_new.triggered.connect(lambda _checked=False: self._lib_new())
+        m_lib.addAction(act_new)
+
+        m_lib.addSeparator()
+
+        # 最近打开 — 子菜单（动态构建，捕获快照避免 lambda 闭包问题）
+        self._m_recent = m_lib.addMenu("最近打开")
+        self._m_recent.aboutToShow.connect(self._lib_rebuild_recent_menu)
+        # 菜单不被打开时，仍要在静态构建一次确保占位
+        self._lib_rebuild_recent_menu()
+
+        m_lib.addSeparator()
+
+        act_info = QAction("当前库信息...", self)
+        act_info.triggered.connect(lambda _checked=False: self._lib_info())
+        m_lib.addAction(act_info)
+
+        act_imp = QAction("从其它库导入 API 配置...", self)
+        act_imp.triggered.connect(lambda _checked=False: self._lib_import_api())
+        m_lib.addAction(act_imp)
+
+    def _lib_rebuild_recent_menu(self) -> None:
+        """重建「最近打开」子菜单。每个条目支持右键菜单（移除/删除/改名）。"""
+        if self.cabinet_config is None:
+            return
+        m = self._m_recent
+        m.clear()
+        from pathlib import Path as _Path
+        cur = _Path(self.library_root).resolve() if self.library_root else None
+        from PySide6.QtGui import QAction
+        for h in self.cabinet_config.recent_libraries:
+            display = h.display_name
+            is_current = (h.path.resolve() == cur) if cur is not None else False
+            text = f"{'● ' if is_current else '   '}{display}    ({h.path})"
+            act = QAction(text, self)
+            act.setToolTip(str(h.path))
+            # 关键：path 通过默认参数捕获，不会被循环变量改写
+            act.triggered.connect(
+                lambda _checked=False, p=h.path: self._lib_open_recent(p)
+            )
+            m.addAction(act)
+
+        if self.cabinet_config.recent_libraries:
+            m.addSeparator()
+
+        from PySide6.QtGui import QAction as _QA
+        act_manage = _QA("管理列表...", self)
+        act_manage.triggered.connect(lambda _c=False: self._lib_manage_recent())
+        m.addAction(act_manage)
+
+    # ---- 库菜单各操作 ----
+    def _lib_switch(self) -> None:
+        from PySide6.QtWidgets import QFileDialog
+        from pathlib import Path as _Path
+        d = QFileDialog.getExistingDirectory(self, "选择库目录")
+        if not d:
+            return
+        self._lib_open_recent(_Path(d), allow_init=True)
+
+    def _lib_new(self) -> None:
+        """新建一个空库目录。"""
+        from PySide6.QtWidgets import (
+            QFileDialog, QInputDialog, QMessageBox,
+        )
+        from ..cabinet import (
+            is_empty_or_safe_for_library, mark_as_library, resolve_library_paths,
+        )
+        from ..db import connect as _connect
+        from pathlib import Path as _Path
+
+        d = QFileDialog.getExistingDirectory(self, "选择新库的位置（建议选空目录）")
+        if not d:
+            return
+        root = _Path(d)
+        if not is_empty_or_safe_for_library(root):
+            QMessageBox.warning(
+                self, "目录不可用",
+                f"目录 {root} 已含其它文件，不适合作为新库目录。\n请选一个空目录。",
+            )
+            return
+        label, ok = QInputDialog.getText(
+            self, "新库名称", "为新库取个名字（仅显示用）：", text=root.name,
+        )
+        if not ok:
+            return
+        label = label.strip() or root.name
+
+        try:
+            mark_as_library(root)
+            db_path, lib_subdir = resolve_library_paths(root)
+            lib_subdir.mkdir(parents=True, exist_ok=True)
+            # 创建空 db（自动种子字段、打 user_version）
+            conn = _connect(db_path)
+            conn.close()
+        except Exception as e:
+            QMessageBox.critical(self, "新建失败", f"无法初始化新库：{e}")
+            return
+
+        self.cabinet_config.touch(root, label=label)
+        self.cabinet_config.save()
+        self._confirm_and_restart_to(root, label)
+
+    def _lib_open_recent(self, path, allow_init: bool = False) -> None:
+        """打开指定路径的库（来自最近列表 / 切换对话框）。"""
+        from PySide6.QtWidgets import QMessageBox
+        from ..cabinet import (
+            is_library_dir, is_empty_or_safe_for_library, mark_as_library,
+            resolve_library_paths,
+        )
+        from ..db import connect as _connect
+        from pathlib import Path as _Path
+        path = _Path(path)
+
+        if path == _Path(self.library_root):
+            QMessageBox.information(self, "提示", "已是当前库。")
+            return
+
+        if not is_library_dir(path):
+            if not allow_init:
+                QMessageBox.warning(
+                    self, "无法打开",
+                    f"目录 {path} 不是有效的 LLM Cabinet 库。\n"
+                    "请通过『新建库』功能初始化它，或选择其它目录。",
+                )
+                return
+            # 来自"切换库"对话框 + 目录是空的 → 询问是否新建
+            if not is_empty_or_safe_for_library(path):
+                QMessageBox.warning(
+                    self, "目录不可用",
+                    f"目录 {path} 既不是已有库，也不是空目录，无法在此初始化。",
+                )
+                return
+            ans = QMessageBox.question(
+                self, "新建库？",
+                f"目录 {path} 还不是 LLM Cabinet 库。\n"
+                "是否在此目录新建一个库？",
+            )
+            if ans != QMessageBox.Yes:
+                return
+            try:
+                mark_as_library(path)
+                db_path, lib_subdir = resolve_library_paths(path)
+                lib_subdir.mkdir(parents=True, exist_ok=True)
+                conn = _connect(db_path)
+                conn.close()
+            except Exception as e:
+                QMessageBox.critical(self, "新建失败", f"无法初始化新库：{e}")
+                return
+
+        self.cabinet_config.touch(path)
+        self.cabinet_config.save()
+        self._confirm_and_restart_to(path)
+
+    def _confirm_and_restart_to(self, path, label: str | None = None) -> None:
+        """切换/新建后弹确认，确认后重启。"""
+        from PySide6.QtWidgets import QMessageBox
+        ans = QMessageBox.question(
+            self, "切换库",
+            f"切换到库：\n{label or path.name}\n{path}\n\n"
+            "应用将重启以加载新库，是否继续？",
+        )
+        if ans != QMessageBox.Yes:
+            return
+        # 写入"待切换"标记，main() 在 app.exec() 返回后会 execv 重启
+        self._pending_switch_to = path
+        self.close()
+
+    def _lib_info(self) -> None:
+        """显示当前库信息 + label 可改。"""
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit,
+            QPushButton, QVBoxLayout,
+        )
+        from pathlib import Path as _Path
+
+        n_projects = len(self.repo.list_projects())
+        n_files_total = self.repo.conn.execute(
+            "SELECT COUNT(*) AS c FROM files"
+        ).fetchone()["c"]
+        try:
+            db_size = _Path(self.db_path).stat().st_size if self.db_path else 0
+        except OSError:
+            db_size = 0
+        # library/ 大小：递归求和（保守）
+        lib_size = 0
+        try:
+            for p in _Path(self.library.root).rglob("*"):
+                if p.is_file():
+                    lib_size += p.stat().st_size
+        except OSError:
+            pass
+
+        handle = self.cabinet_config.find(self.library_root) if self.cabinet_config else None
+        label = handle.display_name if handle else _Path(self.library_root).name
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("当前库信息")
+        dlg.setMinimumWidth(460)
+        v = QVBoxLayout(dlg)
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignRight)
+        ed_label = QLineEdit(label)
+        form.addRow("名称：", ed_label)
+        form.addRow("路径：", QLabel(str(self.library_root)))
+        form.addRow("项目数：", QLabel(str(n_projects)))
+        form.addRow("文件数：", QLabel(str(n_files_total)))
+        form.addRow("数据库大小：", QLabel(_human_size(db_size)))
+        form.addRow("library/ 大小：", QLabel(_human_size(lib_size)))
+        v.addLayout(form)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("保存")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new_label = ed_label.text().strip()
+        if new_label and new_label != label:
+            self.cabinet_config.rename(self.library_root, new_label)
+            self.cabinet_config.save()
+            # 标题栏与最近菜单刷新
+            self.setWindowTitle(f"LLM Cabinet — {new_label}")
+
+    def _lib_import_api(self) -> None:
+        """从其它库的 db 中读 llm_config 等设置写入当前库。"""
+        from PySide6.QtWidgets import QFileDialog, QMessageBox
+        from ..cabinet import import_settings_from_other_db
+        from pathlib import Path as _Path
+
+        f, _ = QFileDialog.getOpenFileName(
+            self, "选择另一个库的 cabinet.db", "",
+            "SQLite (*.db);;所有文件 (*)",
+        )
+        if not f:
+            return
+        other = _Path(f)
+        if other.resolve() == _Path(self.db_path).resolve():
+            QMessageBox.information(self, "提示", "请选择**其它**库的 db。")
+            return
+
+        # 读出 llm_config + 默认 provider / 默认语言
+        keys = ["llm_config", "llm_default_provider", "llm_default_language"]
+        imported = import_settings_from_other_db(other, keys)
+        if not imported:
+            QMessageBox.warning(
+                self, "未读到配置",
+                "未能从该库读取到 llm_config 等设置，文件可能不可读或格式不符。",
+            )
+            return
+
+        # 二次确认
+        keys_str = "\n".join(f"  • {k}" for k in imported.keys())
+        ans = QMessageBox.question(
+            self, "确认导入",
+            f"将把以下 {len(imported)} 项设置写入当前库（覆盖同名项）：\n{keys_str}\n\n确认？",
+        )
+        if ans != QMessageBox.Yes:
+            return
+        for k, v in imported.items():
+            self.repo.set_setting(k, v)
+        QMessageBox.information(self, "完成", f"已导入 {len(imported)} 项。")
+
+    def _lib_manage_recent(self) -> None:
+        """最近列表管理对话框（移除 / 删除 / 改名）。"""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtGui import QAction as _QA
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem,
+            QMenu, QMessageBox, QVBoxLayout,
+        )
+        from pathlib import Path as _Path
+        from ..utils import app_data_dir
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("管理最近打开的库")
+        dlg.resize(600, 380)
+        v = QVBoxLayout(dlg)
+        lst = QListWidget()
+        lst.setContextMenuPolicy(_Qt.CustomContextMenu)
+        v.addWidget(lst)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        v.addWidget(bb)
+
+        cur = _Path(self.library_root).resolve()
+        default_path = app_data_dir().resolve()
+
+        def _refresh():
+            lst.clear()
+            for h in self.cabinet_config.recent_libraries:
+                tag = " ●(当前)" if h.path.resolve() == cur else ""
+                tag2 = " (默认)" if h.path.resolve() == default_path else ""
+                it = QListWidgetItem(f"{h.display_name}{tag}{tag2}\n  {h.path}")
+                it.setData(_Qt.UserRole, str(h.path))
+                lst.addItem(it)
+        _refresh()
+
+        def _on_menu(pos):
+            it = lst.itemAt(pos)
+            if it is None:
+                return
+            path = _Path(str(it.data(_Qt.UserRole)))
+            is_current = (path.resolve() == cur)
+            is_default = (path.resolve() == default_path)
+            menu = QMenu(dlg)
+            a_rm = _QA("从列表移除", dlg)
+            a_rm.setEnabled(not is_current and not is_default)
+            a_rm.triggered.connect(lambda _c=False: (
+                self.cabinet_config.remove(path),
+                self.cabinet_config.save(),
+                _refresh(),
+            ))
+            menu.addAction(a_rm)
+
+            a_del = _QA("删除整个库...", dlg)
+            a_del.setEnabled(not is_current and not is_default)
+            a_del.triggered.connect(lambda _c=False: _delete_lib(path))
+            menu.addAction(a_del)
+
+            menu.addSeparator()
+
+            a_ren = _QA("改名...", dlg)
+            a_ren.triggered.connect(lambda _c=False: _rename_lib(path))
+            menu.addAction(a_ren)
+            menu.exec(lst.viewport().mapToGlobal(pos))
+
+        def _rename_lib(p):
+            handle = self.cabinet_config.find(p)
+            cur_label = handle.display_name if handle else p.name
+            new_label, ok = QInputDialog.getText(
+                dlg, "改名", "新名称：", text=cur_label,
+            )
+            if not ok or not new_label.strip():
+                return
+            self.cabinet_config.rename(p, new_label.strip())
+            self.cabinet_config.save()
+            _refresh()
+            if p.resolve() == cur:
+                self.setWindowTitle(f"LLM Cabinet — {new_label.strip()}")
+
+        def _delete_lib(p):
+            handle = self.cabinet_config.find(p)
+            display = handle.display_name if handle else p.name
+            # 双重确认：先列出代价
+            try:
+                size = sum(
+                    f.stat().st_size for f in p.rglob("*") if f.is_file()
+                )
+            except OSError:
+                size = 0
+            ans1 = QMessageBox.warning(
+                dlg, "确认删除（1/2）",
+                f"将永久删除整个库目录：\n\n{p}\n\n"
+                f"占用空间：{_human_size(size)}\n\n"
+                f"此操作**不可恢复**。继续？",
+                QMessageBox.Yes | QMessageBox.No,
+            )
+            if ans1 != QMessageBox.Yes:
+                return
+            # 第二步：要求输入 label 作为最终确认
+            typed, ok = QInputDialog.getText(
+                dlg, "确认删除（2/2）",
+                f"请输入库的名称『{display}』以确认删除：",
+            )
+            if not ok or typed.strip() != display:
+                QMessageBox.information(dlg, "已取消", "名称不匹配，取消删除。")
+                return
+            # 执行
+            try:
+                import shutil as _sh
+                _sh.rmtree(p, ignore_errors=False)
+            except Exception as e:
+                QMessageBox.critical(dlg, "删除失败", str(e))
+                return
+            self.cabinet_config.remove(p)
+            self.cabinet_config.save()
+            _refresh()
+
+        lst.customContextMenuRequested.connect(_on_menu)
+        dlg.exec()
 
     # ============================================================ toolbar
     def _build_toolbar(self) -> None:
