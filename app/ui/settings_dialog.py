@@ -747,7 +747,7 @@ class SettingsDialog(QDialog):
     # 关于
     # =================================================================
     def _build_about_page(self) -> QWidget:
-        from PySide6.QtGui import QPixmap
+        from PySide6.QtGui import QIcon, QPixmap
         from ..utils import app_icon_path
 
         w = QWidget()
@@ -763,20 +763,34 @@ class SettingsDialog(QDialog):
         brand = QHBoxLayout()
         brand.setSpacing(14)
 
+        # 高 DPI 友好的目标尺寸（逻辑像素 96，物理像素按 devicePixelRatio 放大）
+        target_logical = 96
+        dpr = self.devicePixelRatioF() or 1.0
+        target_phys = int(round(target_logical * dpr))
+
         icon_lbl = QLabel()
-        icon_lbl.setFixedSize(96, 96)
+        icon_lbl.setFixedSize(target_logical, target_logical)
         icon_lbl.setAlignment(Qt.AlignCenter)
         ip = app_icon_path()
         if ip is not None:
-            pix = QPixmap(str(ip))
-            if not pix.isNull():
-                icon_lbl.setPixmap(
-                    pix.scaled(
-                        96, 96,
+            pix: QPixmap | None = None
+            suffix = ip.suffix.lower()
+            if suffix == ".ico":
+                # ico 是多尺寸容器；QPixmap 直接加载只取第一帧（通常 16×16 → 拉伸糊）
+                # 用 QIcon 加载，再让它按目标尺寸挑/合成最合适的子图
+                icon = QIcon(str(ip))
+                pix = icon.pixmap(target_phys, target_phys)
+            else:
+                pix = QPixmap(str(ip))
+                if not pix.isNull():
+                    pix = pix.scaled(
+                        target_phys, target_phys,
                         Qt.KeepAspectRatio,
                         Qt.SmoothTransformation,
                     )
-                )
+            if pix is not None and not pix.isNull():
+                pix.setDevicePixelRatio(dpr)
+                icon_lbl.setPixmap(pix)
         brand.addWidget(icon_lbl)
 
         text_col = QVBoxLayout()
@@ -828,6 +842,24 @@ class SettingsDialog(QDialog):
         lic_row.addWidget(lic_text)
         lic_row.addStretch(1)
         lay.addLayout(lic_row)
+
+        # 免责声明
+        disc_row = QHBoxLayout()
+        disc_lbl = QLabel("免责声明：")
+        disc_lbl.setFixedWidth(110)
+        disc_lbl.setProperty("muted", True)
+        disc_lbl.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        disc_text = QLabel(
+            "本人将持续维护本软件，但不对任何使用过程中（包括但不限于异常使用、"
+            "误操作、系统故障、第三方 LLM 服务异常）导致的文件丢失、数据损坏或"
+            "其他损失承担责任。请通过定期备份保护重要数据。本软件按"
+            "「原样」提供，详见 MIT License。"
+        )
+        disc_text.setWordWrap(True)
+        disc_text.setProperty("muted", True)
+        disc_row.addWidget(disc_lbl)
+        disc_row.addWidget(disc_text, 1)
+        lay.addLayout(disc_row)
 
         # 项目主页（GitHub）
         gh_row = QHBoxLayout()

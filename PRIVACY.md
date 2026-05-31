@@ -104,3 +104,17 @@ Once data leaves your machine it is governed by **that provider's own privacy po
 ## 6. Feedback
 
 If you find this document does not match the app's actual behavior, please open an issue.
+
+---
+
+## 7. Disclaimer
+
+The maintainer will continue to support this software, but **assumes no responsibility for any file loss, data corruption, or other damages arising from its use** — including but not limited to abnormal usage, misoperation, system failures, third-party LLM service issues, or anomalies during database migration.
+
+Important notes:
+
+- **Keep regular backups of important data** — original files (in `link` mode), the `library/` directory (in `copy` mode), and the database file `fileman.db`
+- LLM metadata suggestions may be inaccurate; always review them manually before applying
+- When upgrading, the app automatically backs up the previous `fileman.db` as a `.bak` file, but this **does not replace your own backup strategy**
+
+This software is provided "AS IS", without warranty of any kind, express or implied. See [MIT License](LICENSE) for details.
