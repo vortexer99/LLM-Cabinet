@@ -96,7 +96,8 @@
 | [11](./tasks/11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导 | M | P1/P2 | 待做 |
 | [12](./tasks/12-selftest-infrastructure.md) | 端到端自检体系（基础设施，并行增量） | M | P1 | 🚧 进行中 |
 | [13](./tasks/13-mcp-server.md) | MCP Server（AI 文件中枢接口） | M+M | P1/P2 | 待做 |
-| [05](./tasks/05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | T6 弃用 · T7 部分被 #09/#10 覆盖 |
+| [14](./tasks/14-library-management-enhancements.md) | 库管理增强（一致性检查 + 备份恢复 + 搬家指引） | S+S+XS | P1/P2 | 待做 |
+| [05](./tasks/05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖） |
 | [04](./tasks/04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
 | [02](./tasks/02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
 | [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | 待做 |
