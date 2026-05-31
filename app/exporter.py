@@ -30,7 +30,8 @@ from .models import Project
 from .repository import Repository
 
 # project.json 的 schema 标识，导入端用这个匹配版本
-EXPORT_SCHEMA = "llm-cabinet/project-export@1"
+# @2 起 fields_snapshot 含 prompt_hint（task #11 T4）；@1 仍兼容（导入端把缺失字段视为空）
+EXPORT_SCHEMA = "llm-cabinet/project-export@2"
 
 
 # =============================================================================
@@ -256,6 +257,7 @@ def _build_project_blob(project: Project, fields: list) -> dict:
             "ord": f.ord,
             "visible": f.visible,
             "suggest_enabled": f.suggest_enabled,
+            "prompt_hint": f.prompt_hint,    # task #11 T4：跨库迁移保留 LLM 提示
         }
         for f in fields
     ]

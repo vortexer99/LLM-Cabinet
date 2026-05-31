@@ -30,6 +30,7 @@ class Field:
     visible: bool = True
     key: Optional[str] = None
     suggest_enabled: bool = True
+    prompt_hint: str = ""           # task #11 T1：LLM 建议该字段时附加的格式说明
 
     @property
     def is_system(self) -> bool:

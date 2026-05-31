@@ -19,7 +19,8 @@ from .repository import Repository
 from .utils import detect_kind
 
 # 当前导入器已知的最高 project-export schema 版本
-SUPPORTED_SCHEMA_VERSION = 1
+# @2: fields_snapshot 含 prompt_hint（task #11 T4）；@1 仍兼容
+SUPPORTED_SCHEMA_VERSION = 2
 SCHEMA_PREFIX = "llm-cabinet/project-export@"
 
 FieldPolicy = Literal["create", "append_to_desc", "ignore"]
@@ -357,8 +358,11 @@ def _apply_field_policy(
         if ftype not in FIELD_TYPES:
             warnings.append(f"字段「{fname}」类型 {ftype!r} 不合法，已 fallback 为 text")
             ftype = "text"
+        # task #11 T4：@2 schema 起 fields_snapshot 含 prompt_hint
+        snap_hint = snap.get("prompt_hint")
+        snap_hint = snap_hint if isinstance(snap_hint, str) else ""
         try:
-            new_id = repo.add_field(fname, ftype)
+            new_id = repo.add_field(fname, ftype, prompt_hint=snap_hint)
             created.append(fname)
             # 写入值
             for fv in field_values:

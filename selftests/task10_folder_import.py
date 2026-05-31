@@ -30,6 +30,7 @@ from app.db import connect
 from app.exporter import ExportOptions, export_project
 from app.importer import (
     ImportOptions, import_folder_as_project, scan_folders,
+    SUPPORTED_SCHEMA_VERSION,
 )
 from app.library import Library
 from app.models import FileItem, Project
@@ -219,7 +220,7 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
             f"scan[{ed.name}]: has_project_json", plan.has_project_json,
         )
         t.assert_eq(
-            f"scan[{ed.name}]: schema_version", plan.schema_version, 1,
+            f"scan[{ed.name}]: schema_version", plan.schema_version, SUPPORTED_SCHEMA_VERSION,
         )
         t.assert_eq(
             f"scan[{ed.name}]: is_future_schema", plan.is_future_schema, False,

@@ -21,7 +21,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS fields (
     ord             INTEGER NOT NULL DEFAULT 0,
     visible         INTEGER NOT NULL DEFAULT 1,
     key             TEXT,
-    suggest_enabled INTEGER NOT NULL DEFAULT 1   -- 是否让 LLM 对该字段提建议
+    suggest_enabled INTEGER NOT NULL DEFAULT 1,  -- 是否让 LLM 对该字段提建议
+    prompt_hint     TEXT NOT NULL DEFAULT ''     -- 该字段在 LLM 建议时附加的格式说明（task #11 T1）
 );
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fields_name ON fields(name);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_fields_key  ON fields(key) WHERE key IS NOT NULL;
@@ -308,8 +309,22 @@ def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
     conn.execute("DROP TABLE IF EXISTS custom_fields")
 
 
+def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
+    """v2 → v3：``fields`` 表新增 ``prompt_hint`` 列（task #11 T1）。
+
+    用户在「设置 → 字段」里对每个字段填 LLM 提示，组装 user prompt 时按字段注入。
+    幂等：先用 PRAGMA table_info 探测列是否已存在。
+    """
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(fields)").fetchall()}
+    if "prompt_hint" not in cols:
+        conn.execute(
+            "ALTER TABLE fields ADD COLUMN prompt_hint TEXT NOT NULL DEFAULT ''"
+        )
+
+
 MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (1, 2, _migrate_v1_to_v2),
+    (2, 3, _migrate_v2_to_v3),
 ]
 
 

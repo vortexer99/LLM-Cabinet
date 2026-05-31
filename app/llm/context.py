@@ -18,6 +18,9 @@ PDF_PAGES_LIMIT = 6
 IMAGE_BYTES_LIMIT = 3 * 1024 * 1024  # 3MB 每张
 MAX_IMAGES = 4
 
+# task #11 T1：单字段 prompt_hint 最大长度（防上下文爆炸）
+PROMPT_HINT_MAX_CHARS = 500
+
 # 直接以文本方式安全读取的扩展（utf-8/gbk）
 PLAIN_TEXT_EXTS = {".txt", ".md", ".markdown", ".rtf", ".html", ".htm", ".csv"}
 # 二进制压缩文档：直接读会出乱码，按类型走专门提取或仅给文件名
@@ -224,10 +227,17 @@ def build_messages(
     ) or "(无)"
 
     # ---- 字段定义说明：分两组（tags 类型给一句额外说明）
+    # 字段级 prompt 提示（task #11 T1）：每个字段的 prompt_hint 会追加到该字段的描述行后；
+    # 单条 hint 截断到 PROMPT_HINT_MAX_CHARS 字符避免上下文爆炸
     def _line(f: Field) -> str:
         s = f"- **{f.name}** (类型: {f.type})"
         if f.type == "tags":
             s += "  — 多值字段，请返回 JSON 数组，例如 [\"科幻\", \"翻译\"]"
+        hint = (f.prompt_hint or "").strip()
+        if hint:
+            if len(hint) > PROMPT_HINT_MAX_CHARS:
+                hint = hint[:PROMPT_HINT_MAX_CHARS] + "…"
+            s += f"\n  · 格式要求：{hint}"
         return s
     target_lines = [_line(f) for f in target_fields]
     context_only_lines = [_line(f) for f in context_fields if not _is_target(f)]

@@ -326,9 +326,11 @@ class SettingsDialog(QDialog):
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
-        # 字段表（4 列：字段名 / 类型 / 显示 / LLM 建议）
-        self.tbl_fields = QTableWidget(0, 4)
-        self.tbl_fields.setHorizontalHeaderLabels(["字段名", "类型", "显示", "LLM 建议"])
+        # 字段表（5 列：字段名 / 类型 / 显示 / LLM 建议 / LLM 提示）
+        self.tbl_fields = QTableWidget(0, 5)
+        self.tbl_fields.setHorizontalHeaderLabels(
+            ["字段名", "类型", "显示", "LLM 建议", "LLM 提示"]
+        )
         self.tbl_fields.verticalHeader().setVisible(False)
         self.tbl_fields.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.tbl_fields.setSelectionMode(QAbstractItemView.SingleSelection)
@@ -341,9 +343,11 @@ class SettingsDialog(QDialog):
         h.setSectionResizeMode(1, QHeaderView.Interactive)
         h.setSectionResizeMode(2, QHeaderView.Fixed)
         h.setSectionResizeMode(3, QHeaderView.Fixed)
+        h.setSectionResizeMode(4, QHeaderView.Fixed)
         self.tbl_fields.setColumnWidth(1, 180)
         self.tbl_fields.setColumnWidth(2, 60)
         self.tbl_fields.setColumnWidth(3, 90)
+        self.tbl_fields.setColumnWidth(4, 110)
         # 行高要足够容纳带 padding 的 QComboBox，否则文字会被上下裁掉只剩一条
         self.tbl_fields.verticalHeader().setDefaultSectionSize(40)
         lay.addWidget(self.tbl_fields, 1)
@@ -437,6 +441,23 @@ class SettingsDialog(QDialog):
             hl2.setContentsMargins(0, 0, 0, 0)
             hl2.addStretch(1); hl2.addWidget(cb_sug); hl2.addStretch(1)
             self.tbl_fields.setCellWidget(r, 3, holder2)
+
+            # LLM 提示按钮（task #11 T1）：点击弹文本编辑器编辑该字段的 prompt_hint
+            btn_hint = QPushButton(
+                "📝 已设置" if (f.prompt_hint or "").strip() else "✎ 编辑…"
+            )
+            btn_hint.setFlat(True)
+            if (f.prompt_hint or "").strip():
+                btn_hint.setToolTip(
+                    "当前提示：\n" + (f.prompt_hint[:300] + ("…" if len(f.prompt_hint) > 300 else ""))
+                )
+            else:
+                btn_hint.setToolTip("点击编辑该字段的 LLM 提示（留空使用默认）")
+            btn_hint.clicked.connect(
+                lambda _checked=False, fid=f.id, name=f.name, hint=f.prompt_hint or "":
+                    self._field_edit_prompt_hint(fid, name, hint)
+            )
+            self.tbl_fields.setCellWidget(r, 4, btn_hint)
         self.tbl_fields.blockSignals(False)
 
     def _current_field_id(self) -> int | None:
@@ -484,6 +505,57 @@ class SettingsDialog(QDialog):
     def _field_toggle_suggest(self, fid: int, enabled: bool) -> None:
         self.repo.set_field_suggest_enabled(fid, enabled)
         # 不发 fields_changed（视图列不受影响）
+
+    def _field_edit_prompt_hint(self, fid: int, name: str, current_hint: str) -> None:
+        """编辑字段的 LLM 提示（task #11 T1）。"""
+        from PySide6.QtWidgets import (
+            QDialog, QDialogButtonBox, QLabel, QPlainTextEdit, QVBoxLayout,
+        )
+        dlg = QDialog(self)
+        dlg.setWindowTitle(f"LLM 提示 — {name}")
+        dlg.resize(560, 360)
+        v = QVBoxLayout(dlg)
+        v.setContentsMargins(16, 14, 16, 12)
+        v.setSpacing(8)
+
+        head = QLabel(
+            f"为字段「<b>{name}</b>」自定义 LLM 建议时的格式说明。<br>"
+            "留空 = 使用默认（仅按类型说明）；填写 = 在 user prompt 中追加为该字段的「格式要求」。"
+        )
+        head.setWordWrap(True)
+        v.addWidget(head)
+
+        ed = QPlainTextEdit()
+        ed.setPlaceholderText(
+            "示例（标题）：不超过 30 字；不要带书名号；体现作品类型与核心主题。\n"
+            "示例（描述）：200~400 字；先一句概括，再分段说明背景/亮点/适用人群；不使用 emoji。"
+        )
+        ed.setPlainText(current_hint or "")
+        v.addWidget(ed, 1)
+
+        char_lbl = QLabel()
+        char_lbl.setProperty("hint", True)
+
+        def _update_count() -> None:
+            n = len(ed.toPlainText())
+            char_lbl.setText(
+                f"  当前 {n} 字（建议 ≤ 500；超过会被自动截断）"
+            )
+        ed.textChanged.connect(_update_count)
+        _update_count()
+        v.addWidget(char_lbl)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("保存")
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+
+        if dlg.exec() != QDialog.Accepted:
+            return
+        new_hint = ed.toPlainText().strip()
+        self.repo.set_field_prompt_hint(fid, new_hint)
+        self._reload_fields_table()
 
     def _field_change_type(self, fid: int, ftype: str) -> None:
         self.repo.set_field_type(fid, ftype)

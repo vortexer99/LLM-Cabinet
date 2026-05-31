@@ -220,7 +220,7 @@ class Repository:
 
     def list_fields(self) -> list[Field]:
         rows = self.conn.execute(
-            "SELECT id, name, type, ord, visible, key, suggest_enabled "
+            "SELECT id, name, type, ord, visible, key, suggest_enabled, prompt_hint "
             "FROM fields ORDER BY ord, id"
         ).fetchall()
         return [
@@ -228,13 +228,14 @@ class Repository:
                 id=r["id"], name=r["name"], type=r["type"] or "text",
                 ord=r["ord"], visible=bool(r["visible"]), key=r["key"],
                 suggest_enabled=bool(r["suggest_enabled"]),
+                prompt_hint=r["prompt_hint"] or "",
             )
             for r in rows
         ]
 
     def get_field(self, fid: int) -> Optional[Field]:
         row = self.conn.execute(
-            "SELECT id, name, type, ord, visible, key, suggest_enabled "
+            "SELECT id, name, type, ord, visible, key, suggest_enabled, prompt_hint "
             "FROM fields WHERE id=?",
             (fid,),
         ).fetchone()
@@ -244,6 +245,7 @@ class Repository:
             id=row["id"], name=row["name"], type=row["type"] or "text",
             ord=row["ord"], visible=bool(row["visible"]), key=row["key"],
             suggest_enabled=bool(row["suggest_enabled"]),
+            prompt_hint=row["prompt_hint"] or "",
         )
 
     def set_field_suggest_enabled(self, fid: int, enabled: bool) -> None:
@@ -253,7 +255,7 @@ class Repository:
         )
         self.conn.commit()
 
-    def add_field(self, name: str, ftype: str = "text") -> int:
+    def add_field(self, name: str, ftype: str = "text", *, prompt_hint: str = "") -> int:
         name = name.strip()
         if not name:
             raise ValueError("字段名不能为空")
@@ -262,11 +264,56 @@ class Repository:
             "SELECT COALESCE(MAX(ord), -1) AS m FROM fields"
         ).fetchone()["m"]
         cur.execute(
-            "INSERT INTO fields(name, type, ord, visible, key) VALUES(?, ?, ?, 1, NULL)",
-            (name, ftype, (max_ord or -1) + 1),
+            "INSERT INTO fields(name, type, ord, visible, key, prompt_hint) "
+            "VALUES(?, ?, ?, 1, NULL, ?)",
+            (name, ftype, (max_ord or -1) + 1, prompt_hint or ""),
         )
         self.conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
+
+    def add_fields_batch(
+        self, fields_data: list[tuple[str, str, str]],
+    ) -> list[int]:
+        """批量创建字段（task #11 T3 决策 5）。
+
+        Args:
+            fields_data: list of ``(name, type, prompt_hint)``
+
+        Returns:
+            按入参顺序返回新建字段的 id 列表。任一失败 → 整体 ROLLBACK 并抛出原异常。
+        """
+        if not fields_data:
+            return []
+        cur = self.conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            row = cur.execute(
+                "SELECT COALESCE(MAX(ord), -1) AS m FROM fields"
+            ).fetchone()
+            max_ord = row["m"] if row else -1
+            new_ids: list[int] = []
+            for i, (name, ftype, hint) in enumerate(fields_data):
+                name = (name or "").strip()
+                if not name:
+                    raise ValueError("字段名不能为空")
+                cur.execute(
+                    "INSERT INTO fields(name, type, ord, visible, key, prompt_hint) "
+                    "VALUES(?, ?, ?, 1, NULL, ?)",
+                    (name, ftype, max_ord + 1 + i, hint or ""),
+                )
+                new_ids.append(cur.lastrowid)
+            self.conn.commit()
+            return new_ids
+        except Exception:
+            self.conn.rollback()
+            raise
+
+    def set_field_prompt_hint(self, fid: int, prompt_hint: str) -> None:
+        self.conn.execute(
+            "UPDATE fields SET prompt_hint=? WHERE id=?",
+            (prompt_hint or "", fid),
+        )
+        self.conn.commit()
 
     def rename_field(self, fid: int, new_name: str) -> None:
         self.conn.execute("UPDATE fields SET name=? WHERE id=?", (new_name.strip(), fid))
