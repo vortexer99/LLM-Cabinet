@@ -88,7 +88,8 @@ Then trigger suggestions from:
 ```powershell
 pip install pyinstaller
 pyinstaller -w -F -n "LLM Cabinet" `
-  --icon icon.jpg `
+  --icon icon.ico `
+  --add-data "icon.ico;." `
   --add-data "icon.jpg;." `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `
@@ -96,7 +97,7 @@ pyinstaller -w -F -n "LLM Cabinet" `
   app/main.py
 ```
 
-> On Windows, a `.ico` file is preferred for `--icon` for multi-size support. If you only have `.jpg`, PyInstaller will convert it automatically but may look slightly soft at low DPI. Use any online converter or ImageMagick to produce `icon.ico` and replace it.
+> The repo ships an `icon.ico` (multi-resolution: 16/32/48/64/128/256, 32-bit RGBA). If you replace it, keep the multi-size layout so the app icon stays crisp across all Windows views.
 
 The resulting `dist/LLM Cabinet.exe` is portable.
 

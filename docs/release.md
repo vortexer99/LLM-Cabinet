@@ -142,7 +142,8 @@ PyInstaller 参数与 [`README.zh-CN.md`](../README.zh-CN.md) 中"打包为单 e
 
 ```
 pyinstaller -w -F -n "LLM Cabinet" \
-  --icon icon.jpg \
+  --icon icon.ico \
+  --add-data "icon.ico;." \
   --add-data "icon.jpg;." \
   --add-data "PRIVACY.md;." \
   --add-data "PRIVACY.zh-CN.md;." \
@@ -204,7 +205,8 @@ python -c "import importlib; mods = ['app.utils','app.db','app.models','app.libr
 
 # 打包
 pyinstaller -w -F -n "LLM Cabinet" `
-  --icon icon.jpg `
+  --icon icon.ico `
+  --add-data "icon.ico;." `
   --add-data "icon.jpg;." `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `

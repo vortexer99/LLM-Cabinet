@@ -86,7 +86,8 @@ LLM Cabinet 是本地应用，所有项目数据仅存于本机。**仅当你主
 ```powershell
 pip install pyinstaller
 pyinstaller -w -F -n "LLM Cabinet" `
-  --icon icon.jpg `
+  --icon icon.ico `
+  --add-data "icon.ico;." `
   --add-data "icon.jpg;." `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `
@@ -94,7 +95,7 @@ pyinstaller -w -F -n "LLM Cabinet" `
   app/main.py
 ```
 
-> Windows 上 `pyinstaller --icon` 推荐使用 `.ico` 文件以获得多尺寸支持；如果只有 jpg，PyInstaller 会自动转换但可能在低分屏下略显模糊。可用任何在线工具或 ImageMagick 把 `icon.jpg` 转成 `icon.ico` 后替换。
+> 仓库根目录已带 `icon.ico`（多分辨率：16/32/48/64/128/256，32-bit RGBA）。如自行替换图标，建议沿用该多尺寸规格以兼顾各种 Windows 视图。
 
 生成的 `dist/LLM Cabinet.exe` 可直接分发。
 

@@ -75,7 +75,8 @@ jobs:
         shell: pwsh
         run: |
           pyinstaller -w -F -n "LLM Cabinet" `
-            --icon icon.jpg `
+            --icon icon.ico `
+            --add-data "icon.ico;." `
             --add-data "icon.jpg;." `
             --add-data "PRIVACY.md;." `
             --add-data "PRIVACY.zh-CN.md;." `
