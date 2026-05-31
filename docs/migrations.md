@@ -32,14 +32,13 @@
 
 ### 2.1 数据库
 
-默认路径：`%APPDATA%/Fileman/fileman.db`
-（保留 `Fileman` 旧名避免历史用户路径漂移）
+默认路径：`%APPDATA%/LLMCabinet/cabinet.db`
 
 可在「设置 → 项目库」里看到当前数据库实际路径。
 
 ### 2.2 仓储文件目录
 
-默认路径：`%APPDATA%/Fileman/library/<project_id>/`
+默认路径：`%APPDATA%/LLMCabinet/library/<project_id>/`
 
 只有"📦 仓储"模式导入的文件会复制到这里；"🔗 链接"文件保留原始位置。
 
@@ -48,11 +47,11 @@
 迁移前的备份会落到 **数据库同目录** 下，文件名格式：
 
 ```
-fileman.v{old_version}.{yyyyMMdd-HHmmss}.bak
-例：fileman.v1.20260601-093015.bak
+cabinet.v{old_version}.{yyyyMMdd-HHmmss}.bak
+例：cabinet.v1.20260601-093015.bak
 ```
 
-用户可以手动复制走、或在需要回滚时改回 `fileman.db`（备份是完整的 SQLite 文件副本）。
+用户可以手动复制走、或在需要回滚时改回 `cabinet.db`（备份是完整的 SQLite 文件副本）。
 
 ---
 
@@ -101,7 +100,7 @@ SQLite 内置一个 32-bit 整数字段 `user_version`，专门给应用做 sche
    `📦 schema vN → vM` 并简述迁移做了什么
 
 7. **本地验证**（强制）：
-   - 从 git 或备份找一份**老版本应用** 生成的 `fileman.db`
+   - 从 git 或备份找一份**老版本应用** 生成的 `cabinet.db`
    - 用**新版本应用**打开
    - 确认：(a) 没有崩溃；(b) 老数据完整可见；(c) 同目录下出现 `.bak` 备份
 
@@ -188,8 +187,8 @@ library/
 如果某次升级后用户报告数据错乱：
 
 1. 关闭应用
-2. 找到 `fileman.db` 同目录下最近一份 `fileman.v{N}.{时间戳}.bak`
-3. 把它 rename 为 `fileman.db`（覆盖损坏的现库）
+2. 找到 `cabinet.db` 同目录下最近一份 `cabinet.v{N}.{时间戳}.bak`
+3. 把它 rename 为 `cabinet.db`（覆盖损坏的现库）
 4. 用对应**旧版本应用**打开
 
 我们承诺：备份文件是迁移**前**的完整快照，可直接被对应版本打开。

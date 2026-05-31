@@ -10,11 +10,20 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ### Added
 - 数据库迁移注册表首次启用：新增 `_migrate_v1_to_v2`，删除 v0.1.0 前残留
-  的空 `custom_fields` 表。打开旧 v1 库会自动生成 `fileman.v1.<时间戳>.bak`
+  的空 `custom_fields` 表。打开旧 v1 库会自动生成 `cabinet.v1.<时间戳>.bak`
   备份后再迁移。
 
 ### Changed
 - 📦 schema v1 → v2 — 仅 `DROP TABLE IF EXISTS custom_fields`，不影响任何有效数据。
+- ⚠️ **BREAKING**：应用数据目录由 `%APPDATA%/Fileman/` 改为 `%APPDATA%/LLMCabinet/`，
+  默认数据库文件名由 `fileman.db` 改为 `cabinet.db`，自动备份命名相应改为
+  `cabinet.vN.<时间戳>.bak`。环境变量 `FILEMAN_DND_DEBUG` 改名为 `LLMCABINET_DND_DEBUG`。
+  **不再保留向旧路径的兜底**——升级后应用启动时若新路径不存在数据将视为全新库。
+  **手动迁移步骤**（仅 v0.1.0 用户需要）：
+  1. 关闭应用
+  2. 把 `%APPDATA%/Fileman/` 整个目录改名为 `%APPDATA%/LLMCabinet/`
+  3. 进入该目录，把 `fileman.db` 改名为 `cabinet.db`
+  4. 自动备份文件（如 `fileman.v1.<时间戳>.bak`）若需保留，可手动改名前缀为 `cabinet.`
 
 ### Fixed
 -

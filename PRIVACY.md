@@ -12,14 +12,14 @@ LLM Cabinet is a **local desktop application**. This document explains what the 
 
 The following data lives **only on your local disk** and is never proactively uploaded by the app:
 
-- **Project database**: `%APPDATA%/Fileman/fileman.db`
+- **Project database**: `%APPDATA%/LLMCabinet/cabinet.db`
   - Project metadata (title, author, date, rating, source, tags, description, custom fields)
   - File records (paths, per-file notes, kind)
   - Tag relations, field definitions, user settings
   - LLM task history (request payloads, raw responses, parsed suggestions, token usage)
   - LLM API config — **including API keys**
 
-- **Library directory**: `%APPDATA%/Fileman/library/` (or whatever you choose in settings)
+- **Library directory**: `%APPDATA%/LLMCabinet/library/` (or whatever you choose in settings)
   - File copies for projects in `copy` mode
   - Cover images captured from previews or pasted from the clipboard
 
@@ -27,7 +27,7 @@ The following data lives **only on your local disk** and is never proactively up
   - Only the path string is recorded. The app does not copy or move these files.
   - Deleting a project does **not** delete the original files.
 
-**Important**: API keys are stored in the database as **plaintext JSON** (in the `settings` table under the `llm_config` key). This is so the app can issue requests immediately at startup; there is currently **no extra encryption**. Do not share the `fileman.db` file with others.
+**Important**: API keys are stored in the database as **plaintext JSON** (in the `settings` table under the `llm_config` key). This is so the app can issue requests immediately at startup; there is currently **no extra encryption**. Do not share the `cabinet.db` file with others.
 
 ---
 
@@ -79,7 +79,7 @@ Once data leaves your machine it is governed by **that provider's own privacy po
 - **Reference file granularity**: every trigger lets you tick which files to include
 - **Target field granularity**: every trigger lets you also adjust the list of "fields you want suggestions for"
 - **Clear API keys**: Settings → API → clear the API Key input. The app no longer holds the key
-- **Wipe everything**: delete the `%APPDATA%/Fileman/` directory
+- **Wipe everything**: delete the `%APPDATA%/LLMCabinet/` directory
 
 ---
 
@@ -95,7 +95,7 @@ Once data leaves your machine it is governed by **that provider's own privacy po
 
 ## 5. Known limitations and risks
 
-- **Plaintext API keys**: as noted above. Recommendation: clear keys you don't need long-term; or encrypt the partition holding `%APPDATA%/Fileman/` at the OS level
+- **Plaintext API keys**: as noted above. Recommendation: clear keys you don't need long-term; or encrypt the partition holding `%APPDATA%/LLMCabinet/` at the OS level
 - **LLM provider retention**: DeepSeek / OpenAI / Gemini / Grok each have their own data retention and training policies. If you tick sensitive files as reference, that content may be retained by the provider. If unsure, read the provider's privacy policy or use a "no-training" tier (such as OpenAI's zero-data-retention agreements or Gemini's paid tier)
 - **Open and auditable**: you can always read the source under `app/llm/` to verify that the outbound requests match what this document describes
 
@@ -113,8 +113,8 @@ The maintainer will continue to support this software, but **assumes no responsi
 
 Important notes:
 
-- **Keep regular backups of important data** — original files (in `link` mode), the `library/` directory (in `copy` mode), and the database file `fileman.db`
+- **Keep regular backups of important data** — original files (in `link` mode), the `library/` directory (in `copy` mode), and the database file `cabinet.db`
 - LLM metadata suggestions may be inaccurate; always review them manually before applying
-- When upgrading, the app automatically backs up the previous `fileman.db` as a `.bak` file, but this **does not replace your own backup strategy**
+- When upgrading, the app automatically backs up the previous `cabinet.db` as a `.bak` file, but this **does not replace your own backup strategy**
 
 This software is provided "AS IS", without warranty of any kind, express or implied. See [MIT License](LICENSE) for details.

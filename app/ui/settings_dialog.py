@@ -127,9 +127,9 @@ class SettingsDialog(QDialog):
         form.setLabelAlignment(Qt.AlignLeft)
 
         self.cmb_theme = QComboBox()
-        self.cmb_theme.addItem("深色 (Dark)", "dark")
         self.cmb_theme.addItem("浅色 (Light)", "light")
-        cur = self.repo.get_setting("theme", "dark") or "dark"
+        self.cmb_theme.addItem("深色 (Dark)", "dark")
+        cur = self.repo.get_setting("theme", "light") or "light"
         idx = self.cmb_theme.findData(cur)
         self.cmb_theme.setCurrentIndex(max(0, idx))
         self.cmb_theme.currentIndexChanged.connect(self._on_theme_changed)
@@ -226,7 +226,7 @@ class SettingsDialog(QDialog):
         ver_val.setToolTip(
             "数据库 schema 版本号（独立于应用版本号）。\n"
             "升级新版应用打开旧 db 时，会自动备份并应用迁移脚本。\n"
-            "备份文件落在数据库同目录，文件名形如 fileman.vN.时间戳.bak"
+            "备份文件落在数据库同目录，文件名形如 cabinet.vN.时间戳.bak"
         )
         # 顺手统计同目录下的 .bak 数量
         try:

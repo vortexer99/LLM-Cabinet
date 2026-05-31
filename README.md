@@ -68,7 +68,7 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-> Requires Python 3.10+. On first launch the app creates `fileman.db` and `library/` under `%APPDATA%/Fileman/` (legacy path kept for backward compatibility). Inspect/change locations under **Settings → Library**.
+> Requires Python 3.10+. On first launch the app creates `cabinet.db` and `library/` under `%APPDATA%/LLMCabinet/`. Inspect/change locations under **Settings → Library**.
 
 ## Data Privacy
 

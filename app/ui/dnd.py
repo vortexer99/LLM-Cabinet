@@ -13,7 +13,7 @@ import os
 
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 
-DEBUG = os.environ.get("FILEMAN_DND_DEBUG") == "1"
+DEBUG = os.environ.get("LLMCABINET_DND_DEBUG") == "1"
 
 
 def _log(*args):

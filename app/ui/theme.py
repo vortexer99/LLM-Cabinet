@@ -220,6 +220,8 @@ QHeaderView::section {
     font-weight: 600;
 }
 QHeaderView::section:last { border-right: none; }
+/* 表头本身的背景（最后一段 section 后面的空白区） */
+QHeaderView { background: #25262b; border: none; }
 QTableCornerButton::section { background: #25262b; border: none; }
 
 /* ===== 滚动条 ===== */
@@ -448,6 +450,8 @@ QHeaderView::section {
     border: none; border-right: 1px solid #dee2e6; border-bottom: 1px solid #dee2e6;
     padding: 6px 8px; font-weight: 600;
 }
+/* 表头本身的背景（最后一段 section 后面的空白区） */
+QHeaderView { background: #f8f9fa; border: none; }
 QTableCornerButton::section { background: #f8f9fa; border: none; }
 
 /* 滚动条 */
@@ -544,10 +548,6 @@ def _qss_with_assets(qss: str) -> str:
 
 
 def apply_theme(app, name: str) -> None:
-    """切换全局主题。name 接受: dark / light。其它值按 dark 处理。"""
-    qss = THEMES.get(name, QSS_DARK)
+    """切换全局主题。name 接受: light / dark。其它值按 light 处理。"""
+    qss = THEMES.get(name, QSS_LIGHT)
     app.setStyleSheet(_qss_with_assets(qss))
-
-
-# 兼容旧引用
-QSS = QSS_DARK

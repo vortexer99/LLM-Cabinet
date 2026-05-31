@@ -66,7 +66,7 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-> 需要 Python 3.10+。首次启动会在 `%APPDATA%/Fileman/` 下创建 `fileman.db` 与 `library/` 目录（保留旧路径以兼容历史数据），可在 **设置 → 项目库** 中查看。
+> 需要 Python 3.10+。首次启动会在 `%APPDATA%/LLMCabinet/` 下创建 `cabinet.db` 与 `library/` 目录，可在 **设置 → 项目库** 中查看。
 
 ## 数据隐私
 

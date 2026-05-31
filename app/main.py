@@ -37,8 +37,8 @@ def main() -> int:
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 历史数据库文件名保留 fileman.db，避免老用户数据"失踪"
-    db_path = app_data_dir() / "fileman.db"
+    # 默认库的数据库文件名
+    db_path = app_data_dir() / "cabinet.db"
     conn = connect(db_path)
     repo = Repository(conn)
 
@@ -47,7 +47,7 @@ def main() -> int:
     if not lib_root:
         repo.set_setting("library_root", str(library.root))
 
-    theme = repo.get_setting("theme", "dark") or "dark"
+    theme = repo.get_setting("theme", "light") or "light"
     apply_theme(app, theme)
 
     # LLM 任务队列

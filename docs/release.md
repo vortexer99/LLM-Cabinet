@@ -100,7 +100,7 @@ exe 不会受影响。
 下载 Release 中的 exe，在干净的 Windows 机器上（最好是没装 Python 的）跑一遍：
 
 - 启动正常，主界面渲染无误
-- 启动后 `%APPDATA%\Fileman\fileman.db` 能创建/打开
+- 启动后 `%APPDATA%\LLMCabinet\cabinet.db` 能创建/打开
 - 至少试一次"新建项目 + 添加文件 + 预览"完整流程
 
 通过即发版完毕。

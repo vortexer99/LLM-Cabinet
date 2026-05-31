@@ -299,15 +299,17 @@ def app_icon_path() -> Path | None:
 
 
 def app_data_dir() -> Path:
-    """返回应用数据目录（Windows 下为 %APPDATA%/Fileman）。
+    """返回应用数据目录（Windows 下为 ``%APPDATA%/LLMCabinet``）。
 
-    路径名保留 'Fileman' 以兼容历史用户数据；应用展示名为 'LLM Cabinet'。
+    本目录由 ``app_data_dir()`` 集中给出，是"默认库"的根，包含 ``cabinet.db``
+    与 ``library/`` 子目录。多库切换功能上线后，活动库根目录由 ``cabinet.json``
+    指定，本路径仅作为默认库与跨库全局配置 ``cabinet.json`` 的存放位置。
     """
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
     else:
         base = Path(os.environ.get("XDG_DATA_HOME", Path.home() / ".local" / "share"))
-    d = base / "Fileman"
+    d = base / "LLMCabinet"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
