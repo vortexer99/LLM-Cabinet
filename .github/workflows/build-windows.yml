@@ -81,7 +81,7 @@ jobs:
             --add-data "PRIVACY.md;." `
             --add-data "PRIVACY.zh-CN.md;." `
             --add-data "app/ui/assets;app/ui/assets" `
-            app/main.py
+            run.py
 
       # 把版本号写进文件名：LLM Cabinet-<version>.exe
       - name: Rename artifact with version

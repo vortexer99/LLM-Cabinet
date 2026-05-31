@@ -92,7 +92,7 @@ pyinstaller -w -F -n "LLM Cabinet" `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `
   --add-data "app/ui/assets;app/ui/assets" `
-  app/main.py
+  run.py
 ```
 
 > 仓库根目录已带 `icon.ico`（多分辨率：16/32/48/64/128/256，32-bit RGBA）。如自行替换图标，建议沿用该多尺寸规格以兼顾各种 Windows 视图。

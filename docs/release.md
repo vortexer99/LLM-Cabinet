@@ -148,7 +148,7 @@ pyinstaller -w -F -n "LLM Cabinet" \
   --add-data "PRIVACY.md;." \
   --add-data "PRIVACY.zh-CN.md;." \
   --add-data "app/ui/assets;app/ui/assets" \
-  app/main.py
+  run.py
 ```
 
 ---
@@ -211,7 +211,7 @@ pyinstaller -w -F -n "LLM Cabinet" `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `
   --add-data "app/ui/assets;app/ui/assets" `
-  app/main.py
+  run.py
 
 dist/"LLM Cabinet.exe"
 ```

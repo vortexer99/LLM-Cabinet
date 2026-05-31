@@ -94,7 +94,7 @@ pyinstaller -w -F -n "LLM Cabinet" `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `
   --add-data "app/ui/assets;app/ui/assets" `
-  app/main.py
+  run.py
 ```
 
 > The repo ships an `icon.ico` (multi-resolution: 16/32/48/64/128/256, 32-bit RGBA). If you replace it, keep the multi-size layout so the app icon stays crisp across all Windows views.
