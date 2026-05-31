@@ -27,7 +27,10 @@ The recently emerging "LLM-Wiki" idea (see Andrej Karpathy's [LLM Wiki gist](htt
 
 Compared to LLM-Wiki, **you don't always need the LLM to digest every file** — that burns a lot of tokens, and what you actually want is often just "keep things tidy and findable". LLM Cabinet brings that pragmatic version of the idea to the personal-file-library scenario: keep the Calibre-style project / tag / field abstractions, and hand the most tedious "read-file → fill-metadata" step to an LLM **on demand**, with explicit per-file opt-in.
 
-**Looking ahead**: future versions plan to expose Cabinet's capabilities via [MCP (Model Context Protocol)](https://modelcontextprotocol.io/), so any MCP-compatible client (Claude Desktop, Cursor, Cline, etc.) can drive an agent that fully manages your project files — deciding where new files go, assigning their metadata, and fetching whatever it needs from the library on demand. LLM Cabinet aims to be the substrate for this kind of "AI file hub".
+**Looking ahead**:
+
+- **External agent integration**: future versions plan to expose Cabinet's capabilities via [MCP (Model Context Protocol)](https://modelcontextprotocol.io/), so any MCP-compatible client (Claude Desktop, Cursor, Cline, etc.) can drive an agent that fully manages your project files — deciding where new files go, assigning their metadata, and fetching whatever it needs from the library on demand. LLM Cabinet aims to be the substrate for this kind of "AI file hub".
+- **File preprocessing pipeline**: to further reduce token consumption — and to make non-multimodal models actually useful — there may be a pluggable preprocessing layer that distills raw files into compact "key-information summaries" before sending them to the LLM. Typical forms: extract a few keyframes from videos and treat them as images, run a lightweight local vision model on images to pre-extract tags/captions, run embeddings on very long texts for semantic compression or key-section extraction, and so on.
 
 ## Screenshots
 

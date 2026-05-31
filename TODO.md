@@ -101,7 +101,7 @@
 | [02](./tasks/02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
 | [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | 待做 |
 | [08](./tasks/08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | 待做 |
-| [07](./tasks/07-local-embedding-summary.md) | 本地嵌入摘要再调 LLM | L | P2 | 远期 |
+| [07](./tasks/07-local-embedding-summary.md) | 文件级摘要（手动导入 + 预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
 
 ### 合并理由
 - **01** 内：T1（列可见性框架）做完后 T2（存储列）自动可隐藏

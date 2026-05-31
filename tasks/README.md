@@ -10,7 +10,7 @@
 | [04-project-system-files-folding.md](./04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
 | [05-data-paths-migration-and-export.md](./05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | T6 弃用 · T7 部分被 #09/#10 覆盖 |
 | [06-tags-hierarchy-folding.md](./06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | 待做 |
-| [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 本地嵌入摘要再调 LLM | L | P2 | 远期 |
+| [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 文件级摘要（手动导入 + 本地预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
 | [08-multiple-libraries-switch.md](./08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | 待做 |
 | [09-project-export-basic.md](./09-project-export-basic.md) | 项目导出（基础版，T7 最小子集） | S | P1 | ✅ 2026-05-31 |
 | [10-folder-batch-import.md](./10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
