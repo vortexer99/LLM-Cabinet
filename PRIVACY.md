@@ -83,6 +83,21 @@ Once data leaves your machine it is governed by **that provider's own privacy po
 
 ---
 
+## 3.A About the "Export project" feature
+
+The 📤 Export Project action in the toolbar / context menu is a **purely local file operation** — it makes no network requests.
+
+An export bundle is a plain directory containing:
+
+- `project.json`: project metadata (title / author / tags / field values, etc.), a **snapshot of field definitions**, plus the app and schema versions
+- `files.json`: file manifest (original storage path, copied path, byte size)
+- `README.md`: human-readable summary
+- `files/`: actual file copies ("📦 copy" mode files are always copied; "🔗 link" mode files are copied only if the corresponding checkbox is ticked)
+
+**Sensitivity note**: an export bundle contains your project metadata in plaintext (which may include private content in description fields) plus copies of the source files. **Before sharing an export, confirm it does not contain anything you don't want disclosed.** Export bundles do **not** include API keys or other provider credentials.
+
+---
+
 ## 4. What the app **does not** do
 
 - Send data to any telemetry, analytics, or crash-reporting server

@@ -12,6 +12,7 @@
 | [06-tags-hierarchy-folding.md](./06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | 待做 |
 | [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 本地嵌入摘要再调 LLM | L | P2 | 远期 |
 | [08-multiple-libraries-switch.md](./08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | 待做 |
+| [09-project-export-basic.md](./09-project-export-basic.md) | 项目导出（基础版，T7 最小子集） | S | P1 | ✅ 2026-05-31 |
 
 ## 约定
 

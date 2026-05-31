@@ -50,6 +50,7 @@ from .files_table_columns import (
 from .preview import PreviewPanel
 from .project_card import ProjectCardDelegate, ProjectModel
 from .project_dialog import ProjectDialog
+from .export_dialog import ExportDialog
 from .settings_dialog import SettingsDialog
 from .tag_tree import TagTree
 from .theme import apply_theme
@@ -159,9 +160,7 @@ class MainWindow(QMainWindow):
         tb.addAction(make_action("📥", "添加文件", self.action_add_files, "Ctrl+I"))
         tb.addAction(make_action("✎", "编辑项目", self.action_edit_project, "F2"))
         tb.addAction(make_action("🗑", "删除项目", self.action_delete_project))
-        tb.addSeparator()
-        tb.addAction(make_action("▶", "打开", self.action_open_current_file, "Ctrl+Return"))
-        tb.addAction(make_action("📂", "在资源管理器中显示", self.action_reveal_current_file))
+        tb.addAction(make_action("📤", "导出项目", self.action_export_project))
 
         # 右侧推到末端的设置按钮
         spacer = QWidget()
@@ -777,7 +776,9 @@ class MainWindow(QMainWindow):
 
     def action_llm_suggest_for_project(self, pid: int | None = None) -> None:
         """从右键菜单触发：跳过项目编辑对话框，直接弹 LLMSuggestDialog。"""
-        if pid is None:
+        # QAction.triggered 会传 bool；Python 里 bool 是 int 的子类，
+        # 必须先把 bool 显式排除再判 int。
+        if isinstance(pid, bool) or not isinstance(pid, int):
             pid = self._current_project_id
         if pid is None or self.llm_queue is None:
             return
@@ -919,6 +920,100 @@ class MainWindow(QMainWindow):
         self.repo.delete_project(p.id)  # type: ignore[arg-type]
         self.refresh_projects()
 
+    def action_export_project(self, pid: int | None = None) -> None:
+        """导出当前/指定项目到本地目录。"""
+        from PySide6.QtWidgets import QProgressDialog
+
+        from ..exporter import ExportOptions, export_project
+        from ..utils import open_with_default_app
+
+        # QAction.triggered 会传 bool(checked) 进来。注意：Python 里 bool 是 int 的
+        # 子类，isinstance(False, int) 为 True，所以必须先把 bool 显式排除掉。
+        if isinstance(pid, bool) or not isinstance(pid, int):
+            pid = self._current_project_id
+        if pid is None:
+            QMessageBox.information(self, "提示", "请先选择一个项目")
+            return
+        project = self.repo.get_project(pid)
+        if project is None:
+            QMessageBox.warning(self, "提示", f"项目 id={pid} 不存在")
+            return
+        n_files = len(self.repo.list_files(pid))
+
+        last_dir = self.repo.get_setting("last_export_dir", "") or str(Path.home())
+        dlg = ExportDialog(project, n_files, last_dir, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        opts = ExportOptions(
+            target_root=dlg.target_root(),
+            copy_link_files=dlg.copy_link_files(),
+        )
+
+        # 进度对话框：用户能看到当前文件名 + 取消
+        prog = QProgressDialog(
+            "正在导出…", "取消", 0, max(n_files, 1), self,
+        )
+        prog.setWindowTitle("导出项目")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setValue(0)
+
+        cancelled = False
+
+        def _on_progress(done: int, total: int, name: str) -> None:
+            nonlocal cancelled
+            if prog.wasCanceled():
+                cancelled = True
+                # 让 exporter 在下一次循环抛出
+                raise InterruptedError("用户取消导出")
+            prog.setMaximum(max(total, 1))
+            prog.setValue(done)
+            prog.setLabelText(f"正在复制（{done}/{total}）：{name}")
+            QApplication.processEvents()
+
+        try:
+            result = export_project(
+                self.repo, self.library, project, opts,
+                progress=_on_progress,
+            )
+        except InterruptedError:
+            prog.close()
+            QMessageBox.information(self, "已取消", "导出已被取消。")
+            return
+        except (OSError, NotADirectoryError) as e:
+            prog.close()
+            QMessageBox.warning(self, "导出失败", f"{type(e).__name__}: {e}")
+            return
+        finally:
+            prog.close()
+
+        # 记忆下次默认目录
+        self.repo.set_setting("last_export_dir", str(opts.target_root))
+
+        # 结果摘要
+        msg = (
+            f"导出成功：\n\n"
+            f"目录：{result.project_dir}\n"
+            f"复制文件：{result.n_files_copied} 个\n"
+            f"仅记录（未复制）：{result.n_files_referenced} 个\n"
+        )
+        if result.warnings:
+            msg += f"\n⚠️ 警告 {len(result.warnings)} 条：\n"
+            msg += "\n".join(f"- {w}" for w in result.warnings[:5])
+            if len(result.warnings) > 5:
+                msg += f"\n…（共 {len(result.warnings)} 条，详情见导出包内 README.md）"
+
+        box = QMessageBox(QMessageBox.Information, "导出完成", msg, parent=self)
+        btn_open = box.addButton("📂 打开导出目录", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is btn_open:
+            try:
+                open_with_default_app(result.project_dir)
+            except Exception:
+                pass
+
     def _select_project_by_id(self, pid: int) -> None:
         idx = self.proj_model.index_of_id(pid)
         if idx.isValid():
@@ -935,6 +1030,8 @@ class MainWindow(QMainWindow):
         menu.addAction("✎  编辑…", self.action_edit_project)
         menu.addSeparator()
         menu.addAction("✨  LLM 元数据建议…", self.action_llm_suggest_for_project)
+        menu.addSeparator()
+        menu.addAction("📤  导出项目…", self.action_export_project)
         menu.addSeparator()
         act_paste_cover = menu.addAction(
             "📋  从剪切板设为封面", self.action_set_cover_from_clipboard,
