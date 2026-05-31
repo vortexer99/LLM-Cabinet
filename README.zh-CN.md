@@ -55,6 +55,9 @@ LLM Cabinet 正是这个思路在"个人文件库"场景下的落地：保留 Ca
   - 一键基于现有元数据 + 参考文件（PDF/docx/xlsx/代码/图片…）生成字段建议
   - 任务后台串行排队，进度可查；建议落入"待审阅"流，逐项 ✓ 应用 / ✗ 驳回 / 全部接受
   - 字段级开关：可针对单字段关闭 LLM 建议，仍把其值作为上下文喂给模型
+- **项目导出**：工具栏 / 右键菜单一键导出项目到本地目录，含 `project.json` /
+  `files.json` / `README.md` / `files/`；可选是否把链接模式（🔗）原始文件也复制进去。
+  导出物结构透明、可手动检视，作为备份、跨设备搬迁、未来导入功能的标准载体
 - **数据库**：SQLite，便携、零配置
 
 ## 运行
@@ -110,6 +113,7 @@ app/
 ├── models.py          数据类
 ├── repository.py      数据访问层
 ├── library.py         仓库目录与文件落地策略
+├── exporter.py        项目导出（目录格式 + project.json）
 ├── utils.py
 ├── llm/
 │   ├── config.py      LLM 配置（providers + 默认值）
@@ -122,6 +126,7 @@ app/
     ├── project_dialog.py     项目元数据编辑 + 建议审阅
     ├── llm_suggest_dialog.py LLM 触发对话框（选参考文件、选字段）
     ├── llm_tasks_panel.py    任务队列面板
+    ├── export_dialog.py      项目导出对话框
     ├── settings_dialog.py    设置（通用/项目库/视图/字段/API/关于）
     ├── tag_tree.py
     ├── preview.py            图/视频/PDF 内嵌预览

@@ -57,6 +57,11 @@ LLM Cabinet brings that idea to the personal-file-library scenario: keep the Cal
   - One-click field suggestions based on current metadata + your selected reference files (PDF / docx / xlsx / code / images …)
   - Background serial queue with progress; suggestions go into a *pending review* flow — ✓ Apply / ✗ Reject per field, or accept/reject all
   - Per-field switch: disable LLM suggestion for a single field while still passing its current value to the model as context
+- **Project export**: one-click export from toolbar / right-click menu into a local
+  directory containing `project.json` / `files.json` / `README.md` / `files/`. Choose
+  whether to also copy the original files of link-mode (🔗) entries. The bundle is
+  transparent and inspectable — usable as backup, cross-device migration, or as the
+  standard carrier for a future import feature
 - **Database**: SQLite — portable, zero-config
 
 ## Run
@@ -112,6 +117,7 @@ app/
 ├── models.py          dataclasses
 ├── repository.py      data access layer
 ├── library.py         library directory & file landing strategy
+├── exporter.py        project export (directory format + project.json)
 ├── utils.py
 ├── llm/
 │   ├── config.py      LLM config (providers + defaults)
@@ -124,6 +130,7 @@ app/
     ├── project_dialog.py     project metadata editor + suggestion review
     ├── llm_suggest_dialog.py LLM trigger dialog (pick reference files & target fields)
     ├── llm_tasks_panel.py    task queue panel
+    ├── export_dialog.py      project export dialog
     ├── settings_dialog.py    settings (general / library / view / fields / API / about)
     ├── tag_tree.py
     ├── preview.py            inline image / video / PDF preview
