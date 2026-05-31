@@ -62,9 +62,8 @@ SQLite 内置一个 32-bit 整数字段 `user_version`，专门给应用做 sche
 
 - 全新数据库：`user_version == 0`
 - 我们的约定：**全新库直接被打成当前 `SCHEMA_VERSION`**，跳过历史迁移
-- 老库（曾被旧版本应用打开过）：`user_version` 可能 0 也可能某个具体数值
-  - `0` + 表里有数据 → 被视为「v1 之前的早期版本」，走 legacy 兜底
-  - `N > 0` → 按注册表逐版本应用迁移直到 `SCHEMA_VERSION`
+- 老库（曾被旧版本应用打开过）：`user_version` 为某个具体版本号 `N > 0`，
+  按 `MIGRATIONS` 注册表逐版本应用迁移直到 `SCHEMA_VERSION`
 
 代码位置：`app/db.py` 中 `_run_migrations()`。
 
@@ -206,17 +205,18 @@ library/
 
 ---
 
-## 7. 用户上手期的兼容兜底
+## 7. 启动期的自愈与种子
 
-历史上已经存在的几个 legacy 迁移函数（在 `db.py`）：
+`db.py` 中两个与历史兼容**无关**的常驻函数（`connect()` 每次启动都会跑）：
 
-- `_migrate_add_columns`：老库缺新列时 ALTER 补齐（fields 表的 key / suggest_enabled / visible / ord / type）
-- `_migrate_custom_fields`：把 v0 时的 `custom_fields` 表迁到 `project_field_values`
-- `_seed_fields`：fields 表空时灌默认 7 个字段
-- `_backfill_system_field_keys`：fields 表行的 `key` 列为空时按名称匹配回填
+- `_seed_fields`：`fields` 表空时灌默认 7 个字段（仅在全新库触发）
+- `_ensure_protected_fields`：保护字段（`title` / `description` / `tags`）缺失则补回，并将
+  其类型重新归一为 `text` / `textarea` / `tags`。用于防御用户误删或将来某次迁移写错。
 
-这些函数**继续保留**，作为 user_version=0 老库的兜底。新版本新增的迁移
-统一走 `MIGRATIONS` 注册表，不再加到这些 legacy 函数里。
+> 历史上曾存在 `_migrate_add_columns` / `_migrate_custom_fields` /
+> `_backfill_system_field_keys` 三个用于 user_version=0 老库的兜底函数，
+> 在 v0.1.0 (schema v1) 正式发布且确认无更早的存量库后已被移除。
+> 后续任何新增的迁移统一走 `MIGRATIONS` 注册表。
 
 ---
 

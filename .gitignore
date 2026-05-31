@@ -46,3 +46,7 @@ library/
 
 # pyinstaller 临时输出（也被 build/ dist/ 覆盖）
 *.manifest
+
+# ---- Chat / conversation exports ----
+# CodeBuddy 等对话导出记录，不入库
+history_*.md

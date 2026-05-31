@@ -21,7 +21,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -63,14 +63,6 @@ CREATE TABLE IF NOT EXISTS files (
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
-
--- 旧表（兼容；首次启动时迁移到 project_field_values 后清空）
-CREATE TABLE IF NOT EXISTS custom_fields (
-    project_id  INTEGER NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    key         TEXT NOT NULL,
-    value       TEXT,
-    PRIMARY KEY (project_id, key)
-);
 
 -- 字段定义：
 --   key 非空 → 系统字段（对应 projects 表中的某列），不可删除
@@ -176,87 +168,13 @@ def _seed_fields(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
-def _migrate_custom_fields(conn: sqlite3.Connection) -> None:
-    """旧 custom_fields 表 → 用户字段。幂等。"""
-    cur = conn.cursor()
-    rows = cur.execute(
-        "SELECT project_id, key, value FROM custom_fields"
-    ).fetchall()
-    if not rows:
-        return
+def _ensure_protected_fields(conn: sqlite3.Connection) -> None:
+    """保护字段（title / description / tags）自愈：缺失则补回、类型强制归一。
 
-    distinct_names = sorted({r["key"] for r in rows if r["key"]})
-    max_ord = cur.execute("SELECT COALESCE(MAX(ord), -1) AS m FROM fields").fetchone()["m"]
-    name_to_id: dict[str, int] = {}
-    for i, name in enumerate(distinct_names):
-        # 用户字段：key=NULL；type=text 默认
-        cur.execute(
-            "INSERT OR IGNORE INTO fields(name, type, ord, visible, key) "
-            "VALUES(?, 'text', ?, 1, NULL)",
-            (name, (max_ord or -1) + 1 + i),
-        )
-        row = cur.execute("SELECT id FROM fields WHERE name=?", (name,)).fetchone()
-        if row:
-            name_to_id[name] = row["id"]
-
-    for r in rows:
-        fid = name_to_id.get(r["key"])
-        if fid is None:
-            continue
-        cur.execute(
-            "INSERT OR REPLACE INTO project_field_values(project_id, field_id, value) "
-            "VALUES(?, ?, ?)",
-            (r["project_id"], fid, r["value"]),
-        )
-    cur.execute("DELETE FROM custom_fields")
-    conn.commit()
-
-
-def _migrate_add_columns(conn: sqlite3.Connection) -> None:
-    """老版本数据库可能缺新列，逐个 ALTER。幂等。
-
-    必须在 executescript(SCHEMA) 之前调用，否则 SCHEMA 中针对新列的
-    CREATE INDEX 会因列不存在而抛 OperationalError。
+    这是与历史无关的运行时防御：用户如果误删了保护字段（或将来某次迁移写错），
+    应用启动时能恢复到可用状态。幂等。
     """
     cur = conn.cursor()
-
-    # fields 表
-    exists = cur.execute(
-        "SELECT name FROM sqlite_master WHERE type='table' AND name='fields'"
-    ).fetchone()
-    if exists:
-        cols = [r["name"] for r in cur.execute("PRAGMA table_info(fields)").fetchall()]
-        if "key" not in cols:
-            cur.execute("ALTER TABLE fields ADD COLUMN key TEXT")
-        if "suggest_enabled" not in cols:
-            cur.execute(
-                "ALTER TABLE fields ADD COLUMN suggest_enabled INTEGER NOT NULL DEFAULT 1"
-            )
-        if "visible" not in cols:
-            cur.execute("ALTER TABLE fields ADD COLUMN visible INTEGER NOT NULL DEFAULT 1")
-        if "ord" not in cols:
-            cur.execute("ALTER TABLE fields ADD COLUMN ord INTEGER NOT NULL DEFAULT 0")
-        if "type" not in cols:
-            cur.execute("ALTER TABLE fields ADD COLUMN type TEXT NOT NULL DEFAULT 'text'")
-
-    conn.commit()
-
-
-def _backfill_system_field_keys(conn: sqlite3.Connection) -> None:
-    """旧库可能在 fields 表中已有"标题/作者/..."这些行但 key 为空。
-
-    按 DEFAULT_FIELDS 中 (name, key) 的对应关系回填 key，让
-    Field.is_title / is_system 之类的判断可以正常工作。
-
-    必要保护字段（title/description/tags）若不存在则补回。幂等。
-    """
-    cur = conn.cursor()
-    for name, _ftype, key in DEFAULT_FIELDS:
-        # 只在 key 为空 / NULL 的同名行上回填
-        cur.execute(
-            "UPDATE fields SET key=? WHERE name=? AND (key IS NULL OR key='')",
-            (key, name),
-        )
 
     # 兜底：必须存在 key='title' 的字段
     has_title = cur.execute(
@@ -270,7 +188,7 @@ def _backfill_system_field_keys(conn: sqlite3.Connection) -> None:
             ("标题", "text"),
         )
 
-    # 兜底：description/tags 也必须存在
+    # 兜底：description / tags 也必须存在
     for name, ftype, key in DEFAULT_FIELDS:
         if key not in ("description", "tags"):
             continue
@@ -296,6 +214,7 @@ def _backfill_system_field_keys(conn: sqlite3.Connection) -> None:
     conn.commit()
 
 
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -309,14 +228,11 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
-    # 先给旧表补列（legacy 兜底），避免 SCHEMA 中针对新列的 CREATE INDEX 失败
-    _migrate_add_columns(conn)
     conn.executescript(SCHEMA)
     # 版本化迁移：按注册表顺序应用未跑过的迁移
     _run_migrations(conn)
     _seed_fields(conn)
-    _migrate_custom_fields(conn)
-    _backfill_system_field_keys(conn)
+    _ensure_protected_fields(conn)
     # 启动时把卡在 running 的任务标记为 failed（应用上次异常退出留下的）
     conn.execute(
         "UPDATE llm_tasks SET status='failed', error='中断（程序退出）', "
@@ -383,11 +299,18 @@ def _is_fresh_database(conn: sqlite3.Connection) -> bool:
 
 
 # 迁移注册表：(from_version, to_version, migrate_fn)
-# 当前 SCHEMA_VERSION = 1，尚无版本化迁移。
-# 未来示例：
-#   def _migrate_v1_to_v2(conn): conn.execute("ALTER TABLE projects ADD COLUMN xxx TEXT")
-#   MIGRATIONS = [(1, 2, _migrate_v1_to_v2)]
-MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = []
+def _migrate_v1_to_v2(conn: sqlite3.Connection) -> None:
+    """v1 → v2：删除 v0.1.0 之前残留的 ``custom_fields`` 旧表。
+
+    v1 库里这张表可能仍存在但已空（在 v0.1.0 发布前用过、之后不再读写）。
+    新代码已经移除所有引用，这里把表 DROP 掉收尾。幂等。
+    """
+    conn.execute("DROP TABLE IF EXISTS custom_fields")
+
+
+MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
+    (1, 2, _migrate_v1_to_v2),
+]
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
@@ -402,13 +325,6 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
     if cur_v == 0 and _is_fresh_database(conn):
         _set_user_version(conn, SCHEMA_VERSION)
         return
-
-    if cur_v == 0:
-        # 旧库但未打过 user_version：假设它是 SCHEMA_VERSION 之前的最早可识别版本
-        # （由 _migrate_add_columns + _backfill_system_field_keys 兜底处理）。
-        # 把它标记为 1 让后续迁移从这里开始。
-        cur_v = 1
-        _set_user_version(conn, cur_v)
 
     if cur_v > SCHEMA_VERSION:
         # 用户用了更新的版本生成 db 后又用了旧客户端打开 → 跳过迁移，靠 schema
