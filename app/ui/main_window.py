@@ -174,6 +174,10 @@ class MainWindow(QMainWindow):
         # 左：标签筛选树
         # ============================================================
         self.tag_tree = TagTree()
+        self.tag_tree.attach_setting_io(
+            setter=self.repo.set_setting,
+            getter=self.repo.get_setting,
+        )
         self.tag_tree.filter_changed.connect(self._on_tag_filter_changed)
         self._current_filter_kind: str = "all"
         self._current_filter_value: str = ""
@@ -620,6 +624,9 @@ class MainWindow(QMainWindow):
         elif kind == "tag" and value:
             projects = self.repo.list_projects(tag=value)
             title_text = f"#{value}"
+        elif kind == "tag_prefix" and value:
+            projects = self.repo.list_projects(tag_prefix=value)
+            title_text = f"📁 {value} / *"
         else:
             projects = self.repo.list_projects()
             title_text = "全部项目"

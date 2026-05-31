@@ -61,7 +61,14 @@ class Repository:
         self,
         keyword: str = "",
         tag: str = "",
+        tag_prefix: str = "",
     ) -> list[Project]:
+        """列出项目。
+
+        过滤参数（互斥使用，``tag`` 优先于 ``tag_prefix``）：
+        - ``tag``：精确匹配标签名（沿用旧行为）
+        - ``tag_prefix``：匹配所有形如 ``<prefix>`` 或 ``<prefix>/...`` 的标签（task #06 标签层级折叠）
+        """
         sql = """
         SELECT DISTINCT p.* FROM projects p
         LEFT JOIN project_tags pt ON pt.project_id = p.id
@@ -76,11 +83,17 @@ class Repository:
         if tag:
             sql += " AND t.name = ?"
             params.append(tag)
+        elif tag_prefix:
+            # 同名父标签（"领域"）与子标签（"领域/科幻"）都命中
+            sql += " AND (t.name = ? OR t.name LIKE ?)"
+            params.append(tag_prefix)
+            params.append(f"{tag_prefix}/%")
         sql += " ORDER BY p.updated_at DESC, p.id DESC"
         rows = self.conn.execute(sql, params).fetchall()
         return self._attach_project_extras(
             [self._row_to_project(r) for r in rows]
         )
+
 
     def get_project(self, pid: int) -> Optional[Project]:
         row = self.conn.execute("SELECT * FROM projects WHERE id=?", (pid,)).fetchone()

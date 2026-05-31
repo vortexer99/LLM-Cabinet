@@ -68,6 +68,7 @@ with closing_repos(repo_a, repo_b):
 
 | 脚本 | 验证范围 | 关联 task |
 |---|---|---|
+| [task06_tags_hierarchy.py](./task06_tags_hierarchy.py) | `Repository.list_projects(tag, tag_prefix)` 的层级匹配语义 | [tasks/06](../tasks/06-tags-hierarchy-folding.md) |
 | [task10_folder_import.py](./task10_folder_import.py) | `app.exporter` ↔ `app.importer` 闭环；schema 兼容；三档字段策略；文件还原 | [tasks/10](../tasks/10-folder-batch-import.md) |
 
 ## 不接入 CI 的原因

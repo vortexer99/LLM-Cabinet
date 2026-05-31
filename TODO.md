@@ -24,7 +24,7 @@
 -
 
 ## 🏷️ 字段 / 标签 / 元数据
-[#06 · ⚪] 标签分类折叠管理
+[#06 · ✅ 2026-06-01] 标签分类折叠管理
 -
 
 ## 🖼️ 预览 / 封面 / 媒体
@@ -100,7 +100,7 @@
 | [05](./tasks/05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖） |
 | [04](./tasks/04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
 | [02](./tasks/02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
-| [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | 待做 |
+| [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
 | [08](./tasks/08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | 待做 |
 | [07](./tasks/07-local-embedding-summary.md) | 文件级摘要（手动导入 + 预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
 
