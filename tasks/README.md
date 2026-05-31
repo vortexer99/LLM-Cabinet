@@ -16,6 +16,7 @@
 | [10-folder-batch-import.md](./10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
 | [11-field-prompt-and-library-wizard.md](./11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导（含可扩展向导框架） | M | P1/P2 | 待做 |
 | [12-selftest-infrastructure.md](./12-selftest-infrastructure.md) | 端到端自检体系（基础设施，与功能并行增量） | M | P1 | 🚧 进行中 |
+| [13-mcp-server.md](./13-mcp-server.md) | MCP Server（AI 文件中枢接口；A 独立进程 + B GUI 内嵌） | M+M | P1/P2 | 待做 |
 
 ## 约定
 

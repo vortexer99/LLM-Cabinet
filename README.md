@@ -27,7 +27,7 @@ The recently emerging "LLM-Wiki" idea (see Andrej Karpathy's [LLM Wiki gist](htt
 
 Compared to LLM-Wiki, **you don't always need the LLM to digest every file** — that burns a lot of tokens, and what you actually want is often just "keep things tidy and findable". LLM Cabinet brings that pragmatic version of the idea to the personal-file-library scenario: keep the Calibre-style project / tag / field abstractions, and hand the most tedious "read-file → fill-metadata" step to an LLM **on demand**, with explicit per-file opt-in.
 
-**Looking ahead**: future versions may expose an **external-agent integration** — you could let an agent fully manage your project files (deciding where new files go and assigning their metadata), while the agent fetches whatever it needs from the library on demand. LLM Cabinet aims to be the substrate for this kind of "AI file hub".
+**Looking ahead**: future versions plan to expose Cabinet's capabilities via [MCP (Model Context Protocol)](https://modelcontextprotocol.io/), so any MCP-compatible client (Claude Desktop, Cursor, Cline, etc.) can drive an agent that fully manages your project files — deciding where new files go, assigning their metadata, and fetching whatever it needs from the library on demand. LLM Cabinet aims to be the substrate for this kind of "AI file hub".
 
 ## Screenshots
 

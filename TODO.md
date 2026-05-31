@@ -35,6 +35,7 @@
 [#07 · ⏳] 支持使用嵌入模型对本地大文件进行summary，发送给LLM，提高建议精准度
 [#11 · ⚪] 自定义LLM prompt模板，每个字段单独给出建议使用的格式
 [#11 · ⚪] 初始化库时，通过和LLM交流，规划项目的字段结构，标题、描述等字段的格式（形成专属的prompt模板）
+[#13 · ⚪] MCP Server：通过 Model Context Protocol 把库暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端，agent 可读元数据/检索/写入项目（受权限控制）
 -
 
 ## ⚙️ 设置 / 配置 / 持久化
@@ -94,6 +95,7 @@
 | [10](./tasks/10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
 | [11](./tasks/11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导 | M | P1/P2 | 待做 |
 | [12](./tasks/12-selftest-infrastructure.md) | 端到端自检体系（基础设施，并行增量） | M | P1 | 🚧 进行中 |
+| [13](./tasks/13-mcp-server.md) | MCP Server（AI 文件中枢接口） | M+M | P1/P2 | 待做 |
 | [05](./tasks/05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | T6 弃用 · T7 部分被 #09/#10 覆盖 |
 | [04](./tasks/04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
 | [02](./tasks/02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |

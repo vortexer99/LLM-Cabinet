@@ -25,7 +25,7 @@
 
 相比 LLM-Wiki，**很多时候你并不需要让 LLM 消化吸收所有文件**——那会消耗大量 token，而你的真实诉求可能只是"把它们放得整齐一点、找的时候能找到"。LLM Cabinet 正是这个思路在"个人文件库"场景下的落地：保留 Calibre 式的项目/标签/字段抽象，把最枯燥的"读文件 → 填元数据"那一步可选地交给 LLM。
 
-**未来设想**：本软件可能进一步实现**外部 agent 调用**接口——你可以把项目文件全部交由 agent 管理，由它把新文件放到合适的位置并自动分配元数据；当 agent 需要资料时，再回到库里调阅检索。LLM Cabinet 期望成为这种"AI 文件中枢"的承载层。
+**未来设想**：本软件可能进一步实现**外部 agent 调用**接口——计划通过 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 暴露 Cabinet 的能力，让 Claude Desktop / Cursor / Cline 等 MCP 兼容客户端的 agent 可以直接调用：把新文件放到合适的位置并自动分配元数据，需要资料时回到库里调阅检索。LLM Cabinet 期望成为这种"AI 文件中枢"的承载层。
 
 ## 截图
 
