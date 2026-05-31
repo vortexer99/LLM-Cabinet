@@ -13,7 +13,7 @@
 | [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 本地嵌入摘要再调 LLM | L | P2 | 远期 |
 | [08-multiple-libraries-switch.md](./08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | 待做 |
 | [09-project-export-basic.md](./09-project-export-basic.md) | 项目导出（基础版，T7 最小子集） | S | P1 | ✅ 2026-05-31 |
-| [10-folder-batch-import.md](./10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | 待做 |
+| [10-folder-batch-import.md](./10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
 | [11-field-prompt-and-library-wizard.md](./11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导（含可扩展向导框架） | M | P1/P2 | 待做 |
 
 ## 约定

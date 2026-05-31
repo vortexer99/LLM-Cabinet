@@ -49,15 +49,16 @@ LLM Cabinet 正是这个思路在"个人文件库"场景下的落地：保留 Ca
   - `link`：仅记录原始路径，不动用户文件
   - `copy`：导入时复制到统一仓库目录 `library/<project_id>/`
 - **预览**：图片、视频、PDF 内嵌预览；其它类型调用系统默认程序打开
-- **拖放**：拖文件/文件夹到空白区新建项目，拖到项目卡片加入既有项目；拖文件夹时默认以文件夹名为标题
+- **拖放**：拖文件/文件夹到空白区新建项目，拖到项目卡片加入既有项目；拖文件夹时默认以文件夹名为标题。**拖入多个文件夹**时可选择「合并为同一项目」或「每个文件夹分别建一个项目」；后者会识别每个文件夹中的 `project.json` 并恢复元数据。
 - **LLM 元数据助手**（核心特色）
   - 内置 DeepSeek / OpenAI / Google Gemini / xAI Grok 四家适配
   - 一键基于现有元数据 + 参考文件（PDF/docx/xlsx/代码/图片…）生成字段建议
   - 任务后台串行排队，进度可查；建议落入"待审阅"流，逐项 ✓ 应用 / ✗ 驳回 / 全部接受
   - 字段级开关：可针对单字段关闭 LLM 建议，仍把其值作为上下文喂给模型
-- **项目导出**：工具栏 / 右键菜单一键导出项目到本地目录，含 `project.json` /
+- **项目导出 / 批量导入**：工具栏 / 右键菜单一键导出项目到本地目录，含 `project.json` /
   `files.json` / `README.md` / `files/`；可选是否把链接模式（🔗）原始文件也复制进去。
-  导出物结构透明、可手动检视，作为备份、跨设备搬迁、未来导入功能的标准载体
+  反向操作：把多个项目目录拖到底部 DropZone，可选择"分别建一个项目"，自动识别 `project.json`
+  并恢复元数据/字段/标签——构成完整的导出/导入闭环。
 - **数据库**：SQLite，便携、零配置
 
 ## 运行
@@ -114,6 +115,7 @@ app/
 ├── repository.py      数据访问层
 ├── library.py         仓库目录与文件落地策略
 ├── exporter.py        项目导出（目录格式 + project.json）
+├── importer.py        批量文件夹导入（识别 project.json）
 ├── utils.py
 ├── llm/
 │   ├── config.py      LLM 配置（providers + 默认值）
@@ -127,6 +129,8 @@ app/
     ├── llm_suggest_dialog.py LLM 触发对话框（选参考文件、选字段）
     ├── llm_tasks_panel.py    任务队列面板
     ├── export_dialog.py      项目导出对话框
+    ├── import_dialog.py      批量文件夹导入对话框
+    ├── folder_drop_mode_dialog.py  多文件夹拖入时的"单/多项目"选择
     ├── settings_dialog.py    设置（通用/项目库/视图/字段/API/关于）
     ├── tag_tree.py
     ├── preview.py            图/视频/PDF 内嵌预览

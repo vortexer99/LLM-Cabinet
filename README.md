@@ -51,17 +51,18 @@ LLM Cabinet brings that idea to the personal-file-library scenario: keep the Cal
   - `link`: only record the original path; never touch user files
   - `copy`: import a copy into the unified library directory `library/<project_id>/`
 - **Preview**: inline image / video / PDF preview; other types open with the system default app
-- **Drag & drop**: drop files/folders onto blank area to create a new project, onto a project card to attach to it; folder drops default to the folder name as the title
+- **Drag & drop**: drop files/folders onto blank area to create a new project, onto a project card to attach to it; folder drops default to the folder name as the title. **Dropping multiple folders** lets you choose between "merge into one project" and "one project per folder"; the latter recognizes each folder's `project.json` and restores its metadata.
 - **LLM metadata assistant** (the headline feature)
   - Built-in adapters for DeepSeek / OpenAI / Google Gemini / xAI Grok
   - One-click field suggestions based on current metadata + your selected reference files (PDF / docx / xlsx / code / images …)
   - Background serial queue with progress; suggestions go into a *pending review* flow — ✓ Apply / ✗ Reject per field, or accept/reject all
   - Per-field switch: disable LLM suggestion for a single field while still passing its current value to the model as context
-- **Project export**: one-click export from toolbar / right-click menu into a local
-  directory containing `project.json` / `files.json` / `README.md` / `files/`. Choose
-  whether to also copy the original files of link-mode (🔗) entries. The bundle is
-  transparent and inspectable — usable as backup, cross-device migration, or as the
-  standard carrier for a future import feature
+- **Project export / batch import**: one-click export from toolbar / right-click menu into a
+  local directory containing `project.json` / `files.json` / `README.md` / `files/`. Choose
+  whether to also copy the original files of link-mode (🔗) entries. The reverse: drop
+  multiple project folders onto the bottom DropZone and choose "one project per folder" —
+  each `project.json` is recognized and its metadata / fields / tags restored, closing the
+  export/import loop.
 - **Database**: SQLite — portable, zero-config
 
 ## Run
@@ -118,6 +119,7 @@ app/
 ├── repository.py      data access layer
 ├── library.py         library directory & file landing strategy
 ├── exporter.py        project export (directory format + project.json)
+├── importer.py        batch folder import (recognizes project.json)
 ├── utils.py
 ├── llm/
 │   ├── config.py      LLM config (providers + defaults)
@@ -131,6 +133,8 @@ app/
     ├── llm_suggest_dialog.py LLM trigger dialog (pick reference files & target fields)
     ├── llm_tasks_panel.py    task queue panel
     ├── export_dialog.py      project export dialog
+    ├── import_dialog.py      batch folder import dialog
+    ├── folder_drop_mode_dialog.py  "merge / separate" picker for multi-folder drops
     ├── settings_dialog.py    settings (general / library / view / fields / API / about)
     ├── tag_tree.py
     ├── preview.py            inline image / video / PDF preview

@@ -1574,12 +1574,128 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
-            files = self._expand_paths(paths)
             self._hide_drop_zone()
+            # 分支：全是目录且 ≥ 2 个 → 走批量文件夹导入流程（task #10）
+            from ..importer import split_paths_by_kind
+            dirs, plain_files = split_paths_by_kind(paths)
+            if dirs and not plain_files and len(dirs) >= 2:
+                self._handle_multi_folder_drop(dirs)
+                return
+            # 否则沿用旧路径
+            files = self._expand_paths(paths)
             if files:
                 self._drop_create_project(files, source_paths=paths)
         finally:
             self._drop_busy = False
+
+    # ------------------------------------------------------------------
+    # 批量文件夹导入（task #10）
+    # ------------------------------------------------------------------
+    def _handle_multi_folder_drop(self, dirs: list) -> None:
+        """≥ 2 个目录拖到 DropZone：先问"单/多项目"，再走批量导入。"""
+        from .folder_drop_mode_dialog import FolderDropModeDialog
+        mode_dlg = FolderDropModeDialog(len(dirs), parent=self)
+        if mode_dlg.exec() != QDialog.Accepted:
+            return  # 用户取消
+
+        if mode_dlg.mode() == "merge":
+            # 合并为一个新项目：沿用旧路径（_drop_create_project）
+            files = self._expand_paths([str(d) for d in dirs])
+            if files:
+                self._drop_create_project(files, source_paths=[str(d) for d in dirs])
+            return
+
+        # separate 模式：批量导入
+        self._run_batch_folder_import(dirs)
+
+    def _run_batch_folder_import(self, dirs: list) -> None:
+        """对每个文件夹独立建项目（task #10 主流程）。"""
+        from pathlib import Path as _Path
+        from ..importer import (
+            import_folder_as_project, scan_folders,
+        )
+        from .import_dialog import FieldPolicyAskDialog, ImportDialog
+
+        plans = scan_folders([_Path(d) for d in dirs], self.repo)
+        dlg = ImportDialog(plans, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        options = dlg.options()
+
+        # 进度对话框：以"文件夹个数"为粗粒度
+        from PySide6.QtCore import Qt
+        from PySide6.QtWidgets import QProgressDialog
+        prog = QProgressDialog(
+            "正在导入项目…", "取消", 0, len(plans), self,
+        )
+        prog.setWindowTitle("批量导入文件夹")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setAutoClose(False)
+        prog.setAutoReset(False)
+        prog.show()
+
+        # 单项目级未匹配字段询问回调
+        def _ask_field_policy(folder, fields):
+            ask = FieldPolicyAskDialog(folder, fields, parent=self)
+            if ask.exec() != QDialog.Accepted:
+                return options.field_policy  # 用户取消 → 回退默认
+            return ask.policy()
+
+        results: list = []
+        all_warnings: list[str] = []
+        last_pid: int | None = None
+        cancelled = False
+        for i, plan in enumerate(plans):
+            if prog.wasCanceled():
+                cancelled = True
+                break
+            prog.setValue(i)
+            prog.setLabelText(f"导入「{plan.folder.name}」…")
+            try:
+                res = import_folder_as_project(
+                    self.repo, self.library, plan, options,
+                    progress=None,
+                    ask_field_policy=_ask_field_policy,
+                )
+                results.append(res)
+                if res.warnings:
+                    all_warnings.extend(
+                        f"[{plan.folder.name}] {w}" for w in res.warnings
+                    )
+                last_pid = res.project_id
+            except Exception as e:
+                all_warnings.append(f"[{plan.folder.name}] 导入失败：{e}")
+        prog.setValue(len(plans))
+        prog.close()
+
+        # 刷新 UI
+        self.refresh_projects()
+        if last_pid is not None:
+            self._select_project_by_id(last_pid)
+
+        # 统计反馈
+        n_ok = len(results)
+        n_files_total = sum(r.n_files for r in results)
+        msg = (
+            f"批量导入完成：{n_ok} / {len(plans)} 个项目，共 {n_files_total} 个文件"
+        )
+        if cancelled:
+            msg = "批量导入已取消（" + msg + "）"
+        self.statusBar().showMessage(msg, 6000)
+
+        # 如果有 warning，弹一次汇总
+        if all_warnings:
+            from PySide6.QtWidgets import QMessageBox
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Information)
+            box.setWindowTitle("批量导入：警告与提示")
+            head = msg + f"\n\n{len(all_warnings)} 条提示信息："
+            box.setText(head)
+            box.setDetailedText("\n".join(all_warnings))
+            box.exec()
+
+
 
     def _on_drag_hover_changed(self, pid) -> None:
         self._set_drag_hover(pid)
