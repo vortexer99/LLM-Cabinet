@@ -184,7 +184,7 @@ class LLMSuggestDialog(QDialog):
             self._checks.append((cb, f))
 
         files_row = QHBoxLayout()
-        files_row.addWidget(QLabel("参考文件（仅勾选项的内容会发送给 LLM）："))
+        files_row.addWidget(QLabel("参考文件："))
         files_row.addStretch(1)
         b_all = QPushButton("全选")
         b_all.setProperty("flat", True)
@@ -194,6 +194,21 @@ class LLMSuggestDialog(QDialog):
         b_none.clicked.connect(lambda: self._toggle_all(False))
         files_row.addWidget(b_all); files_row.addWidget(b_none)
         v.addLayout(files_row)
+
+        # 隐私提示：明确"内容 vs 文件名"的发送范围
+        privacy_hint = QLabel(
+            "ℹ️ 仅勾选项的<b>文件内容</b>会发送给 LLM；但<b>所有文件的文件名</b>"
+            "都会作为项目结构上下文发送（无论是否勾选）。"
+        )
+        privacy_hint.setTextFormat(Qt.RichText)
+        privacy_hint.setWordWrap(True)
+        privacy_hint.setProperty("muted", True)
+        privacy_hint.setToolTip(
+            "文件名出现在 prompt 的『项目内全部文件清单』部分，\n"
+            "便于模型理解项目结构；文件内容仅在勾选时被读取并发送。"
+        )
+        v.addWidget(privacy_hint)
+
         v.addWidget(self.tbl, 1)
 
         # 附言

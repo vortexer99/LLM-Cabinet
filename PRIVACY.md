@@ -45,7 +45,7 @@ Triggered from: right-click on a project, the ✨ button in the project edit dia
 
 **Data sent to the selected LLM provider** includes, but is not limited to:
 - The project's current metadata values (title, author, date, tags, description, and any field with "Visible" = ON)
-- A **listing of every file in the project** (filename, kind, per-file note — but **not the file contents**)
+- **A listing of every file in the project** (filename, kind, per-file note — sent **regardless of whether you tick them as reference**; only the *contents* of un-ticked files are excluded). The listing is provided as project-structure context so the model understands what the project consists of
 - The **content** of the files you ticked as *reference files* in the dialog:
   - **PDF**: text from the first 6 pages (~12,000 chars max)
   - **xlsx / docx / csv / txt / code files**: extracted text (~8,000 chars max)
@@ -96,6 +96,7 @@ Once data leaves your machine it is governed by **that provider's own privacy po
 ## 5. Known limitations and risks
 
 - **Plaintext API keys**: as noted above. Recommendation: clear keys you don't need long-term; or encrypt the partition holding `%APPDATA%/LLMCabinet/` at the OS level
+- **Filenames are data too**: when you trigger an LLM suggestion, the **filenames of every file in the project** are sent as project-structure context regardless of which files are ticked. If a filename itself contains sensitive information (real names, internal codenames, contract numbers, etc.), rename it to a redacted form or remove that file from the project before triggering
 - **LLM provider retention**: DeepSeek / OpenAI / Gemini / Grok each have their own data retention and training policies. If you tick sensitive files as reference, that content may be retained by the provider. If unsure, read the provider's privacy policy or use a "no-training" tier (such as OpenAI's zero-data-retention agreements or Gemini's paid tier)
 - **Open and auditable**: you can always read the source under `app/llm/` to verify that the outbound requests match what this document describes
 
