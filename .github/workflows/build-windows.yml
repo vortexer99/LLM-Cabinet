@@ -1,0 +1,112 @@
+name: Build Windows EXE
+
+# 触发：
+#  - 手动 (workflow_dispatch)：在 Actions 页面点 "Run workflow" 即可
+#  - tag v* 推送：自动构建并发布到 GitHub Release
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write  # 给 tag 触发时创建 / 更新 Release 用
+
+jobs:
+  build:
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller
+
+      # 不创建窗口，仅冒烟核心 import，避免无显示器环境失败
+      - name: Smoke import check
+        run: |
+          python -c "import importlib; mods = ['app.utils','app.db','app.models','app.library','app.repository','app.llm','app.llm.providers','app.llm.queue']; [importlib.import_module(m) for m in mods]; print('core import OK')"
+
+      # 解析版本号：tag 触发取 tag 名（去掉前缀 v），否则用 app.__version__ + 短 SHA
+      - name: Resolve version
+        id: ver
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $v = $env:GITHUB_REF -replace '^refs/tags/v',''
+          } else {
+            $appv = python -c "import app; print(app.__version__)"
+            $sha  = "${env:GITHUB_SHA}".Substring(0,7)
+            $v = "$appv+$sha"
+          }
+          Write-Host "version = $v"
+          "version=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      # tag 触发时强制校验：tag 名（去掉 v 前缀）必须等于 app.__version__
+      # 不一致直接 fail，避免发布出版本号错乱的 exe
+      - name: Verify tag matches __version__
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        run: |
+          $tagVer = "${{ steps.ver.outputs.version }}"
+          $appVer = python -c "import app; print(app.__version__)"
+          Write-Host "tag version  = $tagVer"
+          Write-Host "app.__version__ = $appVer"
+          if ($tagVer -ne $appVer) {
+            Write-Error "Tag ($tagVer) does not match app.__version__ ($appVer). Please bump app/__init__.py before tagging."
+            exit 1
+          }
+          Write-Host "OK: tag and __version__ match."
+
+      # PyInstaller 单 exe；参数与 README.zh-CN.md 中保持一致
+      - name: Build with PyInstaller
+        shell: pwsh
+        run: |
+          pyinstaller -w -F -n "LLM Cabinet" `
+            --icon icon.jpg `
+            --add-data "icon.jpg;." `
+            --add-data "PRIVACY.md;." `
+            --add-data "PRIVACY.zh-CN.md;." `
+            --add-data "app/ui/assets;app/ui/assets" `
+            app/main.py
+
+      # 把版本号写进文件名：LLM Cabinet-<version>.exe
+      - name: Rename artifact with version
+        shell: pwsh
+        run: |
+          $src = "dist/LLM Cabinet.exe"
+          $dst = "dist/LLM Cabinet-${{ steps.ver.outputs.version }}.exe"
+          Move-Item -LiteralPath $src -Destination $dst -Force
+          Get-Item -LiteralPath $dst | Select-Object Name,Length
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LLM-Cabinet-${{ steps.ver.outputs.version }}-windows
+          path: dist/LLM Cabinet-*.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      # 仅 tag 触发时发布 Release
+      - name: Create / update GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          name: LLM Cabinet ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          generate_release_notes: true
+          files: dist/LLM Cabinet-*.exe
