@@ -9,6 +9,29 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 ## [Unreleased]
 
 ### Added
+-
+
+### Changed
+-
+
+### Fixed
+-
+
+### Deprecated
+-
+
+### Removed
+-
+
+---
+
+## [0.2.0] - 2026-05-31
+
+📦 schema v1 → v2 — 仅 `DROP TABLE IF EXISTS custom_fields`，不影响任何有效数据。
+
+⚠️ **BREAKING**：应用数据目录与默认数据库文件名变更。详见下方 Changed 段。
+
+### Added
 - **项目导出（基础版，task #09）**：工具栏 `📤 导出项目` + 项目右键菜单
   `📤 导出项目…` 入口；导出对话框含路径选择器与"复制链接模式（🔗）原始文件"
   开关；产物为目录形式（`project.json` / `files.json` / `README.md` / `files/`），
@@ -20,7 +43,6 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - `PRIVACY` 新增「3.A 关于导出项目功能」小节，描述导出物的结构与敏感性提示。
 
 ### Changed
-- 📦 schema v1 → v2 — 仅 `DROP TABLE IF EXISTS custom_fields`，不影响任何有效数据。
 - ⚠️ **BREAKING**：应用数据目录由 `%APPDATA%/Fileman/` 改为 `%APPDATA%/LLMCabinet/`，
   默认数据库文件名由 `fileman.db` 改为 `cabinet.db`，自动备份命名相应改为
   `cabinet.vN.<时间戳>.bak`。环境变量 `FILEMAN_DND_DEBUG` 改名为 `LLMCABINET_DND_DEBUG`。
@@ -50,9 +72,6 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   子类（`isinstance(False, int) == True`），导致 `False` 被当作合法 `pid` 进入
   `repo.get_project(False)`。修法：在判 `int` 之前先排除 `bool`。
 
-### Deprecated
--
-
 ### Removed
 - 移除针对 v0.1.0 之前未发布 schema 的兼容兜底：`custom_fields` 旧表定义、
   `_migrate_custom_fields`、`_migrate_add_columns`、`_backfill_system_field_keys`
@@ -71,12 +90,13 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 字段系统（系统字段 + 用户自定义字段，可改顺序、可见性、类型）
 - 标签筛选（左栏树）
 - 文件预览（图片 / 视频 / PDF 内嵌；其它调用系统默认）
-- 拖放新建项目 / 加入项目https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f
+- 拖放新建项目 / 加入项目
 - LLM 元数据助手（DeepSeek / OpenAI / Gemini / Grok）
 - 文件级存储方式（🔗 链接 / 📦 仓储），可同项目混合
 - 数据库 schema v1
 
 📦 schema v1 — 初始 schema，无需迁移。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.1.0
