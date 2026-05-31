@@ -1,0 +1,961 @@
+"""设置对话框：左类别 + 右内容（QListWidget + QStackedWidget）。
+
+页：
+- 通用：主题
+- 项目库：默认存储模式、库根目录（只读，可在资源管理器打开）
+- 视图：默认视图（grid/list）、默认列
+- 关于：版本、数据库与库路径
+"""
+from __future__ import annotations
+
+from pathlib import Path
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QAbstractItemView,
+    QButtonGroup,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QFormLayout,
+    QFrame,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QInputDialog,
+    QLabel,
+    QLineEdit,
+    QListWidget,
+    QListWidgetItem,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QSizePolicy,
+    QStackedWidget,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from .. import HOMEPAGE_URL, __version__
+from ..db import SCHEMA_VERSION
+from ..repository import Repository
+from ..utils import app_data_dir, reveal_in_explorer
+
+
+class SettingsDialog(QDialog):
+    """设置面板。变更通过信号通知，调用方决定是否立即应用。"""
+
+    theme_changed = Signal(str)                  # "dark" | "light"
+    default_storage_changed = Signal(str)        # "link" | "copy"
+    default_view_changed = Signal(str)           # "grid" | "list"
+    fields_changed = Signal()                    # 字段定义变化（增删改顺序可见性类型）
+
+    def __init__(self, repo: Repository, library_root: Path, db_path: Path, parent=None):
+        super().__init__(parent)
+        self.repo = repo
+        self.library_root = library_root
+        self.db_path = db_path
+
+        self.setWindowTitle("设置")
+        self.resize(720, 520)
+
+        # ---- 类别栏 ----
+        self.cat_list = QListWidget()
+        self.cat_list.setObjectName("SettingsCategories")
+        self.cat_list.setFixedWidth(160)
+        self.cat_list.setSpacing(2)
+        for name in ("通用", "项目库", "视图", "字段", "API", "关于"):
+            QListWidgetItem(name, self.cat_list)
+        self.cat_list.setCurrentRow(0)
+
+        # ---- 内容栈 ----
+        self.stack = QStackedWidget()
+        self.stack.addWidget(self._build_general_page())
+        self.stack.addWidget(self._build_library_page())
+        self.stack.addWidget(self._build_view_page())
+        self.stack.addWidget(self._build_fields_page())
+        self.stack.addWidget(self._build_api_page())
+        self.stack.addWidget(self._build_about_page())
+
+        self.cat_list.currentRowChanged.connect(self.stack.setCurrentIndex)
+
+        # ---- 底部按钮 ----
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(self.accept)
+
+        # ---- 拼装 ----
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
+        body.addWidget(self.cat_list)
+        sep = QFrame()
+        sep.setFrameShape(QFrame.VLine)
+        sep.setStyleSheet("color:#373a40;")
+        body.addWidget(sep)
+        body.addWidget(self.stack, 1)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        wrap = QWidget()
+        wrap.setLayout(body)
+        root.addWidget(wrap, 1)
+        bb_wrap = QHBoxLayout()
+        bb_wrap.setContentsMargins(12, 8, 12, 12)
+        bb_wrap.addStretch(1)
+        bb_wrap.addWidget(bb)
+        root.addLayout(bb_wrap)
+
+    # =================================================================
+    # 通用
+    # =================================================================
+    def _build_general_page(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(14)
+
+        title = QLabel("通用")
+        title.setProperty("h1", True)
+        lay.addWidget(title)
+
+        gb = QGroupBox("外观")
+        form = QFormLayout(gb)
+        form.setLabelAlignment(Qt.AlignLeft)
+
+        self.cmb_theme = QComboBox()
+        self.cmb_theme.addItem("深色 (Dark)", "dark")
+        self.cmb_theme.addItem("浅色 (Light)", "light")
+        cur = self.repo.get_setting("theme", "dark") or "dark"
+        idx = self.cmb_theme.findData(cur)
+        self.cmb_theme.setCurrentIndex(max(0, idx))
+        self.cmb_theme.currentIndexChanged.connect(self._on_theme_changed)
+        form.addRow("主题：", self.cmb_theme)
+
+        lay.addWidget(gb)
+        lay.addStretch(1)
+        return w
+
+    def _on_theme_changed(self, _i: int) -> None:
+        v = self.cmb_theme.currentData()
+        self.repo.set_setting("theme", v)
+        self.theme_changed.emit(v)
+
+    # =================================================================
+    # 项目库
+    # =================================================================
+    def _build_library_page(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(14)
+
+        title = QLabel("项目库")
+        title.setProperty("h1", True)
+        lay.addWidget(title)
+
+        gb1 = QGroupBox("默认导入行为")
+        form = QFormLayout(gb1)
+        self.cmb_storage = QComboBox()
+        self.cmb_storage.addItem("🔗 链接（仅记录路径，不动用户文件）", "link")
+        self.cmb_storage.addItem("📦 仓储（复制到统一仓库目录）", "copy")
+        cur = self.repo.get_setting("default_storage_mode", "link") or "link"
+        idx = self.cmb_storage.findData(cur)
+        self.cmb_storage.setCurrentIndex(max(0, idx))
+        self.cmb_storage.currentIndexChanged.connect(self._on_storage_changed)
+        form.addRow("默认存储方式：", self.cmb_storage)
+        hint = QLabel(
+            "拖放新建项目、以及向项目里添加文件时使用此默认值。\n"
+            "每次添加文件仍可在弹出的对话框中临时改选；"
+            "存储方式是文件级属性，同一项目内可混合存在。"
+        )
+        hint.setProperty("hint", True)
+        hint.setWordWrap(True)
+        form.addRow("", hint)
+        lay.addWidget(gb1)
+
+        gb2 = QGroupBox("库目录")
+        v = QVBoxLayout(gb2)
+        path_row = QHBoxLayout()
+        self.ed_lib = QLineEdit(str(self.library_root))
+        self.ed_lib.setReadOnly(True)
+        btn_open = QPushButton("📂  打开")
+        btn_open.clicked.connect(lambda: reveal_in_explorer(self.library_root))
+        path_row.addWidget(self.ed_lib, 1)
+        path_row.addWidget(btn_open)
+        v.addLayout(path_row)
+        tip = QLabel("仓库目录用于存放『复制』模式下导入的文件。")
+        tip.setProperty("hint", True)
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        lay.addWidget(gb2)
+
+        # 数据位置（只读 + 打开按钮）
+        gb3 = QGroupBox("数据位置")
+        gv = QVBoxLayout(gb3)
+        for label, path in (
+            ("数据库", self.db_path),
+            ("应用数据目录", app_data_dir()),
+        ):
+            row = QHBoxLayout()
+            lbl = QLabel(f"{label}：")
+            lbl.setFixedWidth(110)
+            lbl.setProperty("muted", True)
+            ed = QLineEdit(str(path))
+            ed.setReadOnly(True)
+            b_open = QPushButton("📂")
+            b_open.setToolTip("在资源管理器中打开")
+            b_open.setProperty("flat", True)
+            # 数据库定位到所在目录；目录直接打开
+            target = path if Path(path).is_dir() else Path(path).parent
+            b_open.clicked.connect(lambda _=False, t=target: reveal_in_explorer(t))
+            row.addWidget(lbl)
+            row.addWidget(ed, 1)
+            row.addWidget(b_open)
+            gv.addLayout(row)
+
+        # Schema 版本 + 备份状态
+        ver_row = QHBoxLayout()
+        ver_cap = QLabel("Schema 版本：")
+        ver_cap.setFixedWidth(110)
+        ver_cap.setProperty("muted", True)
+        ver_val = QLabel(f"v{SCHEMA_VERSION}")
+        ver_val.setToolTip(
+            "数据库 schema 版本号（独立于应用版本号）。\n"
+            "升级新版应用打开旧 db 时，会自动备份并应用迁移脚本。\n"
+            "备份文件落在数据库同目录，文件名形如 fileman.vN.时间戳.bak"
+        )
+        # 顺手统计同目录下的 .bak 数量
+        try:
+            bak_dir = Path(self.db_path).parent
+            n_bak = sum(
+                1 for p in bak_dir.glob(f"{Path(self.db_path).stem}.v*.bak")
+            )
+        except OSError:
+            n_bak = 0
+        bak_info = QLabel(
+            f"·  自动备份：{n_bak} 份" if n_bak else "·  自动备份：暂无"
+        )
+        bak_info.setProperty("muted", True)
+        ver_row.addWidget(ver_cap)
+        ver_row.addWidget(ver_val)
+        ver_row.addSpacing(8)
+        ver_row.addWidget(bak_info)
+        ver_row.addStretch(1)
+        gv.addLayout(ver_row)
+
+        lay.addWidget(gb3)
+
+        lay.addStretch(1)
+        return w
+
+    def _on_storage_changed(self, _i: int) -> None:
+        v = self.cmb_storage.currentData()
+        self.repo.set_setting("default_storage_mode", v)
+        self.default_storage_changed.emit(v)
+
+    # =================================================================
+    # 视图
+    # =================================================================
+    def _build_view_page(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(14)
+
+        title = QLabel("视图")
+        title.setProperty("h1", True)
+        lay.addWidget(title)
+
+        gb1 = QGroupBox("默认视图")
+        form = QFormLayout(gb1)
+        self.cmb_view = QComboBox()
+        self.cmb_view.addItem("网格（封面墙）", "grid")
+        self.cmb_view.addItem("列表（表格）", "list")
+        cur = self.repo.get_setting("default_view_mode", "grid") or "grid"
+        idx = self.cmb_view.findData(cur)
+        self.cmb_view.setCurrentIndex(max(0, idx))
+        self.cmb_view.currentIndexChanged.connect(self._on_view_changed)
+        form.addRow("启动时视图：", self.cmb_view)
+        lay.addWidget(gb1)
+
+        hint = QLabel(
+            "列表视图显示的字段及其顺序，请到『字段』页管理：勾选字段的『显示』即可显示在列表中。"
+        )
+        hint.setProperty("hint", True)
+        hint.setWordWrap(True)
+        lay.addWidget(hint)
+
+        lay.addStretch(1)
+        return w
+
+    def _on_view_changed(self, _i: int) -> None:
+        v = self.cmb_view.currentData()
+        self.repo.set_setting("default_view_mode", v)
+        self.default_view_changed.emit(v)
+
+    def _on_columns_changed(self, _state: int) -> None:
+        # 已废弃：列可见性合并到字段页
+        pass
+
+    # =================================================================
+    # 字段（库级）
+    # =================================================================
+    def _build_fields_page(self) -> QWidget:
+        from ..models import FIELD_TYPES, FIELD_TYPE_LABELS
+        self._FIELD_TYPES = FIELD_TYPES
+        self._FIELD_TYPE_LABELS = FIELD_TYPE_LABELS
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(10)
+
+        title = QLabel("字段")
+        title.setProperty("h1", True)
+        lay.addWidget(title)
+
+        tip = QLabel(
+            "管理所有字段及其类型与顺序。表中顺序即为『项目编辑』对话框和列表视图中显示的顺序。"
+            "『标题』『描述』『标签』为必有字段，不可删除或修改类型。"
+        )
+        tip.setProperty("hint", True)
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
+
+        # 字段表（4 列：字段名 / 类型 / 显示 / LLM 建议）
+        self.tbl_fields = QTableWidget(0, 4)
+        self.tbl_fields.setHorizontalHeaderLabels(["字段名", "类型", "显示", "LLM 建议"])
+        self.tbl_fields.verticalHeader().setVisible(False)
+        self.tbl_fields.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_fields.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.tbl_fields.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.tbl_fields.setShowGrid(False)
+        self.tbl_fields.setAlternatingRowColors(True)
+        h = self.tbl_fields.horizontalHeader()
+        # 字段名占主，类型给固定较宽列以容纳类型名（如"评分（1~5 星）"）
+        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        h.setSectionResizeMode(1, QHeaderView.Interactive)
+        h.setSectionResizeMode(2, QHeaderView.Fixed)
+        h.setSectionResizeMode(3, QHeaderView.Fixed)
+        self.tbl_fields.setColumnWidth(1, 180)
+        self.tbl_fields.setColumnWidth(2, 60)
+        self.tbl_fields.setColumnWidth(3, 90)
+        # 行高要足够容纳带 padding 的 QComboBox，否则文字会被上下裁掉只剩一条
+        self.tbl_fields.verticalHeader().setDefaultSectionSize(40)
+        lay.addWidget(self.tbl_fields, 1)
+
+        # 操作按钮
+        ops = QHBoxLayout()
+        b_add = QPushButton("＋ 添加")
+        b_add.clicked.connect(self._field_add)
+        b_rename = QPushButton("✎ 重命名")
+        b_rename.clicked.connect(self._field_rename)
+        b_del = QPushButton("🗑 删除")
+        b_del.setProperty("danger", True)
+        b_del.clicked.connect(self._field_delete)
+        b_up = QPushButton("↑ 上移")
+        b_up.clicked.connect(lambda: self._field_move(-1))
+        b_down = QPushButton("↓ 下移")
+        b_down.clicked.connect(lambda: self._field_move(1))
+        for b in (b_add, b_rename, b_del):
+            ops.addWidget(b)
+        ops.addStretch(1)
+        ops.addWidget(b_up)
+        ops.addWidget(b_down)
+        lay.addLayout(ops)
+
+        self._reload_fields_table()
+        return w
+
+    def _reload_fields_table(self) -> None:
+        fields = self.repo.list_fields()
+        self.tbl_fields.blockSignals(True)
+        self.tbl_fields.setRowCount(len(fields))
+        for r, f in enumerate(fields):
+            # 字段名
+            tag_suffix = ""
+            if f.is_title:
+                tag_suffix = "  (标题)"
+            elif f.is_required:
+                tag_suffix = "  (必有)"
+            display_name = f.name + tag_suffix
+            it_name = QTableWidgetItem(display_name)
+            it_name.setData(Qt.UserRole, f.id)
+            self.tbl_fields.setItem(r, 0, it_name)
+
+            # 类型 ComboBox
+            cmb = QComboBox()
+            # 防止 cell widget 在某些 DPI / 缩放下被压成"竖排字"宽度
+            cmb.setMinimumWidth(140)
+            # 行高足够，但 cell widget 默认会被拉满 cell；显式给个最小高度，
+            # 避免文字被裁切只剩一条横线
+            cmb.setMinimumHeight(28)
+            cmb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            for t in self._FIELD_TYPES:
+                cmb.addItem(self._FIELD_TYPE_LABELS.get(t, t), t)
+            # 受保护字段可能有 FIELD_TYPES 之外的固定类型（如 tags），单独追加并选中
+            ftype = f.type or "text"
+            if cmb.findData(ftype) < 0:
+                cmb.addItem(self._FIELD_TYPE_LABELS.get(ftype, ftype), ftype)
+            idx = cmb.findData(ftype)
+            cmb.setCurrentIndex(max(0, idx))
+            if f.is_required:
+                cmb.setEnabled(False)
+                cmb.setToolTip(f"『{f.name}』字段类型固定，不可修改")
+            cmb.currentIndexChanged.connect(
+                lambda _i, fid=f.id, box=cmb: self._field_change_type(fid, box.currentData())
+            )
+            self.tbl_fields.setCellWidget(r, 1, cmb)
+
+            # 显示复选框
+            cb = QCheckBox()
+            cb.setChecked(f.visible)
+            if f.is_title:
+                cb.setEnabled(False)
+                cb.setToolTip("标题字段必显")
+            cb.stateChanged.connect(
+                lambda _s, fid=f.id, box=cb: self._field_toggle_visible(fid, box.isChecked())
+            )
+            holder = QWidget()
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addStretch(1); hl.addWidget(cb); hl.addStretch(1)
+            self.tbl_fields.setCellWidget(r, 2, holder)
+
+            # LLM 建议复选框（标题字段也允许用户自由开关）
+            cb_sug = QCheckBox()
+            cb_sug.setChecked(f.suggest_enabled)
+            cb_sug.stateChanged.connect(
+                lambda _s, fid=f.id, box=cb_sug: self._field_toggle_suggest(fid, box.isChecked())
+            )
+            holder2 = QWidget()
+            hl2 = QHBoxLayout(holder2)
+            hl2.setContentsMargins(0, 0, 0, 0)
+            hl2.addStretch(1); hl2.addWidget(cb_sug); hl2.addStretch(1)
+            self.tbl_fields.setCellWidget(r, 3, holder2)
+        self.tbl_fields.blockSignals(False)
+
+    def _current_field_id(self) -> int | None:
+        r = self.tbl_fields.currentRow()
+        if r < 0:
+            return None
+        it = self.tbl_fields.item(r, 0)
+        return it.data(Qt.UserRole) if it else None
+
+    def _field_add(self) -> None:
+        from ..models import FIELD_TYPE_LABELS, FIELD_TYPES
+        dlg = _AddFieldDialog(parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            self.repo.add_field(dlg.name, dlg.type)
+        except Exception as e:
+            QMessageBox.warning(self, "失败", str(e))
+            return
+        self._reload_fields_table()
+        self.fields_changed.emit()
+
+    def _field_rename(self) -> None:
+        fid = self._current_field_id()
+        if fid is None:
+            return
+        f = self.repo.get_field(fid)
+        if not f:
+            return
+        new_name, ok = QInputDialog.getText(self, "重命名", "新字段名：", text=f.name)
+        if not ok or not new_name.strip() or new_name.strip() == f.name:
+            return
+        try:
+            self.repo.rename_field(fid, new_name.strip())
+        except Exception as e:
+            QMessageBox.warning(self, "失败", str(e))
+            return
+        self._reload_fields_table()
+        self.fields_changed.emit()
+
+    def _field_toggle_visible(self, fid: int, visible: bool) -> None:
+        self.repo.set_field_visible(fid, visible)
+        self.fields_changed.emit()
+
+    def _field_toggle_suggest(self, fid: int, enabled: bool) -> None:
+        self.repo.set_field_suggest_enabled(fid, enabled)
+        # 不发 fields_changed（视图列不受影响）
+
+    def _field_change_type(self, fid: int, ftype: str) -> None:
+        self.repo.set_field_type(fid, ftype)
+        self.fields_changed.emit()
+
+    def _field_move(self, delta: int) -> None:
+        r = self.tbl_fields.currentRow()
+        if r < 0:
+            return
+        target = r + delta
+        if target < 0 or target >= self.tbl_fields.rowCount():
+            return
+        ids: list[int] = []
+        for i in range(self.tbl_fields.rowCount()):
+            it = self.tbl_fields.item(i, 0)
+            if it:
+                ids.append(it.data(Qt.UserRole))
+        ids[r], ids[target] = ids[target], ids[r]
+        self.repo.reorder_fields(ids)
+        self._reload_fields_table()
+        self.tbl_fields.setCurrentCell(target, 0)
+        self.fields_changed.emit()
+
+    def _field_delete(self) -> None:
+        fid = self._current_field_id()
+        if fid is None:
+            return
+        f = self.repo.get_field(fid)
+        if not f:
+            return
+        if f.is_required:
+            QMessageBox.information(self, "提示", f"『{f.name}』字段不可删除。")
+            return
+
+        # 统计影响项目数（系统字段读 projects 列，用户字段读 project_field_values）
+        cnt = self.repo.count_field_filled(f)
+
+        dlg = _DeleteFieldChoiceDialog(f.name, cnt, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        try:
+            self.repo.delete_field(fid, append_to_description=dlg.append_to_desc)
+        except Exception as e:
+            QMessageBox.warning(self, "失败", str(e))
+            return
+        self._reload_fields_table()
+        self.fields_changed.emit()
+
+    # =================================================================
+    # API（LLM）
+    # =================================================================
+    def _build_api_page(self) -> QWidget:
+        from ..llm import load_config, save_config
+        from ..llm.config import PROVIDER_DEFAULTS, PROVIDER_IDS
+
+        self._llm_save_config = save_config
+        self._llm_cfg = load_config(self.repo)
+
+        w = QWidget()
+        outer = QVBoxLayout(w)
+        outer.setContentsMargins(20, 18, 20, 18)
+        outer.setSpacing(10)
+
+        title = QLabel("API（大模型）")
+        title.setProperty("h1", True)
+        outer.addWidget(title)
+
+        tip = QLabel("配置 API Key 后，即可在项目元数据编辑或右键菜单中调用 LLM 生成字段建议。")
+        tip.setProperty("hint", True)
+        tip.setWordWrap(True)
+        outer.addWidget(tip)
+
+        # 全局：默认平台 / 默认语言
+        gb_global = QGroupBox("全局")
+        gf = QFormLayout(gb_global)
+        self.cmb_default_provider = QComboBox()
+        for pid in PROVIDER_IDS:
+            self.cmb_default_provider.addItem(PROVIDER_DEFAULTS[pid]["label"], pid)
+        idx = self.cmb_default_provider.findData(self._llm_cfg.default_provider)
+        self.cmb_default_provider.setCurrentIndex(max(0, idx))
+        self.cmb_default_provider.currentIndexChanged.connect(self._on_default_provider)
+        gf.addRow("默认启用平台：", self.cmb_default_provider)
+
+        self.cmb_default_lang = QComboBox()
+        for lang in ("中文", "English"):
+            self.cmb_default_lang.addItem(lang, lang)
+        idx2 = self.cmb_default_lang.findData(self._llm_cfg.default_language)
+        self.cmb_default_lang.setCurrentIndex(max(0, idx2))
+        self.cmb_default_lang.currentIndexChanged.connect(self._on_default_language)
+        gf.addRow("默认语言：", self.cmb_default_lang)
+        outer.addWidget(gb_global)
+
+        # 各平台分组（可滚动）
+        from PySide6.QtWidgets import QScrollArea
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        host = QWidget()
+        host_l = QVBoxLayout(host)
+        host_l.setSpacing(8)
+        host_l.setContentsMargins(0, 0, 0, 0)
+
+        self._provider_widgets: dict[str, dict] = {}
+        for pid in PROVIDER_IDS:
+            host_l.addWidget(self._build_provider_box(pid))
+        host_l.addStretch(1)
+        scroll.setWidget(host)
+        outer.addWidget(scroll, 1)
+
+        return w
+
+    def _build_provider_box(self, pid: str) -> QWidget:
+        from ..llm.config import PROVIDER_DEFAULTS
+        defaults = PROVIDER_DEFAULTS[pid]
+        pcfg = self._llm_cfg.providers[pid]
+
+        gb = QGroupBox(defaults["label"])
+        gf = QFormLayout(gb)
+
+        ed_url = QLineEdit(pcfg.base_url)
+        ed_url.setPlaceholderText(defaults["base_url"])
+        ed_url.editingFinished.connect(lambda pid=pid, e=ed_url: self._update_provider(pid, "base_url", e.text()))
+        gf.addRow("Base URL：", ed_url)
+
+        ed_key = QLineEdit(pcfg.api_key)
+        ed_key.setEchoMode(QLineEdit.Password)
+        ed_key.setPlaceholderText("sk-...")
+        ed_key.editingFinished.connect(lambda pid=pid, e=ed_key: self._update_provider(pid, "api_key", e.text()))
+        # 显示/隐藏切换
+        from PySide6.QtWidgets import QToolButton
+        b_eye = QToolButton()
+        b_eye.setText("👁")
+        b_eye.setCheckable(True)
+        b_eye.toggled.connect(lambda on, e=ed_key: e.setEchoMode(QLineEdit.Normal if on else QLineEdit.Password))
+        key_row = QHBoxLayout()
+        key_row.addWidget(ed_key, 1); key_row.addWidget(b_eye)
+        key_wrap = QWidget(); key_wrap.setLayout(key_row)
+        gf.addRow("API Key：", key_wrap)
+
+        ed_model = QLineEdit(pcfg.model)
+        ed_model.setPlaceholderText(defaults["model"])
+        ed_model.editingFinished.connect(lambda pid=pid, e=ed_model: self._update_provider(pid, "model", e.text()))
+        gf.addRow("模型：", ed_model)
+
+        # 测试按钮
+        b_test = QPushButton("🔌 测试连接")
+        lbl_status = QLabel("")
+        lbl_status.setProperty("hint", True)
+        b_test.clicked.connect(
+            lambda _checked=False, pid=pid, lbl=lbl_status: self._test_provider(pid, lbl)
+        )
+        test_row = QHBoxLayout()
+        test_row.addWidget(b_test); test_row.addWidget(lbl_status, 1)
+        test_wrap = QWidget(); test_wrap.setLayout(test_row)
+        gf.addRow("", test_wrap)
+
+        if not defaults.get("supports_image"):
+            note = QLabel("⚠ 此平台不支持图像输入；选中的图片文件将被跳过。")
+            note.setProperty("hint", True)
+            gf.addRow("", note)
+
+        self._provider_widgets[pid] = {
+            "url": ed_url, "key": ed_key, "model": ed_model, "status": lbl_status,
+        }
+        return gb
+
+    def _on_default_provider(self, _i: int) -> None:
+        self._llm_cfg.default_provider = self.cmb_default_provider.currentData() or "deepseek"
+        self._llm_save_config(self.repo, self._llm_cfg)
+
+    def _on_default_language(self, _i: int) -> None:
+        self._llm_cfg.default_language = self.cmb_default_lang.currentData() or "中文"
+        self._llm_save_config(self.repo, self._llm_cfg)
+
+    def _update_provider(self, pid: str, key: str, value: str) -> None:
+        pc = self._llm_cfg.providers.get(pid)
+        if pc is None:
+            return
+        setattr(pc, key, (value or "").strip())
+        self._llm_save_config(self.repo, self._llm_cfg)
+
+    def _test_provider(self, pid: str, lbl: QLabel) -> None:
+        from ..llm.config import PROVIDER_DEFAULTS, ProviderConfig
+
+        # 点测试时，实时从输入框读最新值（用户可能还没失焦保存）
+        widgets = self._provider_widgets.get(pid) or {}
+        ed_url = widgets.get("url")
+        ed_key = widgets.get("key")
+        ed_model = widgets.get("model")
+
+        defaults = PROVIDER_DEFAULTS.get(pid)
+        if defaults is None:
+            lbl.setText(f"❌ 未知平台：{pid!r}")
+            return
+
+        url = (ed_url.text() if ed_url else "").strip() or defaults["base_url"]
+        key = (ed_key.text() if ed_key else "").strip()
+        model = (ed_model.text() if ed_model else "").strip() or defaults["model"]
+
+        if not key:
+            lbl.setText("⚠ 未填写 API Key")
+            return
+
+        # 同步进缓存配置 + 持久化（避免用户接着用却忘了失焦保存）
+        pc = self._llm_cfg.providers.get(pid)
+        if pc is None:
+            pc = ProviderConfig(id=pid)
+            self._llm_cfg.providers[pid] = pc
+        pc.id = pid
+        pc.base_url = url
+        pc.api_key = key
+        pc.model = model
+        self._llm_save_config(self.repo, self._llm_cfg)
+
+        lbl.setText("测试中…")
+        lbl.repaint()
+        # 放到子线程里跑，避免阻塞 UI（HTTP 调用可能 1~8 秒）
+        self._run_ping_async(pc, lbl)
+
+    def _run_ping_async(self, pc, lbl: QLabel) -> None:
+        from PySide6.QtCore import QObject, QThread, Signal
+
+        from ..llm import get_provider
+
+        class _Worker(QObject):
+            done = Signal(bool, str)
+
+            def __init__(self, pcfg):
+                super().__init__()
+                self.pcfg = pcfg
+
+            def run(self):
+                try:
+                    ok, msg = get_provider(self.pcfg).ping()
+                except Exception as e:
+                    ok, msg = False, f"{type(e).__name__}: {e}"
+                self.done.emit(ok, msg)
+
+        thread = QThread(self)
+        worker = _Worker(pc)
+        worker.moveToThread(thread)
+        thread.started.connect(worker.run)
+
+        def _on_done(ok: bool, msg: str) -> None:
+            try:
+                lbl.setText(("✅ " if ok else "❌ ") + msg)
+            except RuntimeError:
+                pass  # label 可能已随对话框销毁
+            thread.quit()
+
+        worker.done.connect(_on_done)
+        thread.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        # 防止 worker/thread 被 GC
+        if not hasattr(self, "_ping_threads"):
+            self._ping_threads: list = []
+        self._ping_threads.append((thread, worker))
+        thread.start()
+
+    # =================================================================
+    # 关于
+    # =================================================================
+    def _build_about_page(self) -> QWidget:
+        from PySide6.QtGui import QPixmap
+        from ..utils import app_icon_path
+
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(10)
+
+        title = QLabel("关于")
+        title.setProperty("h1", True)
+        lay.addWidget(title)
+
+        # 顶部品牌区：图标 + 应用名 + 版本 + 副标题
+        brand = QHBoxLayout()
+        brand.setSpacing(14)
+
+        icon_lbl = QLabel()
+        icon_lbl.setFixedSize(96, 96)
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        ip = app_icon_path()
+        if ip is not None:
+            pix = QPixmap(str(ip))
+            if not pix.isNull():
+                icon_lbl.setPixmap(
+                    pix.scaled(
+                        96, 96,
+                        Qt.KeepAspectRatio,
+                        Qt.SmoothTransformation,
+                    )
+                )
+        brand.addWidget(icon_lbl)
+
+        text_col = QVBoxLayout()
+        text_col.setSpacing(2)
+        name_lbl = QLabel("<b style='font-size:18pt;'>LLM Cabinet</b>")
+        name_lbl.setTextFormat(Qt.RichText)
+        text_col.addWidget(name_lbl)
+        ver_lbl = QLabel(
+            f"应用版本 v{__version__}　·　数据库 schema v{SCHEMA_VERSION}"
+        )
+        ver_lbl.setProperty("muted", True)
+        ver_lbl.setToolTip(
+            "应用版本（__version__）和数据库 schema 版本独立递增。\n"
+            "升级新版应用打开旧 db 时，会自动备份并应用迁移脚本。"
+        )
+        text_col.addWidget(ver_lbl)
+        text_col.addSpacing(4)
+        sub_lbl = QLabel("带 AI 元数据助手的轻量级项目化文件管理器")
+        sub_lbl.setWordWrap(True)
+        text_col.addWidget(sub_lbl)
+        text_col.addStretch(1)
+        brand.addLayout(text_col, 1)
+
+        brand_wrap = QWidget()
+        brand_wrap.setLayout(brand)
+        lay.addWidget(brand_wrap)
+
+        # 数据隐私
+        lay.addSpacing(18)
+        privacy_row = QHBoxLayout()
+        privacy_lbl = QLabel("数据隐私：")
+        privacy_lbl.setFixedWidth(110)
+        privacy_lbl.setProperty("muted", True)
+        privacy_btn = QPushButton("📄 查看《数据隐私声明》")
+        privacy_btn.setProperty("flat", True)
+        privacy_btn.clicked.connect(self._open_privacy_doc)
+        privacy_row.addWidget(privacy_lbl)
+        privacy_row.addWidget(privacy_btn)
+        privacy_row.addStretch(1)
+        lay.addLayout(privacy_row)
+
+        # License
+        lic_row = QHBoxLayout()
+        lic_lbl = QLabel("许可证：")
+        lic_lbl.setFixedWidth(110)
+        lic_lbl.setProperty("muted", True)
+        lic_text = QLabel("MIT License")
+        lic_row.addWidget(lic_lbl)
+        lic_row.addWidget(lic_text)
+        lic_row.addStretch(1)
+        lay.addLayout(lic_row)
+
+        # 项目主页（GitHub）
+        gh_row = QHBoxLayout()
+        gh_lbl = QLabel("项目主页：")
+        gh_lbl.setFixedWidth(110)
+        gh_lbl.setProperty("muted", True)
+        gh_link = QLabel(
+            f"<a href='{HOMEPAGE_URL}'>{HOMEPAGE_URL}</a>"
+        )
+        gh_link.setTextFormat(Qt.RichText)
+        gh_link.setOpenExternalLinks(True)
+        gh_link.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        gh_link.setToolTip("在浏览器中打开 GitHub 仓库")
+        gh_row.addWidget(gh_lbl)
+        gh_row.addWidget(gh_link)
+        gh_row.addStretch(1)
+        lay.addLayout(gh_row)
+
+        lay.addStretch(1)
+        return w
+
+    def _open_privacy_doc(self) -> None:
+        """打开 PRIVACY 文件。UI 是中文，优先打开中文版；找不到再退回英文版。"""
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+        # 源码运行模式：仓库根目录下；打包后：可执行文件目录 / _MEIPASS
+        import sys as _sys
+        roots: list[Path] = [Path(__file__).resolve().parents[2], Path.cwd()]
+        meipass = getattr(_sys, "_MEIPASS", None)
+        if meipass:
+            roots.append(Path(meipass))
+        if getattr(_sys, "frozen", False):
+            roots.append(Path(_sys.executable).parent)
+        names = ("PRIVACY.zh-CN.md", "PRIVACY.md")
+        for root in roots:
+            for n in names:
+                p = root / n
+                if p.is_file():
+                    QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
+                    return
+        # 兜底：弹一个对话框直接展示在线版/本地缺失提示
+        QMessageBox.information(
+            self, "数据隐私声明",
+            "未找到本地 PRIVACY 文件。请到项目仓库根目录查看。",
+        )
+
+
+class _DeleteFieldChoiceDialog(QDialog):
+    """删除字段时让用户选择如何处理已有项目的值。"""
+
+    def __init__(self, field_name: str, project_count: int, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("删除字段")
+        self.setMinimumWidth(440)
+        self.append_to_desc = False
+
+        v = QVBoxLayout(self)
+        v.setSpacing(10)
+
+        lbl = QLabel(
+            f"即将删除字段 「<b>{field_name}</b>」。<br>"
+            f"当前有 <b>{project_count}</b> 个项目填写了该字段的值。"
+            f"<br><br>请选择如何处理已有数据："
+        )
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setWordWrap(True)
+        v.addWidget(lbl)
+
+        self.rb_drop = QRadioButton("直接删除该字段及其所有相关数据")
+        self.rb_append = QRadioButton(
+            "保留数据：把每个项目的该字段值追加到 描述（description）末尾，再删除字段"
+        )
+        self.rb_drop.setChecked(True)
+
+        grp = QButtonGroup(self)
+        grp.addButton(self.rb_drop)
+        grp.addButton(self.rb_append)
+
+        v.addWidget(self.rb_drop)
+        v.addWidget(self.rb_append)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _on_ok(self) -> None:
+        self.append_to_desc = self.rb_append.isChecked()
+        self.accept()
+
+
+class _AddFieldDialog(QDialog):
+    """添加新字段：字段名 + 类型。"""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from ..models import FIELD_TYPES, FIELD_TYPE_LABELS
+
+        self.setWindowTitle("新建字段")
+        self.setMinimumWidth(360)
+
+        self.name = ""
+        self.type = "text"
+
+        form = QFormLayout()
+        self.ed_name = QLineEdit()
+        self.ed_name.setPlaceholderText("例如：译者、ISBN")
+        form.addRow("字段名：", self.ed_name)
+
+        self.cmb_type = QComboBox()
+        for t in FIELD_TYPES:
+            self.cmb_type.addItem(FIELD_TYPE_LABELS.get(t, t), t)
+        form.addRow("类型：", self.cmb_type)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self.reject)
+
+        lay = QVBoxLayout(self)
+        lay.addLayout(form)
+        lay.addWidget(bb)
+
+    def _on_ok(self) -> None:
+        name = self.ed_name.text().strip()
+        if not name:
+            QMessageBox.warning(self, "提示", "字段名不能为空")
+            return
+        self.name = name
+        self.type = self.cmb_type.currentData() or "text"
+        self.accept()
+
