@@ -138,6 +138,8 @@ app/
     └── widgets.py
 ```
 
+> 开发期端到端自检脚本见 [`selftests/`](./selftests/README.md)（手动跑，不进 CI）。
+
 ## 常见问题
 
 ### 首次运行时任务栏图标显示异常

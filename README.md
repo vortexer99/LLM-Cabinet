@@ -142,6 +142,8 @@ app/
     └── widgets.py
 ```
 
+> Developer end-to-end self-check scripts live in [`selftests/`](./selftests/README.md) (run manually, not in CI).
+
 ## FAQ
 
 ### Taskbar icon looks wrong on first launch

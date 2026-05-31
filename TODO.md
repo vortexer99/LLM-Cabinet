@@ -50,7 +50,7 @@
 -
 
 ## 📦 打包 / 发布 / 文档
-
+[#12 · 🚧] 端到端自检体系：每个 task 完工时配套 `selftests/taskNN_*.py`，沉淀公用工具到 `_common.py`
 -
 
 ## 🐛 Bug / 已知问题
@@ -93,6 +93,7 @@
 | [03](./tasks/03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔） | M | **P0** | 待做 |
 | [10](./tasks/10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
 | [11](./tasks/11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导 | M | P1/P2 | 待做 |
+| [12](./tasks/12-selftest-infrastructure.md) | 端到端自检体系（基础设施，并行增量） | M | P1 | 🚧 进行中 |
 | [05](./tasks/05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | T6 弃用 · T7 部分被 #09/#10 覆盖 |
 | [04](./tasks/04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
 | [02](./tasks/02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
