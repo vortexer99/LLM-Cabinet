@@ -514,15 +514,22 @@ def build_messages(
     # ---- 字段定义说明：分两组（tags 类型给一句额外说明）
     # 字段级 prompt 提示（task #11 T1）：每个字段的 prompt_hint 会追加到该字段的描述行后；
     # 单条 hint 截断到 PROMPT_HINT_MAX_CHARS 字符避免上下文爆炸
+    # tags 字段的 hint 通常是「分类策略」（库字段设计助手生成），不是字面要求 —
+    # 单独换一个标签让 LLM 不会照抄整段散文式描述当成标签值。
     def _line(f: Field) -> str:
         s = f"- **{f.name}** (类型: {f.type})"
         if f.type == "tags":
-            s += "  — 多值字段，请返回 JSON 数组，例如 [\"科幻\", \"翻译\"]"
+            s += (
+                "  — 多值字段，请返回 JSON 数组，"
+                "优先用 `维度/标签` 层级形式，例如 [\"领域/科幻\", \"类型/论文\"]"
+            )
         hint = (f.prompt_hint or "").strip()
         if hint:
             if len(hint) > PROMPT_HINT_MAX_CHARS:
                 hint = hint[:PROMPT_HINT_MAX_CHARS] + "…"
-            s += f"\n  · 格式要求：{hint}"
+            # tags 字段的 hint 是分类策略：换一个 label 避免 LLM 当成字面值
+            label = "分类策略（风格指南）" if f.type == "tags" else "格式要求"
+            s += f"\n  · {label}：{hint}"
         return s
     target_lines = [_line(f) for f in target_fields]
     context_only_lines = [_line(f) for f in context_fields if not _is_target(f)]

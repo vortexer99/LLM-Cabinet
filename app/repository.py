@@ -308,6 +308,118 @@ class Repository:
             self.conn.rollback()
             raise
 
+    def apply_field_plan_batch(
+        self,
+        creates: list[tuple[str, str, str]],
+        updates_hint: list[tuple[int, str]],
+        deletes: list[int],
+        *,
+        append_for_fids: Optional[Iterable[int]] = None,
+    ) -> tuple[list[int], int]:
+        """库字段设计助手「应用」一次性事务（task #11 T3 全量规划）。
+
+        三类操作放进同一个 BEGIN/COMMIT：
+          - creates：新建用户字段（同 ``add_fields_batch``）
+          - updates_hint：仅更新 prompt_hint
+          - deletes：删除字段（系统字段会清空对应 projects 列；用户字段
+            走 ``project_field_values`` 的 CASCADE）
+
+        删除保护：
+          - 受保护字段（``is_required``，即 标题/描述/标签）拒绝删除，整体抛 ValueError
+          - 不存在的 fid 静默跳过
+
+        Args:
+            creates: ``[(name, type, prompt_hint), ...]``
+            updates_hint: ``[(field_id, prompt_hint), ...]``
+            deletes: ``[field_id, ...]``
+            append_for_fids: ``deletes`` 中需要"先把每个项目的字段值追加到
+                description 末尾"的 fid 集合（与 ``Repository.delete_field``
+                的 ``append_to_description=True`` 语义一致）；其它待删字段
+                走"直接丢"路径。默认 None = 全部直接丢。
+
+        Returns:
+            ``(new_ids, n_deleted)``。任一失败 → ROLLBACK 抛原异常。
+        """
+        append_set: set[int] = set(append_for_fids or ())
+        cur = self.conn.cursor()
+        try:
+            cur.execute("BEGIN")
+
+            # 1) creates
+            new_ids: list[int] = []
+            if creates:
+                row = cur.execute(
+                    "SELECT COALESCE(MAX(ord), -1) AS m FROM fields"
+                ).fetchone()
+                max_ord = row["m"] if row else -1
+                for i, (name, ftype, hint) in enumerate(creates):
+                    name = (name or "").strip()
+                    if not name:
+                        raise ValueError("字段名不能为空")
+                    cur.execute(
+                        "INSERT INTO fields(name, type, ord, visible, key, "
+                        "prompt_hint) VALUES(?, ?, ?, 1, NULL, ?)",
+                        (name, ftype, max_ord + 1 + i, hint or ""),
+                    )
+                    new_ids.append(cur.lastrowid)
+
+            # 2) updates_hint
+            for fid, hint in updates_hint:
+                cur.execute(
+                    "UPDATE fields SET prompt_hint=? WHERE id=?",
+                    (hint or "", fid),
+                )
+
+            # 3) deletes
+            n_deleted = 0
+            for fid in deletes:
+                f = self.get_field(fid)
+                if f is None:
+                    continue
+                # 受保护字段拒绝删除
+                from .models import PROTECTED_FIELD_KEYS
+                if f.key in PROTECTED_FIELD_KEYS:
+                    raise ValueError(
+                        f"『{f.name}』是受保护字段，不可删除"
+                    )
+                # 选择了"追加到 description"：先把每条非空值拼到对应 project
+                # 的 description_md 末尾；与 delete_field(append_to_description=True)
+                # 的格式保持一致（"\n\n**字段名**：值"）
+                if fid in append_set:
+                    rows = self._collect_field_values_for_all_projects(f)
+                    for project_id, value in rows:
+                        if not value:
+                            continue
+                        desc_row = cur.execute(
+                            "SELECT description_md FROM projects WHERE id=?",
+                            (project_id,),
+                        ).fetchone()
+                        desc = (
+                            (desc_row["description_md"] or "")
+                            if desc_row else ""
+                        )
+                        appendix = f"\n\n**{f.name}**：{value}"
+                        new_desc = (desc.rstrip() + appendix).lstrip("\n")
+                        cur.execute(
+                            "UPDATE projects SET description_md=?, "
+                            "updated_at=datetime('now') WHERE id=?",
+                            (new_desc, project_id),
+                        )
+                # 系统非必有字段（作者/日期/评分/来源）：清空 projects 对应列
+                if f.key in self.SYSTEM_FIELD_COLUMNS:
+                    col = self.SYSTEM_FIELD_COLUMNS[f.key]
+                    default = 0 if f.key == "rating" else ""
+                    cur.execute(f"UPDATE projects SET {col}=?", (default,))
+                # 用户字段：CASCADE 会清 project_field_values
+                cur.execute("DELETE FROM fields WHERE id=?", (fid,))
+                n_deleted += 1
+
+            self.conn.commit()
+            return new_ids, n_deleted
+        except Exception:
+            self.conn.rollback()
+            raise
+
     def set_field_prompt_hint(self, fid: int, prompt_hint: str) -> None:
         self.conn.execute(
             "UPDATE fields SET prompt_hint=? WHERE id=?",

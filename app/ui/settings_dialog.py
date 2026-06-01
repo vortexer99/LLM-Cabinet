@@ -123,14 +123,14 @@ class SettingsDialog(QDialog):
         title.setProperty("h1", True)
         lay.addWidget(title)
 
-        # 向导入口（task #11 T3 决策 1：辅助入口）
+        # LLM 助手入口（task #11 T3 决策 1：辅助入口；内部代码沿用 wizard 命名）
         wiz_row = QHBoxLayout()
         wiz_lbl = QLabel(
-            "🪄 通过向导让 LLM 帮你规划字段结构、整理库等。"
+            "🪄 通过 LLM 助手让 AI 帮你规划字段结构、整理库等。"
         )
         wiz_lbl.setWordWrap(True)
         wiz_row.addWidget(wiz_lbl, 1)
-        btn_wiz = QPushButton("打开向导...")
+        btn_wiz = QPushButton("打开 LLM 助手...")
         btn_wiz.clicked.connect(self._open_wizards)
         wiz_row.addWidget(btn_wiz)
         lay.addLayout(wiz_row)
@@ -150,8 +150,8 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(gb)
 
-        # 向导（task #11 T3 决策 2b：轮数上限）
-        gb_wiz = QGroupBox("向导")
+        # LLM 助手设置（task #11 T3 决策 2b：轮数上限）
+        gb_wiz = QGroupBox("LLM 助手")
         form_wiz = QFormLayout(gb_wiz)
         form_wiz.setLabelAlignment(Qt.AlignLeft)
         from .wizards.library_init import (
@@ -179,10 +179,10 @@ class SettingsDialog(QDialog):
         self._wiz_set_max_rounds(self.repo, v)
 
     def _open_wizards(self) -> None:
-        """从设置 → 通用 打开向导列表对话框。"""
+        """从设置 → 通用 打开 LLM 助手列表对话框。"""
         from .wizard_list_dialog import WizardListDialog
-        # library 不在 SettingsDialog 上下文里，向导可能不需要它，传 None 即可（
-        # 当前唯一一个向导 LibraryInitWizard 不使用 library，仅用 repo）。
+        # library 不在 SettingsDialog 上下文里，助手可能不需要它，传 None 即可
+        # （当前唯一一个助手 LibraryInitWizard 不使用 library，仅用 repo）。
         dlg = WizardListDialog(self.repo, library=None, parent=self)
         dlg.exec()
         if dlg.any_applied():

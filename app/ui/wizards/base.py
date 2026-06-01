@@ -1,8 +1,11 @@
-"""向导插件基类与元数据（task #11 T3）。
+"""LLM 助手插件基类与元数据（task #11 T3）。
 
-所有向导都是 ``QDialog`` 子类，由 ``WizardListDialog`` 统一启动。
+所有助手都是 ``QDialog`` 子类，由 ``WizardListDialog`` 统一启动。
 通过类属性 ``meta`` 暴露元信息（标题、分组、是否需要库为空等），
 基类只规定接口，不强制 UI 形态。
+
+历史背景：内部代码沿用 wizard / WizardPlugin 命名（最初任务卡叫"向导"），
+对外文案统一为"LLM 助手"——它们是同一物。
 """
 from __future__ import annotations
 
@@ -23,7 +26,7 @@ class WizardMeta:
 
 
 class WizardPlugin(QDialog):
-    """向导基类。子类至少要定义类属性 ``meta`` 并实现 ``run``。
+    """LLM 助手基类。子类至少要定义类属性 ``meta`` 并实现 ``run``。
 
     生命周期：``WizardListDialog`` 创建实例 → 调 ``run(repo, library)`` →
     返回是否实际应用了变更（True 表示主界面应该刷新）。
@@ -31,7 +34,7 @@ class WizardPlugin(QDialog):
 
     meta: WizardMeta = WizardMeta(
         id="_base",
-        title="（未命名向导）",
+        title="（未命名助手）",
         description="",
     )
 

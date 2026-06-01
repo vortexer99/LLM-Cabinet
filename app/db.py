@@ -142,12 +142,20 @@ CREATE TABLE IF NOT EXISTS project_settings (
 
 # 默认字段，按显示顺序
 # (name, type, key)
+#
+# TODO（设计决策待落地）：当前注释掉了 作者/日期/评分/来源 四项作为可选默认字段。
+#   新库默认只创建 标题 / 标签 / 描述 三个保护字段（标题、描述、标签是 _ensure_protected_fields
+#   兜底自愈的；其它都不再自动塞）。
+#   将来在「新建库」流程里弹对话框，让用户选择是否一并创建这 4 个常见字段。
+#   注意：projects 表里 author/date/source_url/rating 这四列仍然存在（系统字段值的存放后端），
+#   只是 fields 表里没有对应的暴露记录。用户可以通过「设置 → 字段」用相同名字重新加，
+#   或运行「LLM 助手 → 库字段设计助手」来按场景规划。
 DEFAULT_FIELDS = [
     ("标题",   "text",     "title"),
-    ("作者",   "text",     "author"),
-    ("日期",   "date",     "date"),
-    ("评分",   "rating",   "rating"),
-    ("来源",   "url",      "source_url"),
+    # ("作者",   "text",     "author"),
+    # ("日期",   "date",     "date"),
+    # ("评分",   "rating",   "rating"),
+    # ("来源",   "url",      "source_url"),
     ("标签",   "tags",     "tags"),
     ("描述",   "textarea", "description"),
 ]

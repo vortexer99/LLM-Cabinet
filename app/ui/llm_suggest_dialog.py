@@ -139,7 +139,26 @@ class LLMSuggestDialog(QDialog):
         for i, f in enumerate(fields):
             cb = QCheckBox(f.name)
             cb.setChecked(bool(f.suggest_enabled))
-            cb.setToolTip(f"类型：{f.type}" + ("  · 标题字段" if f.is_title else ""))
+            # tooltip：类型 + 标题/必有标记 + LLM 提示（用户在「设置 → 字段」配的格式说明）
+            tip_lines = [f"类型：{f.type}"]
+            if f.is_title:
+                tip_lines.append("· 标题字段")
+            elif f.is_required:
+                tip_lines.append("· 必有字段")
+            hint = (f.prompt_hint or "").strip()
+            tip_lines.append("")  # 空行
+            if hint:
+                tip_lines.append("LLM 提示（设置 → 字段 中维护）：")
+                tip_lines.append(hint)
+            else:
+                tip_lines.append(
+                    "LLM 提示：未设置 — 将仅按字段名/类型让模型自由发挥。"
+                )
+                tip_lines.append(
+                    "可在「设置 → 字段」里配置该字段的格式约束，或运行"
+                    "「工具 → LLM 助手 → 库字段设计助手」让 LLM 给出建议。"
+                )
+            cb.setToolTip("\n".join(tip_lines))
             grid.addWidget(cb, i // cols, i % cols)
             self._field_checks.append((cb, f))
         gv.addWidget(grid_host)

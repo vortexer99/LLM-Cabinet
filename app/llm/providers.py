@@ -35,7 +35,7 @@ class BaseProvider:
     id: str = ""
     # task #11 T3 决策 4：是否原生支持结构化 JSON 输出。
     # True → 调用 chat 时传 json_mode=True 走原生 API；
-    # False → 上层走"prompt 强约束 + 解析"路径（向导会在 sys prompt 里塞 schema 示例）。
+    # False → 上层走"prompt 强约束 + 解析"路径（LLM 助手会在 sys prompt 里塞 schema 示例）。
     # 子类按实际能力覆盖；未来加新 provider 时按 API 文档填。
     supports_json_mode: bool = True
 

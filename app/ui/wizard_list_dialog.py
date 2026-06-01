@@ -1,7 +1,11 @@
-"""向导列表对话框（task #11 T3）。
+"""LLM 助手列表对话框（task #11 T3）。
 
-主菜单「工具 → 🪄 向导...」入口，按 ``meta.category`` 分组列出 ``WIZARDS`` 注册表中
-所有向导，点击「启动」运行选中向导。前置条件不满足的向导会 disable 并附 tooltip。
+主菜单「工具 → 🪄 LLM 助手...」入口，按 ``meta.category`` 分组列出 ``WIZARDS``
+注册表中所有助手，点击「启动」运行选中助手。前置条件不满足的助手会 disable
+并附 tooltip。
+
+历史背景：内部代码沿用 wizard / WizardPlugin 命名（最初任务卡叫"向导"），
+对外文案统一为"LLM 助手"——它们是同一物。
 """
 from __future__ import annotations
 
@@ -24,13 +28,13 @@ from .wizards import WIZARDS
 
 
 class WizardListDialog(QDialog):
-    """按 category 分组展示所有可用向导。"""
+    """按 category 分组展示所有可用 LLM 助手（旧称"向导"）。"""
 
     def __init__(self, repo, library, parent=None):
         super().__init__(parent)
         self.repo = repo
         self.library = library
-        self.setWindowTitle("向导")
+        self.setWindowTitle("LLM 助手")
         self.resize(640, 540)
         self._any_applied = False
 
@@ -38,13 +42,13 @@ class WizardListDialog(QDialog):
         v.setContentsMargins(18, 14, 18, 14)
         v.setSpacing(10)
 
-        ttl = QLabel("🪄  向导")
+        ttl = QLabel("🪄  LLM 助手")
         f = QFont(); f.setPointSize(14); f.setBold(True)
         ttl.setFont(f)
         v.addWidget(ttl)
 
         v.addWidget(QLabel(
-            "按场景选择一个向导。每个向导都是引导式多步流程，"
+            "按场景选择一个助手。每个助手都是引导式多步流程，"
             "不会在最终「应用」前修改库。"
         ))
 
@@ -133,7 +137,7 @@ class WizardListDialog(QDialog):
             wiz = cls(self)
         except Exception as e:  # noqa: BLE001
             from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "向导加载失败", f"{type(e).__name__}: {e}")
+            QMessageBox.critical(self, "助手加载失败", f"{type(e).__name__}: {e}")
             return
         applied = wiz.run(self.repo, self.library)
         if applied:

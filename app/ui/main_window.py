@@ -200,9 +200,9 @@ class MainWindow(QMainWindow):
         act_imp.triggered.connect(lambda _checked=False: self._lib_import_api())
         m_lib.addAction(act_imp)
 
-        # 「工具」菜单（task #14 + task #11 T3）：库一致性检查 / 备份 / 恢复 / 向导
+        # 「工具」菜单（task #14 + task #11 T3）：库一致性检查 / 备份 / 恢复 / LLM 助手
         m_tools = bar.addMenu("工具(&T)")
-        act_wiz = QAction("🪄 向导...", self)
+        act_wiz = QAction("🪄 LLM 助手...", self)
         act_wiz.triggered.connect(lambda _c=False: self._tools_open_wizards())
         m_tools.addAction(act_wiz)
         m_tools.addSeparator()
@@ -364,10 +364,10 @@ class MainWindow(QMainWindow):
         self.close()
 
     def _lib_info(self) -> None:
-        """显示当前库信息 + label 可改。"""
+        """显示当前库信息 + label / 描述 可改。"""
         from PySide6.QtWidgets import (
             QDialog, QDialogButtonBox, QFormLayout, QLabel, QLineEdit,
-            QPushButton, QVBoxLayout,
+            QPlainTextEdit, QPushButton, QVBoxLayout,
         )
         from pathlib import Path as _Path
 
@@ -391,9 +391,13 @@ class MainWindow(QMainWindow):
         handle = self.cabinet_config.find(self.library_root) if self.cabinet_config else None
         label = handle.display_name if handle else _Path(self.library_root).name
 
+        # 库级描述（settings.library_description；首次为空，库字段设计助手会写入）
+        cur_desc = self.repo.get_setting("library_description", "") or ""
+
         dlg = QDialog(self)
         dlg.setWindowTitle("当前库信息")
-        dlg.setMinimumWidth(460)
+        dlg.setMinimumWidth(520)
+        dlg.resize(560, 460)
         v = QVBoxLayout(dlg)
         form = QFormLayout()
         form.setLabelAlignment(Qt.AlignRight)
@@ -405,6 +409,16 @@ class MainWindow(QMainWindow):
         form.addRow("数据库大小：", QLabel(_human_size(db_size)))
         form.addRow("library/ 大小：", QLabel(_human_size(lib_size)))
         v.addLayout(form)
+
+        # 库级描述（可编辑多行；提供给 LLM 助手作为额外上下文）
+        v.addWidget(QLabel("库描述（可选）："))
+        ed_desc = QPlainTextEdit(cur_desc)
+        ed_desc.setPlaceholderText(
+            "用一段话说明本库管理什么内容、有什么特别约定等。\n"
+            "「工具 → 🪄 LLM 助手 → 库字段设计助手」会读取并完善这段描述。"
+        )
+        ed_desc.setMinimumHeight(120)
+        v.addWidget(ed_desc)
 
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.button(QDialogButtonBox.Ok).setText("保存")
@@ -420,6 +434,9 @@ class MainWindow(QMainWindow):
             self.cabinet_config.save()
             # 标题栏与最近菜单刷新
             self.setWindowTitle(f"LLM Cabinet — {new_label}")
+        new_desc = ed_desc.toPlainText().strip()
+        if new_desc != cur_desc:
+            self.repo.set_setting("library_description", new_desc)
 
     def _lib_import_api(self) -> None:
         """从其它库的 db 中读 llm_config 等设置写入当前库。"""
@@ -582,11 +599,11 @@ class MainWindow(QMainWindow):
 
     # ============================================================ 工具菜单（task #14）
     def _tools_open_wizards(self) -> None:
-        """工具 → 🪄 向导...（task #11 T3）。"""
+        """工具 → 🪄 LLM 助手...（task #11 T3）。"""
         from .wizard_list_dialog import WizardListDialog
         dlg = WizardListDialog(self.repo, self.library, parent=self)
         dlg.exec()
-        # 任一向导实际写过库 → 刷新主界面（字段列变化会影响列表）
+        # 任一助手实际写过库 → 刷新主界面（字段列变化会影响列表）
         if dlg.any_applied():
             self.refresh_projects()
 
