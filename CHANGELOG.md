@@ -13,6 +13,13 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
 
 ### Added
+- **更多文档格式现场提取（task #07 T0 短期补丁）**：在 LLM 元数据建议中"参考文件"被勾选时，直接从结构化文档抽出可读正文，而不是只塞文件名给 LLM。**全部纯标准库实现，零新依赖**：
+  - **Office 三件套现代格式**：`.docx`（已有）/ `.xlsx`+`.xlsm`（已有）/ **新增** `.pptx`+`.pptm`（按幻灯片号排序，自动附该幻灯片的备注）
+  - **OpenDocument 三件套**：**新增** `.odt` / `.odp`（共享 `content.xml` + `<text:p>` 路径）/ `.ods`（按 `<table:table-row>` 拼成 `a | b | c` 行）
+  - **EPUB**：**新增** 走 OPF spine 顺序读各章节 xhtml + 用 stdlib 剥 HTML 标签，HTML 实体（`&hellip;`/`&mdash;`/`&nbsp;` 等）自动还原
+  - **HTML / RTF**：**新增** `.html`/`.htm`（剥 script/style/标签 + 折叠空白）、`.rtf`（处理 `\uN`/`\'XX` 转义、剥控制字与分组）；从 `PLAIN_TEXT_EXTS` 中移除避免标签噪声进入 prompt
+  - 仍未实现（保留"仅文件名"占位）：老 OLE 二进制 `.doc` / `.xls` / `.ppt`、`.mobi`
+- **LLM 元数据建议对话框新增「内容提取」列**（task #07 T0）：每个文件用 ✅ 文本提取 / 🖼 图像直传 / ⚠ 仅文件名 标识其是否能被提取内容；列底部提示"不可提取的文件勾选了也只能让 LLM 看到文件名"。新公开 API `app.llm.context.extraction_capability(path)` 与 `extraction_capability_label(path)` 给后续 UI / 自检共享使用。
 - **库管理增强（task #14）**：新增主菜单 **「工具」**：
   - **🔍 检查库一致性...**：扫描所有文件物理位置；失效项报告含项目/文件名/存储模式/原始路径，三档处理（仅查看 / 标记为缺失 / 从项目移除）。被标记的文件在文件表里显示 ⚠ 图标
   - **📦 备份此库...**：把整个库目录打成 zip（自动 WAL checkpoint、记忆上次备份目录）
@@ -53,7 +60,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   单个目录与含散文件的拖入行为不变。
 
 ### Fixed
--
+- `app/utils.py` 中 `human_size()` 重复定义了两次（前者支持 `int|float` 与浮点格式化，后者只 `int` 且会修改入参）。删除后者，仅保留前者。
 
 ### Deprecated
 -

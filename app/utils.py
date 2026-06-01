@@ -346,14 +346,6 @@ def reveal_in_explorer(path: str | Path) -> None:
         os.system(f'xdg-open "{p.parent}"')
 
 
-def human_size(n: int) -> str:
-    for unit in ("B", "KB", "MB", "GB", "TB"):
-        if n < 1024:
-            return f"{n:.1f} {unit}" if unit != "B" else f"{n} B"
-        n /= 1024
-    return f"{n:.1f} PB"
-
-
 def utc_to_local_str(s: str, fmt: str = "%Y-%m-%d %H:%M") -> str:
     """SQLite datetime('now') 给的是 'YYYY-MM-DD HH:MM:SS'（UTC，无时区）。
     转成本地时区的字符串。空串/解析失败时原样返回。

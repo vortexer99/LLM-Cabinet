@@ -69,6 +69,7 @@ with closing_repos(repo_a, repo_b):
 | 脚本 | 验证范围 | 关联 task |
 |---|---|---|
 | [task06_tags_hierarchy.py](./task06_tags_hierarchy.py) | `Repository.list_projects(tag, tag_prefix)` 的层级匹配语义 | [tasks/06](../tasks/06-tags-hierarchy-folding.md) |
+| [task07_extractors.py](./task07_extractors.py) | 现场内容提取（pptx / odt / odp / ods / epub / html / rtf）+ `extraction_capability` 路由表 | [tasks/07](../tasks/07-local-embedding-summary.md) T0 |
 | [task08_multi_libraries.py](./task08_multi_libraries.py) | `app.cabinet` 模块：CabinetConfig 持久化、touch/remove/rename、默认库永驻、损坏 json 重建、库目录探测、import_settings_from_other_db | [tasks/08](../tasks/08-multiple-libraries-switch.md) |
 | [task10_folder_import.py](./task10_folder_import.py) | `app.exporter` ↔ `app.importer` 闭环；schema 兼容；三档字段策略；文件还原 | [tasks/10](../tasks/10-folder-batch-import.md) |
 | [task11_field_prompt.py](./task11_field_prompt.py) | 字段级 prompt_hint 数据层与 prompt 拼装；`add_fields_batch` 事务；导出 @2 / 导入兼容 | [tasks/11](../tasks/11-field-prompt-and-library-wizard.md) T1/T2/T4 |

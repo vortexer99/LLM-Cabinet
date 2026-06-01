@@ -146,8 +146,8 @@ class LLMSuggestDialog(QDialog):
         v.addWidget(gb_fields)
 
         # ===== 文件列表 =====
-        self.tbl = QTableWidget(len(files), 3)
-        self.tbl.setHorizontalHeaderLabels(["", "文件", "说明"])
+        self.tbl = QTableWidget(len(files), 4)
+        self.tbl.setHorizontalHeaderLabels(["", "文件", "内容提取", "说明"])
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setShowGrid(False)
         self.tbl.setTextElideMode(Qt.ElideNone)
@@ -161,15 +161,27 @@ class LLMSuggestDialog(QDialog):
         h.setSectionResizeMode(0, QHeaderView.Fixed)
         self.tbl.setColumnWidth(0, 40)
         h.setSectionResizeMode(1, QHeaderView.Stretch)
-        h.setSectionResizeMode(2, QHeaderView.Stretch)
+        h.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.Stretch)
         self.tbl.verticalHeader().setDefaultSectionSize(28)
 
         kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
                       "code": "💻", "other": "📦"}
+        from ..llm.context import (
+            EXTRACTION_FILENAME, extraction_capability_label,
+        )
         self._checks: list[tuple[QCheckBox, FileItem]] = []
         for r, f in enumerate(files):
+            cap_label, cap_code, cap_tip = extraction_capability_label(f.path)
             cb = QCheckBox()
             cb.setChecked(False)  # 默认全不选；由用户主动挑参考文件
+            if cap_code == EXTRACTION_FILENAME:
+                # 仅文件名能给出 → 勾选意义不大；保留可勾（用户也许想强行让 LLM
+                # 看到这个文件的存在），但默认提示一下
+                cb.setToolTip(
+                    "此文件类型暂不支持内容提取；勾选后 LLM 收到的"
+                    "依然只是文件名，不会看到内容。"
+                )
             holder = self._wrap_center(cb)
             self.tbl.setCellWidget(r, 0, holder)
 
@@ -178,9 +190,14 @@ class LLMSuggestDialog(QDialog):
             it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
             self.tbl.setItem(r, 1, it_name)
 
+            it_cap = QTableWidgetItem(cap_label)
+            it_cap.setFlags(it_cap.flags() & ~Qt.ItemIsEditable)
+            it_cap.setToolTip(cap_tip)
+            self.tbl.setItem(r, 2, it_cap)
+
             it_label = QTableWidgetItem(f.label or "")
             it_label.setFlags(it_label.flags() & ~Qt.ItemIsEditable)
-            self.tbl.setItem(r, 2, it_label)
+            self.tbl.setItem(r, 3, it_label)
             self._checks.append((cb, f))
 
         files_row = QHBoxLayout()
@@ -198,7 +215,9 @@ class LLMSuggestDialog(QDialog):
         # 隐私提示：明确"内容 vs 文件名"的发送范围
         privacy_hint = QLabel(
             "ℹ️ 仅勾选项的<b>文件内容</b>会发送给 LLM；但<b>所有文件的文件名</b>"
-            "都会作为项目结构上下文发送（无论是否勾选）。"
+            "都会作为项目结构上下文发送（无论是否勾选）。<br>"
+            "「内容提取」列展示该文件能否被解析：✅ 走专用解析器抽正文 / "
+            "🖼 直接传图 / ⚠ 仅文件名 — 不可提取的文件勾选了也只能让 LLM 看到文件名。"
         )
         privacy_hint.setTextFormat(Qt.RichText)
         privacy_hint.setWordWrap(True)
