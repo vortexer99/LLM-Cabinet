@@ -1,7 +1,7 @@
 """task #14 自检：库一致性检查 + 备份/恢复。
 
 T1 验证：
-  - schema v3 → v4 ：files 表新增 missing 列
+  - schema v2 → v3 ：files 表新增 missing 列
   - run_consistency_check 正确识别失效文件（仓储 + 链接两类）
   - apply_consistency_action 三档行为（noop / mark / delete）
   - clear_all_missing_flags 重置标记
@@ -51,9 +51,9 @@ def main() -> int:
 
 def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     # ----------------------------------------------------------------
-    # 阶段 1：schema v4 + missing 列
+    # 阶段 1：schema v3 + missing 列
     # ----------------------------------------------------------------
-    t.assert_eq("SCHEMA_VERSION = 4", SCHEMA_VERSION, 4)
+    t.assert_eq("SCHEMA_VERSION = 3", SCHEMA_VERSION, 3)
 
     db_a = tmp / "a.db"
     repo_a = Repository(connect(db_a))

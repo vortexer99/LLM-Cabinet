@@ -8,8 +8,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
-📦 schema v2 → v3 — `fields` 表新增 `prompt_hint` 列（task #11 T1）；
-📦 schema v3 → v4 — `files` 表新增 `missing` 列（task #14 T1 库一致性检查）；
+📦 schema v2 → v3 — 一次合并迁移：`fields` 表新增 `prompt_hint` 列（task #11 T1）、
+`files` 表新增 `missing` 列（task #14 T1 库一致性检查）；
 打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
 
 ### Added
