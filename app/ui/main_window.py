@@ -200,8 +200,12 @@ class MainWindow(QMainWindow):
         act_imp.triggered.connect(lambda _checked=False: self._lib_import_api())
         m_lib.addAction(act_imp)
 
-        # 「工具」菜单（task #14）：库一致性检查 / 备份 / 恢复
+        # 「工具」菜单（task #14 + task #11 T3）：库一致性检查 / 备份 / 恢复 / 向导
         m_tools = bar.addMenu("工具(&T)")
+        act_wiz = QAction("🪄 向导...", self)
+        act_wiz.triggered.connect(lambda _c=False: self._tools_open_wizards())
+        m_tools.addAction(act_wiz)
+        m_tools.addSeparator()
         act_check = QAction("🔍 检查库一致性...", self)
         act_check.triggered.connect(lambda _c=False: self._tools_check_consistency())
         m_tools.addAction(act_check)
@@ -577,6 +581,15 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     # ============================================================ 工具菜单（task #14）
+    def _tools_open_wizards(self) -> None:
+        """工具 → 🪄 向导...（task #11 T3）。"""
+        from .wizard_list_dialog import WizardListDialog
+        dlg = WizardListDialog(self.repo, self.library, parent=self)
+        dlg.exec()
+        # 任一向导实际写过库 → 刷新主界面（字段列变化会影响列表）
+        if dlg.any_applied():
+            self.refresh_projects()
+
     def _tools_check_consistency(self) -> None:
         """库一致性检查（task #14 T1）。"""
         from PySide6.QtCore import Qt as _Qt

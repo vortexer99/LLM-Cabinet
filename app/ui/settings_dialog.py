@@ -32,6 +32,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QRadioButton,
     QSizePolicy,
+    QSpinBox,
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
@@ -122,6 +123,18 @@ class SettingsDialog(QDialog):
         title.setProperty("h1", True)
         lay.addWidget(title)
 
+        # 向导入口（task #11 T3 决策 1：辅助入口）
+        wiz_row = QHBoxLayout()
+        wiz_lbl = QLabel(
+            "🪄 通过向导让 LLM 帮你规划字段结构、整理库等。"
+        )
+        wiz_lbl.setWordWrap(True)
+        wiz_row.addWidget(wiz_lbl, 1)
+        btn_wiz = QPushButton("打开向导...")
+        btn_wiz.clicked.connect(self._open_wizards)
+        wiz_row.addWidget(btn_wiz)
+        lay.addLayout(wiz_row)
+
         gb = QGroupBox("外观")
         form = QFormLayout(gb)
         form.setLabelAlignment(Qt.AlignLeft)
@@ -136,8 +149,44 @@ class SettingsDialog(QDialog):
         form.addRow("主题：", self.cmb_theme)
 
         lay.addWidget(gb)
+
+        # 向导（task #11 T3 决策 2b：轮数上限）
+        gb_wiz = QGroupBox("向导")
+        form_wiz = QFormLayout(gb_wiz)
+        form_wiz.setLabelAlignment(Qt.AlignLeft)
+        from .wizards.library_init import (
+            DEFAULT_MAX_ROUNDS, get_max_rounds, set_max_rounds,
+        )
+        self._wiz_set_max_rounds = set_max_rounds  # 保存引用，避免闭包重复 import
+        self.spin_wiz_rounds = QSpinBox()
+        self.spin_wiz_rounds.setRange(1, 20)
+        self.spin_wiz_rounds.setValue(get_max_rounds(self.repo))
+        self.spin_wiz_rounds.valueChanged.connect(self._on_wiz_rounds_changed)
+        form_wiz.addRow("一次会话的最大对话轮数：", self.spin_wiz_rounds)
+        hint_w = QLabel(
+            f"默认 {DEFAULT_MAX_ROUNDS}。每次「让 LLM 给出建议」或「在当前基础上调整」算一轮，"
+            "用户编辑预览不计数；达上限后只能「重新开始」或采用当前结果。"
+        )
+        hint_w.setProperty("hint", True)
+        hint_w.setWordWrap(True)
+        form_wiz.addRow("", hint_w)
+        lay.addWidget(gb_wiz)
+
         lay.addStretch(1)
         return w
+
+    def _on_wiz_rounds_changed(self, v: int) -> None:
+        self._wiz_set_max_rounds(self.repo, v)
+
+    def _open_wizards(self) -> None:
+        """从设置 → 通用 打开向导列表对话框。"""
+        from .wizard_list_dialog import WizardListDialog
+        # library 不在 SettingsDialog 上下文里，向导可能不需要它，传 None 即可（
+        # 当前唯一一个向导 LibraryInitWizard 不使用 library，仅用 repo）。
+        dlg = WizardListDialog(self.repo, library=None, parent=self)
+        dlg.exec()
+        if dlg.any_applied():
+            self.fields_changed.emit()
 
     def _on_theme_changed(self, _i: int) -> None:
         v = self.cmb_theme.currentData()

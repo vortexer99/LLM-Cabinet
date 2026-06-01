@@ -28,6 +28,14 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - prompt 拼装时把每个字段的 `prompt_hint` 注入到 user prompt 中"字段格式要求"区段；「查看 Prompt」对话框可见拼接结果
   - 项目导出包 schema 升级到 `llm-cabinet/project-export@2`，`fields_snapshot` 携带 `prompt_hint`；导入端在"自动创建字段"路径下还原。`@1` 老包仍兼容（缺失字段视为空）
   - `Repository` 新增 `add_fields_batch(fields_data)` 事务化批量接口，为 #11 T3 库初始化向导预备
+- **库初始化向导（task #11 T3）**：主菜单 **「工具 → 🪄 向导...」** 入口（设置 → 通用顶部也提供"打开向导..."辅助按钮），可扩展的 `WizardPlugin` 框架（按 `category` 分组列出所有注册向导）：
+  - 第一个向导：**库初始化向导** — 用自然语言描述使用场景 → LLM 给出字段方案 → 预览 / 编辑 / 删除 / 重生成 → 一次性写入 `fields` 表
+  - 直调 provider（**绕过 `LLMTaskQueue`**，前台交互不等后台任务），按 `LLMProvider.supports_json_mode` 静态路由 JSON 原生 / Prompt 强约束两路，统一过 `parse_and_validate`（自动剥 ```` ```json ``` ```` 包裹、JSON-in-text 兜底）
+  - 「**重新开始**」清空状态回场景页；「**在当前基础上调整**」弹补充输入，把"上次返回 + 用户编辑 + 用户补充"再问一轮；当前轮数 / 上限 始终显示在顶部，达上限禁用「调整」按钮
+  - 默认轮数上限 5（设置 → 通用 `wizard_max_rounds` spinbox 1~20）
+  - **冲突预检**：每条建议在加载时与现有 `fields` 比对，4 种状态各自不同处理 — ✅ 新字段（默认勾选 → 创建）/ 🔒 系统保护（强制不勾选）/ 🔁 同名同类型（仅在现有 hint 为空时写入 LLM 提示，非空跳过不覆盖）/ ⚠ 类型冲突（默认 `<原名>_v2` 改名输入框，用户改完才能勾选创建）
+  - **事务化应用**：勾选项一次性走 `Repository.add_fields_batch()`，任一失败 → 整体 `ROLLBACK` + 弹窗指明原因，向导停留在预览页让用户继续修改
+  - `LLMProvider.supports_json_mode` 类属性默认 `True`，未来加新 provider 时按实际 API 能力填即可
 - **标签层级折叠（task #06）**：约定 `/` 为标签层级分隔符（如 `领域/科幻`、`领域/工具书`），左侧标签树自动按第一段做前缀分组，父节点可折叠/展开。点击父节点 = 同时筛选父标签自身 + 该前缀下所有子标签的项目。折叠状态持久化在 `settings.tag_tree_collapsed_prefixes`。零数据迁移。
 - **批量文件夹导入（task #10）**：把多个文件夹拖到底部 DropZone，先选「单/多项目」模式；
   选「分别建立」时弹出批量导入对话框，可：
