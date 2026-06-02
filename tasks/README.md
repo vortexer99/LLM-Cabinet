@@ -23,7 +23,7 @@
 | [17-subfolder-import-and-tree-view.md](./17-subfolder-import-and-tree-view.md) | 子文件夹导入修复（递归收集 + 仓储保留子路径）+ 文件表改树形展示 | S+S+S | P0/P1/P1 | 待做 |
 | [19-field-type-change-safety.md](./19-field-type-change-safety.md) | 字段类型变更的安全护栏：库设置弹窗确认 + supersede pending + 字段助手 type_conflict 改为「批准=原地改 / 驳回=不动」 | S+S | P1 | ✅ 2026-06-02 |
 | [20-unify-field-storage.md](./20-unify-field-storage.md) | 废弃系统字段的 projects 列分流，所有非保护字段值统一存 `project_field_values`（📦 schema v3 → v4）；顺带砍掉字段助手里残留的「🔒 系统字段」状态 | M | P2 | ✅ 2026-06-03 |
-| [21-wizard-two-step-redesign.md](./21-wizard-two-step-redesign.md) | 字段助手两段式重构（Step 1 审阅 LLM 建议 / Step 2 编辑字段表），消除"一张表两种语义"的矩阵规则与隐式状态迁移 | M | P1 | 待开工（建议 #20 后再动） |
+| [21-wizard-two-step-redesign.md](./21-wizard-two-step-redesign.md) | 字段助手两段式重构（Step 1 审阅 LLM 建议 / Step 2 编辑字段表），消除"一张表两种语义"的矩阵规则与隐式状态迁移 | M | P1 | ✅ 2026-06-03 |
 
 ## 约定
 

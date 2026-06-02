@@ -18,6 +18,48 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
 历史上的 `📦 schema v2 → v3` 也包含在本次发布里（`fields.prompt_hint` 列
 + `files.missing` 列的合并迁移，task #11 T1 + task #14 T1）。
 
+### Added
+- **task #21 字段助手两段式重构（2026-06-03）**：把库字段设计助手的「预览页」
+  拆成两段式向导（同一对话框、`QStackedWidget` 切换），彻底消除"一张表两种
+  语义"的矩阵规则混乱（详见 `tasks/21-wizard-two-step-redesign.md`）：
+  - **Step 1 · 审阅 LLM 建议**：只展示 LLM 实际触达的条目，每行一对
+    「批准 / 驳回」按钮；纯 user-only 的现有字段（`existing_user_field`）
+    不在这一步显示，由 Step 2 编辑表承担。底部「下一步 →」触发
+    `merge_decisions_into_drafts` 把决策合并成最终字段表草稿。
+  - **Step 2 · 字段表编辑**：呈现合并后的"应用后字段表"，每行可改名 /
+    改类型 / 改提示 / 删除；划删线行有「↩ 撤销删除」按钮，撤销时实时校验
+    重名（冲突弹错拒绝、不自动改名也不推迟应用时校验）。底部「← 放弃修改
+    并返回」检测 `drafts_are_dirty` 时弹确认（保留 Step 1 决策、丢弃 Step 2
+    编辑）。
+  - **应用前汇总对话框**（`_ApplySummaryDialog`）：列出 5 类变更的统计
+    （创建 / 改名 / 改类型 / 删除 / 更新提示）；主按钮文案绑定 FieldPlan
+    内容动态切换：仅创建 / 改名 / 更新提示 → `[应用]`；含改类型 →
+    `[下一步：确认类型变更]`；含删除 → `[下一步：确认删除]`；同时含改类型
+    与删除 → `[下一步：确认变更]`，诚实告知后续还有几道二次确认。点取消
+    回 Step 2，不回 Step 1。
+  - **多轮对话（refine）双入口**：Step 1 底部 `[✏ 在当前基础上调整...]`
+    保持原行为，只回灌 Step 1 反馈（决策 + 微调过的 hint + 库描述编辑）；
+    Step 2 底部新增 `[💾 应用并继续讨论...]`，先走完整应用流程落库再弹补充
+    说明启动新一轮（下一轮 LLM 看到的现有字段是落库后状态）。**不**做
+    "Step 2 直接回灌字段表编辑给 LLM 的挂起态"方案——避免与 Step 1 决策
+    语义重叠 + 用户对"我现在到底改了什么"失去感知。
+  - **数据模型**：`FieldDraft`（Step 2 一行 = 一个字段；origin 仅做徽章 +
+    撤销路径区分，不驱动可编辑性）+ `FieldPlan`（apply 入参打包，5 类操作
+    + `is_empty` helper）+ `Decision` 枚举常量。
+  - **纯函数底座**（无 Qt 依赖、便于 selftest）：
+    `merge_decisions_into_drafts` / `diff_drafts_to_plan` /
+    `check_undelete_name_conflict` / `summary_dialog_button_label` /
+    `clone_draft` / `drafts_are_dirty` / `step1_visible_indices`。
+  - **删旧路径**：`_on_type_changed` 的 same_type ↔ type_conflict 自动升降级
+    保留（Step 1 仍要用）；`_on_preview_row_add/_delete/_move` 与
+    `_apply_selected_change` 整段删除（Step 1 不再有自主增删字段动作）；
+    旧 `_on_apply` 整段删除，由 `_on_step2_apply` 替代。
+  - **selftest**：`task21_wizard_two_step.py` 86 条断言（阶段 A 69 条 +
+    阶段 B 17 条新增），覆盖纯函数全部分支与 `clone_draft` /
+    `drafts_are_dirty` / `step1_visible_indices` 的边界。`apply_field_plan_batch`
+    4-tuple 契约不变，task11_t3 的 222 条 repo 层断言无回归。全套 11 个
+    selftest 共 725 条断言全绿。
+
 ### Changed
 - **task #20 废弃系统字段的 projects 列分流（schema v3 → v4，2026-06-03）**：把
   `projects.{author,date,source_url,rating}` 4 列的值搬到

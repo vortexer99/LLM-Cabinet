@@ -28,6 +28,7 @@
 [#06 · ✅ 2026-06-01] 标签分类折叠管理
 [#19 · ✅ 2026-06-02] 字段类型变更的安全护栏：Phase A 库设置改类型弹窗确认 + supersede pending；Phase B 字段助手 type_conflict 改为"批准=原地改 / 驳回=不动"
 [#20 · ✅ 2026-06-03] 废弃系统字段的 projects 列分流，所有非保护字段值统一存 `project_field_values`（📦 schema v3 → v4）
+[#21 · ✅ 2026-06-03] 字段助手「预览页」拆成两段式向导（Step 1 审阅 LLM ↔ Step 2 编辑字段表），消除"一张表两种语义"的矩阵规则混乱
 -
 
 ## 🖼️ 预览 / 封面 / 媒体
@@ -151,6 +152,7 @@
 | [15](./tasks/15-new-library-onboarding.md) | 新建库 onboarding（多步向导 + 首次引导 + Welcome + 模板） | S+S+S+M | P1/P1/P2/P3 | T1/T2/T3 ✅ 2026-06-02 · T4 远期 |
 | [16](./tasks/16-library-field-wizard-polish.md) | 库字段设计助手后续打磨 | XS+S+S | P2/P1 | ✅ 2026-06-01 |
 | [17](./tasks/17-subfolder-import-and-tree-view.md) | 子文件夹导入修复 + 文件表改树形 | S+S+S | P0/P1/P1 | 待做 |
+| [21](./tasks/21-wizard-two-step-redesign.md) | 字段助手两段式重构（Step 1 审阅 LLM + Step 2 编辑字段表） | M | P1 | ✅ 2026-06-03 |
 
 ### 合并理由
 - **01** 内：T1（列可见性框架）做完后 T2（存储列）自动可隐藏

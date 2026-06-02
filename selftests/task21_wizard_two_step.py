@@ -34,8 +34,11 @@ from app.ui.wizards.library_init import (
     FieldDraft,
     FieldPlan,
     check_undelete_name_conflict,
+    clone_draft,
     diff_drafts_to_plan,
+    drafts_are_dirty,
     merge_decisions_into_drafts,
+    step1_visible_indices,
     summary_dialog_button_label,
 )
 
@@ -634,6 +637,134 @@ def test_button_label_full_combination(t: T) -> None:
 
 
 # =============================================================================
+# 阶段 B：clone_draft / drafts_are_dirty / step1_visible_indices
+# =============================================================================
+def test_clone_draft_independent(t: T) -> None:
+    """clone_draft 返回的对象与原对象内容相等但互相独立。"""
+    d = FieldDraft(
+        origin=DRAFT_ORIGIN_LLM_NEW, existing_field_id=None,
+        original_name=None, original_type=None,
+        name="A", type="text", prompt_hint="hint",
+    )
+    c = clone_draft(d)
+    t.assert_eq("clone 内容相等：name", c.name, "A")
+    t.assert_eq("clone 内容相等：origin", c.origin, DRAFT_ORIGIN_LLM_NEW)
+    t.assert_true("clone 是不同对象", c is not d)
+    # 修改 clone 不影响原对象
+    c.name = "B"
+    c.deleted = True
+    t.assert_eq("修改 clone 不影响原对象 name", d.name, "A")
+    t.assert_true("修改 clone 不影响原对象 deleted", d.deleted is False)
+
+
+def test_drafts_dirty_unchanged(t: T) -> None:
+    """drafts_are_dirty：current 与 baseline 内容一致 → False。"""
+    d = FieldDraft(
+        origin=DRAFT_ORIGIN_EXISTING, existing_field_id=1,
+        original_name="A", original_type="text",
+        name="A", type="text", prompt_hint="",
+    )
+    baseline = [clone_draft(d)]
+    current = [clone_draft(d)]
+    t.assert_true("内容一致 → 非 dirty", not drafts_are_dirty(current, baseline))
+
+
+def test_drafts_dirty_added_row(t: T) -> None:
+    """drafts_are_dirty：添加行 → True。"""
+    baseline: list[FieldDraft] = []
+    current = [FieldDraft(
+        origin=DRAFT_ORIGIN_USER_NEW, existing_field_id=None,
+        original_name=None, original_type=None,
+        name="新", type="text", prompt_hint="",
+    )]
+    t.assert_true("添加行 → dirty", drafts_are_dirty(current, baseline))
+
+
+def test_drafts_dirty_name_changed(t: T) -> None:
+    """drafts_are_dirty：改名 → True。"""
+    d_base = FieldDraft(
+        origin=DRAFT_ORIGIN_EXISTING, existing_field_id=1,
+        original_name="A", original_type="text",
+        name="A", type="text", prompt_hint="",
+    )
+    baseline = [d_base]
+    d_cur = clone_draft(d_base)
+    d_cur.name = "B"
+    t.assert_true("改名 → dirty", drafts_are_dirty([d_cur], baseline))
+
+
+def test_drafts_dirty_deleted_flag(t: T) -> None:
+    """drafts_are_dirty：deleted 翻转 → True。"""
+    d_base = FieldDraft(
+        origin=DRAFT_ORIGIN_EXISTING, existing_field_id=1,
+        original_name="A", original_type="text",
+        name="A", type="text", prompt_hint="",
+    )
+    baseline = [d_base]
+    d_cur = clone_draft(d_base)
+    d_cur.deleted = True
+    t.assert_true("deleted 翻转 → dirty", drafts_are_dirty([d_cur], baseline))
+
+
+def test_drafts_dirty_type_changed(t: T) -> None:
+    """drafts_are_dirty：type 改了 → True。"""
+    d_base = FieldDraft(
+        origin=DRAFT_ORIGIN_LLM_NEW, existing_field_id=None,
+        original_name=None, original_type=None,
+        name="rating", type="text", prompt_hint="",
+    )
+    baseline = [d_base]
+    d_cur = clone_draft(d_base)
+    d_cur.type = "rating"
+    t.assert_true("type 改了 → dirty", drafts_are_dirty([d_cur], baseline))
+
+
+def test_drafts_dirty_hint_changed(t: T) -> None:
+    """drafts_are_dirty：prompt_hint 改了 → True。"""
+    d_base = FieldDraft(
+        origin=DRAFT_ORIGIN_LLM_NEW, existing_field_id=None,
+        original_name=None, original_type=None,
+        name="X", type="text", prompt_hint="",
+    )
+    baseline = [d_base]
+    d_cur = clone_draft(d_base)
+    d_cur.prompt_hint = "新提示"
+    t.assert_true("hint 改了 → dirty", drafts_are_dirty([d_cur], baseline))
+
+
+def test_step1_visible_indices_filters_existing_user_field(t: T) -> None:
+    """step1_visible_indices：existing_user_field 行被过滤掉。"""
+    s_new = AnnotatedSuggestion(name="new", type="text", prompt_hint="")
+    s_new.status = "new"
+    s_existing = AnnotatedSuggestion(name="existing", type="text", prompt_hint="")
+    s_existing.status = "existing_user_field"
+    s_same = AnnotatedSuggestion(name="same", type="text", prompt_hint="")
+    s_same.status = "same_type"
+    s_del = AnnotatedSuggestion(name="del", type="text", prompt_hint="")
+    s_del.status = "llm_suggest_delete"
+    visible = step1_visible_indices([s_new, s_existing, s_same, s_del])
+    t.assert_eq("过滤后剩 3 行", len(visible), 3)
+    t.assert_eq("过滤后保留新增", visible[0], 0)
+    t.assert_eq("过滤后跳过 existing_user_field", visible[1], 2)
+    t.assert_eq("过滤后保留 llm_suggest_delete", visible[2], 3)
+
+
+def test_step1_visible_indices_all_existing_returns_empty(t: T) -> None:
+    """step1_visible_indices：全是 existing_user_field → 返回空列表。"""
+    s1 = AnnotatedSuggestion(name="A", type="text", prompt_hint="")
+    s1.status = "existing_user_field"
+    s2 = AnnotatedSuggestion(name="B", type="text", prompt_hint="")
+    s2.status = "existing_user_field"
+    visible = step1_visible_indices([s1, s2])
+    t.assert_eq("全部过滤掉 → 空列表", len(visible), 0)
+
+
+def test_step1_visible_indices_empty_input(t: T) -> None:
+    """step1_visible_indices：空输入 → 空列表。"""
+    t.assert_eq("空输入 → 空列表", step1_visible_indices([]), [])
+
+
+# =============================================================================
 # 主入口
 # =============================================================================
 def main() -> int:
@@ -678,6 +809,17 @@ def main() -> int:
     test_button_label_with_deletes(t)
     test_button_label_with_both(t)
     test_button_label_full_combination(t)
+    # 阶段 B：clone_draft / drafts_are_dirty / step1_visible_indices
+    test_clone_draft_independent(t)
+    test_drafts_dirty_unchanged(t)
+    test_drafts_dirty_added_row(t)
+    test_drafts_dirty_name_changed(t)
+    test_drafts_dirty_deleted_flag(t)
+    test_drafts_dirty_type_changed(t)
+    test_drafts_dirty_hint_changed(t)
+    test_step1_visible_indices_filters_existing_user_field(t)
+    test_step1_visible_indices_all_existing_returns_empty(t)
+    test_step1_visible_indices_empty_input(t)
     return 0 if t.report() else 1
 
 

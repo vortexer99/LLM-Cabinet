@@ -77,6 +77,8 @@ with closing_repos(repo_a, repo_b):
 | [task14_library_management.py](./task14_library_management.py) | 库一致性检查（仓储 + 链接两类失效）+ 三档处理（noop/mark/delete）+ 备份/恢复 zip 往返 + 错误兜底 | [tasks/14](../tasks/14-library-management-enhancements.md) |
 | [task15_new_library_onboarding.py](./task15_new_library_onboarding.py) | 新建库向导数据契约：`OPTIONAL_DEFAULT_FIELDS` / `MIGRATE_KEYS_LLM_ONLY` / `MIGRATE_KEYS_ALL` 常量；D2 默认列可见性（描述/标签 visible=0）；`count_user_added_fields` helper；7 步建库底层路径（mark + 加可选字段 + 写描述 + 两档 API 迁移）；T2 横幅显示条件 + D4 一次性标志；T3 Welcome 结果常量分发 | [tasks/15](../tasks/15-new-library-onboarding.md) T1/T2/T3 |
 | [task19_field_type_change.py](./task19_field_type_change.py) | 字段类型变更安全护栏 Phase A：`is_compatible_type_change` 兼容矩阵；`set_field_type` 三件事进同事务（改 type + supersede pending + clear hint）；默认 kwargs 向后兼容；受保护字段静默忽略；old==new noop；失败 ROLLBACK | [tasks/19](../tasks/19-field-type-change-safety.md) Phase A |
+| [task20_unify_field_storage.py](./task20_unify_field_storage.py) | schema v3 → v4 迁移：4 列 DROP COLUMN 后系统字段值统一存 `project_field_values`；`Project` dataclass 顶层属性 author/date/source_url/rating 移除；`get/set_field_value` 走 field_values 路径；幂等 + 已有 pfv 行不覆盖 + rating "未填"语义保护 | [tasks/20](../tasks/20-unify-field-storage.md) |
+| [task21_wizard_two_step.py](./task21_wizard_two_step.py) | 字段助手两段式重构纯函数底座：`merge_decisions_into_drafts` / `diff_drafts_to_plan` / `check_undelete_name_conflict` / `summary_dialog_button_label` / `clone_draft` / `drafts_are_dirty` / `step1_visible_indices` 全部分支 | [tasks/21](../tasks/21-wizard-two-step-redesign.md) |
 
 ## 不接入 CI 的原因
 

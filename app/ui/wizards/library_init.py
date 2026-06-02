@@ -784,6 +784,61 @@ def summary_dialog_button_label(plan: FieldPlan) -> str:
     return "应用"
 
 
+# task #21 阶段 B：drafts 列表辅助纯函数（不依赖 Qt，便于测试）
+def clone_draft(d: FieldDraft) -> FieldDraft:
+    """浅拷贝一个 FieldDraft（标量字段直接构造）。"""
+    return FieldDraft(
+        origin=d.origin,
+        existing_field_id=d.existing_field_id,
+        original_name=d.original_name,
+        original_type=d.original_type,
+        name=d.name,
+        type=d.type,
+        prompt_hint=d.prompt_hint,
+        deleted=d.deleted,
+    )
+
+
+def drafts_are_dirty(
+    current: list[FieldDraft], baseline: list[FieldDraft],
+) -> bool:
+    """判断 ``current`` 与 ``baseline`` 是否在任一字段上不一致。
+
+    用于 Step 2 的 Back 路径：``baseline`` 是进入 Step 2 时的初始合并态、
+    ``current`` 是用户编辑后的状态。
+    """
+    if len(current) != len(baseline):
+        return True
+    for a, b in zip(current, baseline):
+        if (
+            a.origin != b.origin
+            or a.existing_field_id != b.existing_field_id
+            or a.original_name != b.original_name
+            or a.original_type != b.original_type
+            or a.name != b.name
+            or a.type != b.type
+            or a.prompt_hint != b.prompt_hint
+            or a.deleted != b.deleted
+        ):
+            return True
+    return False
+
+
+# task #21 阶段 B：Step 1 表的渲染过滤（哪些 ann 在 Step 1 显示；不依赖 Qt）
+def step1_visible_indices(suggestions: list["AnnotatedSuggestion"]) -> list[int]:
+    """task #21：Step 1 只展示 LLM 实际触达的条目。
+
+    纯 user-only 现有字段（``existing_user_field``，含 LLM 删除/改名建议被驳回
+    后退化的）由 Step 2 编辑表承担，不在 Step 1 出现。
+
+    返回 ``suggestions`` 的索引列表，按原顺序（已过滤 existing_user_field）。
+    """
+    return [
+        i for i, ann in enumerate(suggestions)
+        if ann.status != "existing_user_field"
+    ]
+
+
 def annotate_conflicts(
     suggestions: list[dict],
     existing_fields: list,
@@ -1210,7 +1265,11 @@ class _WizardLLMWorker(QObject):
 PAGE_INTRO = 0
 PAGE_SCENARIO = 1
 PAGE_RUNNING = 2
-PAGE_PREVIEW = 3
+# task #21：原 PAGE_PREVIEW 拆成 Step 1（审阅 LLM 建议）+ Step 2（字段表编辑）
+PAGE_STEP1 = 3
+PAGE_STEP2 = 4
+# 旧别名保留（仅用于历史代码引用；语义上等同于 Step 1）
+PAGE_PREVIEW = PAGE_STEP1
 
 
 class LibraryInitWizard(WizardPlugin):
@@ -1259,6 +1318,16 @@ class LibraryInitWizard(WizardPlugin):
         self._tokens_out_total: int = 0
         self._last_round_tokens_in: int = 0
         self._last_round_tokens_out: int = 0
+        # task #21 两段式向导：Step 2 字段表草稿；进入 Step 2 时通过
+        # merge_decisions_into_drafts() 重新生成；Back 时整体丢弃
+        self._drafts: list[FieldDraft] = []
+        # task #21：Step 2 进入时的 drafts 快照（深拷贝），用于 Back 时检测"是否
+        # 有编辑"以决定要不要弹确认对话框
+        self._drafts_baseline: list[FieldDraft] = []
+        # task #21：受保护字段 fid 集合（_on_step1_next 时根据 repo 填充）
+        self._protected_fids: set[int] = set()
+        # task #21：Step 1 表的渲染行号 → _suggestions 真实索引的映射
+        self._step1_visible_rows: list[int] = []
 
         self._build_ui()
 
@@ -1325,7 +1394,8 @@ class LibraryInitWizard(WizardPlugin):
         self.stack.addWidget(self._build_intro_page())
         self.stack.addWidget(self._build_scenario_page())
         self.stack.addWidget(self._build_running_page())
-        self.stack.addWidget(self._build_preview_page())
+        self.stack.addWidget(self._build_preview_page())   # PAGE_STEP1
+        self.stack.addWidget(self._build_step2_page())     # PAGE_STEP2
         self.stack.setCurrentIndex(PAGE_INTRO)
 
     def _build_intro_page(self) -> QWidget:
@@ -1555,16 +1625,21 @@ class LibraryInitWizard(WizardPlugin):
         return w
 
     def _build_preview_page(self) -> QWidget:
+        """task #21：Step 1 · 审阅 LLM 建议（原 _build_preview_page）。
+
+        UI 上只展示 LLM 实际触达的条目；纯 user-only 的现有字段（``existing_user_field``
+        且 LLM 没碰）由 Step 2 编辑表承担，不在 Step 1 出现。底部按钮砍掉
+        ＋ / 删除 / 上下移（迁移到 Step 2），把"应用"换成"下一步 →"。
+        """
         w = QWidget()
         v = QVBoxLayout(w)
         v.setSpacing(8)
 
         self.lbl_preview_hint = QLabel(
-            "<b>LLM 给出的字段方案</b>　最左侧「LLM 建议」列显示本轮变化"
-            "（新增 / 修改 / 不变 / 删除）；可对每条建议「批准」或「驳回」，"
-            "或用下方按钮新增 / 删除 / 调序字段。点「应用」一并写入。"
-            "<br/><span style='color:#666'>※ 未决策的 LLM 新增 / 修改建议会被默认接受；"
-            "LLM 删除建议则需显式「批准」才会执行。</span>"
+            "<b>Step 1 · 审阅 LLM 建议</b>　每一条建议给出「批准」「驳回」决策；"
+            "未决策条目下一步时一律视作「已批准」（含删除建议——后续在 Step 2 与"
+            "应用前汇总对话框还会再有兜底）。这一步只看 LLM 提议，自主增删字段在"
+            "下一步进行。"
         )
         self.lbl_preview_hint.setTextFormat(Qt.RichText)
         self.lbl_preview_hint.setWordWrap(True)
@@ -1617,8 +1692,8 @@ class LibraryInitWizard(WizardPlugin):
 
         # 字段表（5 列）
         # 列布局：LLM 建议 / 状态 / 字段名 / 类型 / LLM 提示
-        # （6/1 晚去除独立勾选列：保留/删除靠 LLM 建议列右侧"批准/驳回"
-        #  与底部行操作按钮"删除"实现，避免 UI 元素重复）
+        # task #21 起此表只承载 LLM 实际触达的条目（Step 1）；纯 user-only 现有
+        # 字段移到 Step 2 编辑表
         self.tbl = QTableWidget(0, 5)
         self.tbl.setHorizontalHeaderLabels(
             ["LLM 建议", "状态", "字段名", "类型", "LLM 提示"]
@@ -1643,29 +1718,6 @@ class LibraryInitWizard(WizardPlugin):
         self.tbl.cellDoubleClicked.connect(self._on_cell_double_clicked)
         v.addWidget(self.tbl, 1)
 
-        # 行操作按钮（增 / 删 / 上下移）
-        ops = QHBoxLayout()
-        b_add = QPushButton("＋ 添加字段")
-        b_add.setToolTip("在表末尾追加一个空白字段；填入名字后可像 LLM 建议一样应用")
-        b_add.clicked.connect(self._on_preview_row_add)
-        ops.addWidget(b_add)
-        b_del_row = QPushButton("🗑 删除")
-        b_del_row.setProperty("danger", True)
-        b_del_row.setToolTip(
-            "现有字段：标记为「将删除」（取消保留）；\n"
-            "LLM 新建议：直接从列表移除"
-        )
-        b_del_row.clicked.connect(self._on_preview_row_delete)
-        ops.addWidget(b_del_row)
-        ops.addStretch(1)
-        b_up = QPushButton("↑ 上移")
-        b_up.clicked.connect(lambda: self._on_preview_row_move(-1))
-        ops.addWidget(b_up)
-        b_down = QPushButton("↓ 下移")
-        b_down.clicked.connect(lambda: self._on_preview_row_move(1))
-        ops.addWidget(b_down)
-        v.addLayout(ops)
-
         # 警告区
         self.lbl_warnings = QLabel("")
         self.lbl_warnings.setWordWrap(True)
@@ -1682,7 +1734,7 @@ class LibraryInitWizard(WizardPlugin):
         self.btn_show_raw.clicked.connect(self._on_show_raw_dialog)
         v.addWidget(self.btn_show_raw)
 
-        # 底部按钮区
+        # 底部按钮区（task #21 改造：去掉 ＋/🗑/↑↓/应用，换成"下一步 →"）
         btns = QHBoxLayout()
         self.btn_restart = QPushButton("🔄 重新开始")
         self.btn_restart.setToolTip("清空全部状态，回到场景描述页（轮数归零）")
@@ -1691,7 +1743,8 @@ class LibraryInitWizard(WizardPlugin):
 
         self.btn_refine = QPushButton("✏ 在当前基础上调整...")
         self.btn_refine.setToolTip(
-            "弹补充说明输入框；将上次返回 + 用户编辑 + 补充一起再问一轮"
+            "弹补充说明输入框；将 Step 1 反馈（决策 + 编辑过的 hint + 库描述）"
+            "和补充一起再问一轮 LLM"
         )
         self.btn_refine.clicked.connect(self._on_refine)
         btns.addWidget(self.btn_refine)
@@ -1699,7 +1752,7 @@ class LibraryInitWizard(WizardPlugin):
         # 一键批准/驳回所有
         self.btn_approve_all = QPushButton("✓ 全部批准")
         self.btn_approve_all.setToolTip(
-            "把本轮所有 LLM 提议（新增 / 修改）都标为已批准"
+            "把本轮所有 LLM 提议（新增 / 修改 / 改名 / 删除）都标为已批准"
         )
         self.btn_approve_all.clicked.connect(self._on_approve_all)
         btns.addWidget(self.btn_approve_all)
@@ -1709,18 +1762,116 @@ class LibraryInitWizard(WizardPlugin):
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_cancel)
 
-        self.btn_apply = QPushButton("✅ 应用（未决策按默认处理）")
-        self.btn_apply.setDefault(True)
-        self.btn_apply.setToolTip(
-            "点击后立刻把表中的方案写入库。\n"
-            "未点「批准 / 驳回」的条目按默认语义处理：\n"
-            "  • LLM 新增 / 修改建议 → 视为默认接受，会被应用；\n"
-            "  • LLM 删除建议 → 视为默认保留，不会删除（需显式批准才删）；\n"
-            "  • 你保留勾选的现有字段 → 保留不动。\n"
-            "删除操作仍会弹二次确认。"
+        # task #21：把"应用"换成"下一步 →"；点击进入 Step 2
+        self.btn_step1_next = QPushButton("下一步 → 编辑字段表")
+        self.btn_step1_next.setDefault(True)
+        self.btn_step1_next.setToolTip(
+            "把当前 Step 1 决策合并成最终字段表草稿，进入 Step 2 进一步编辑"
+            "（增/删/改名/改类型/改提示）"
         )
-        self.btn_apply.clicked.connect(self._on_apply)
-        btns.addWidget(self.btn_apply)
+        self.btn_step1_next.clicked.connect(self._on_step1_next)
+        btns.addWidget(self.btn_step1_next)
+        v.addLayout(btns)
+        return w
+
+    # ------------------------------------------------------------------
+    # task #21：Step 2 · 字段表编辑（最终态）
+    # ------------------------------------------------------------------
+    def _build_step2_page(self) -> QWidget:
+        """Step 2 视图：把 Step 1 决策合并后的最终字段表呈现给用户编辑。
+
+        渲染 ``self._drafts``（``list[FieldDraft]``）；每行可改名 / 改类型 /
+        改提示 / 删除；底部 ＋ 添加字段、← 放弃修改并返回、应用、应用并继续讨论。
+        """
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setSpacing(8)
+
+        self.lbl_step2_hint = QLabel(
+            "<b>Step 2 · 编辑最终字段表</b>　以下是 Step 1 决策合并后的最终字段表，"
+            "你可以在这里增 / 删 / 改名 / 改类型 / 改提示。划删线行表示「将删除」"
+            "（点其右侧「↩ 撤销删除」可恢复）。点「应用」一并写入库。"
+        )
+        self.lbl_step2_hint.setTextFormat(Qt.RichText)
+        self.lbl_step2_hint.setWordWrap(True)
+        v.addWidget(self.lbl_step2_hint)
+
+        # 字段表（6 列：来源徽章 / 字段名 / 类型 / LLM 提示 / 操作 / 状态）
+        self.tbl_step2 = QTableWidget(0, 6)
+        self.tbl_step2.setHorizontalHeaderLabels(
+            ["来源", "字段名", "类型", "LLM 提示", "操作", "状态"]
+        )
+        self.tbl_step2.verticalHeader().setVisible(False)
+        self.tbl_step2.verticalHeader().setDefaultSectionSize(34)
+        self.tbl_step2.setSelectionBehavior(QTableWidget.SelectRows)
+        self.tbl_step2.setSelectionMode(QTableWidget.SingleSelection)
+        h2 = self.tbl_step2.horizontalHeader()
+        h2.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        h2.setSectionResizeMode(1, QHeaderView.Interactive)
+        h2.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        h2.setSectionResizeMode(3, QHeaderView.Stretch)
+        h2.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        h2.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.tbl_step2.setColumnWidth(1, 180)
+        # 字段名列复用 Step 1 的高度撑满 delegate
+        self._name_delegate_step2 = _TallLineEditDelegate(self.tbl_step2)
+        self.tbl_step2.setItemDelegateForColumn(1, self._name_delegate_step2)
+        self.tbl_step2.cellDoubleClicked.connect(self._on_step2_cell_double_clicked)
+        self.tbl_step2.itemChanged.connect(self._on_step2_item_changed)
+        v.addWidget(self.tbl_step2, 1)
+
+        # 行操作按钮
+        ops = QHBoxLayout()
+        self.btn_step2_add = QPushButton("＋ 添加字段")
+        self.btn_step2_add.setToolTip(
+            "在表末尾追加一个 user_new 行；填入名字后随其他变更一起应用"
+        )
+        self.btn_step2_add.clicked.connect(self._on_step2_add_field)
+        ops.addWidget(self.btn_step2_add)
+        ops.addStretch(1)
+        v.addLayout(ops)
+
+        # 警告区（重名 / 必填等校验失败时显示）
+        self.lbl_step2_warnings = QLabel("")
+        self.lbl_step2_warnings.setWordWrap(True)
+        self.lbl_step2_warnings.setStyleSheet("color: #c62828;")
+        self.lbl_step2_warnings.setVisible(False)
+        v.addWidget(self.lbl_step2_warnings)
+
+        # 底部按钮区
+        btns = QHBoxLayout()
+        self.btn_step2_back = QPushButton("← 放弃修改并返回")
+        self.btn_step2_back.setToolTip(
+            "丢弃 Step 2 当前编辑，返回 Step 1 重新审阅；Step 1 的批准/驳回决策保留"
+        )
+        self.btn_step2_back.clicked.connect(self._on_step2_back)
+        btns.addWidget(self.btn_step2_back)
+
+        btns.addStretch(1)
+
+        b_cancel = QPushButton("取消")
+        b_cancel.clicked.connect(self.reject)
+        btns.addWidget(b_cancel)
+
+        self.btn_step2_apply_continue = QPushButton("💾 应用并继续讨论...")
+        self.btn_step2_apply_continue.setToolTip(
+            "先应用当前字段表（落库），再弹补充说明启动新一轮 LLM 讨论；"
+            "下一轮 LLM 看到的现有字段就是你刚刚落库的版本"
+        )
+        self.btn_step2_apply_continue.clicked.connect(
+            lambda: self._on_step2_apply(continue_refine=True)
+        )
+        btns.addWidget(self.btn_step2_apply_continue)
+
+        self.btn_step2_apply = QPushButton("✅ 应用")
+        self.btn_step2_apply.setDefault(True)
+        self.btn_step2_apply.setToolTip(
+            "把当前字段表写入库；含改类型 / 删除时还会有二次确认对话框"
+        )
+        self.btn_step2_apply.clicked.connect(
+            lambda: self._on_step2_apply(continue_refine=False)
+        )
+        btns.addWidget(self.btn_step2_apply)
         v.addLayout(btns)
         return w
 
@@ -1888,12 +2039,15 @@ class LibraryInitWizard(WizardPlugin):
             parent_dlg.accept()
 
     def _on_cell_double_clicked(self, row: int, col: int) -> None:
-        """LLM 提示列双击 → 弹独立多行编辑对话框。"""
+        """LLM 提示列双击 → 弹独立多行编辑对话框。``row`` 是 Step 1 渲染行号。"""
         if col != 4:  # LLM 提示列（5 列布局）
             return
-        if not (0 <= row < len(self._suggestions)):
+        if not (0 <= row < len(self._step1_visible_rows)):
             return
-        ann = self._suggestions[row]
+        src_idx = self._step1_visible_rows[row]
+        if not (0 <= src_idx < len(self._suggestions)):
+            return
+        ann = self._suggestions[src_idx]
         it = self.tbl.item(row, 4)
         cur = it.text() if it else ann.prompt_hint
         title = f"编辑 LLM 提示 — {ann.name}"
@@ -2327,8 +2481,12 @@ class LibraryInitWizard(WizardPlugin):
     }
 
     def _render_preview(self, warnings: list[str]) -> None:
+        # task #21：Step 1 只展示 LLM 实际触达的条目；纯 user-only 现有字段
+        # （existing_user_field 状态）由 Step 2 编辑表承担，不在此显示
         self.tbl.setRowCount(0)
-        for row, ann in enumerate(self._suggestions):
+        self._step1_visible_rows = step1_visible_indices(self._suggestions)
+        for row, src_idx in enumerate(self._step1_visible_rows):
+            ann = self._suggestions[src_idx]
             self.tbl.insertRow(row)
 
             # 0：LLM 建议（标签 + 批准/驳回按钮；只在有变化时显示按钮）
@@ -2341,14 +2499,10 @@ class LibraryInitWizard(WizardPlugin):
             it_status = QTableWidgetItem(label)
             it_status.setFlags(it_status.flags() & ~Qt.ItemIsEditable)
             it_status.setToolTip(ann.reason or default_tip)
-            # existing_user_field 取消勾选 → 红字 "🗑 将删除"
-            if ann.status == "existing_user_field" and not ann.selected:
-                it_status.setText("🗑 将删除")
-                from PySide6.QtGui import QColor
-                it_status.setForeground(QColor("#c62828"))
+            # existing_user_field 已在循环开头过滤掉了
             # llm_suggest_delete：默认红字（待批准）；批准后 selected=True 也保持红字
             # （此时表示"将真删"），更明确的标签由用户决策状态体现
-            elif ann.status == "llm_suggest_delete":
+            if ann.status == "llm_suggest_delete":
                 from PySide6.QtGui import QColor
                 if ann.selected:
                     it_status.setText("🗑 将删除（已批准）")
@@ -2402,8 +2556,8 @@ class LibraryInitWizard(WizardPlugin):
             ):
                 cmb.setEnabled(False)
             cmb.currentIndexChanged.connect(
-                lambda _i, idx=row, c=cmb: self._on_type_changed(
-                    idx, c.currentData(),
+                lambda _i, sidx=src_idx, c=cmb: self._on_type_changed(
+                    sidx, c.currentData(),
                 )
             )
             self.tbl.setCellWidget(row, 3, cmb)
@@ -2452,6 +2606,9 @@ class LibraryInitWizard(WizardPlugin):
         * 批准/驳回按钮只在「LLM 触达且会带来变化」的 ann 上才有意义；
           一旦做出决策（approved/rejected）就不再渲染按钮，避免反复操作
           （想要回到 LLM 原版请用「查看 LLM 原始响应」弹窗里的「再次应用」）
+
+        ``row`` 是 Step 1 表格的渲染行号；通过 ``self._step1_visible_rows``
+        映射到 ``self._suggestions`` 的真实索引（task #21）。
         """
         w = QWidget()
         hl = QHBoxLayout(w)
@@ -2477,13 +2634,19 @@ class LibraryInitWizard(WizardPlugin):
             lbl.setAlignment(Qt.AlignCenter)
             hl.addWidget(lbl)
 
+        # 渲染行号 → 真实索引；按钮回调用真实索引调 _on_decision_changed
+        src_idx = (
+            self._step1_visible_rows[row]
+            if 0 <= row < len(self._step1_visible_rows) else row
+        )
+
         if show_buttons:
             b_ok = QPushButton("批准")
             b_ok.setMinimumWidth(46)
             b_ok.setFixedHeight(26)
             b_ok.setToolTip("批准这条 LLM 建议（立即把 LLM 的 type / hint 固化到该字段）")
             b_ok.clicked.connect(
-                lambda _c=False, idx=row: self._on_decision_changed(idx, "approved")
+                lambda _c=False, sidx=src_idx: self._on_decision_changed(sidx, "approved")
             )
             hl.addWidget(b_ok)
 
@@ -2495,7 +2658,7 @@ class LibraryInitWizard(WizardPlugin):
                 "新增字段会被移除，可以基于还原后的内容继续修改）"
             )
             b_no.clicked.connect(
-                lambda _c=False, idx=row: self._on_decision_changed(idx, "rejected")
+                lambda _c=False, sidx=src_idx: self._on_decision_changed(sidx, "rejected")
             )
             hl.addWidget(b_no)
 
@@ -2503,8 +2666,20 @@ class LibraryInitWizard(WizardPlugin):
         self.tbl.setCellWidget(row, 0, w)
 
     def _refresh_change_cell(self, row: int) -> None:
-        if 0 <= row < len(self._suggestions):
-            self._make_change_cell(row, self._suggestions[row])
+        """重画 Step 1 表第 ``row`` 行的"LLM 建议"单元格（task #21：行号是渲染行号）。"""
+        if not (0 <= row < len(self._step1_visible_rows)):
+            return
+        src_idx = self._step1_visible_rows[row]
+        if 0 <= src_idx < len(self._suggestions):
+            self._make_change_cell(row, self._suggestions[src_idx])
+
+    def _src_idx_to_render_row(self, src_idx: int) -> int:
+        """task #21：把 ``self._suggestions`` 的真实索引翻译回 Step 1 渲染行号。
+        没找到（被过滤掉的 existing_user_field）返回 -1。"""
+        try:
+            return self._step1_visible_rows.index(src_idx)
+        except ValueError:
+            return -1
 
     def _on_decision_changed(self, idx: int, decision: str) -> None:
         """批准 / 驳回按钮：**立即**把决定固化到 ann，并重画对应行。
@@ -2531,7 +2706,9 @@ class LibraryInitWizard(WizardPlugin):
         # 因为内容已被前一次操作改过；想恢复 LLM 建议请用弹窗里的"再次应用"）
         if ann.decision == decision:
             ann.decision = "pending"
-            self._refresh_change_cell(idx)
+            r = self._src_idx_to_render_row(idx)
+            if r >= 0:
+                self._refresh_change_cell(r)
             return
 
         if decision == "approved":
@@ -2546,7 +2723,9 @@ class LibraryInitWizard(WizardPlugin):
             # 批准 llm_suggest_rename：补 selected=True 让 action 进 rename 路径
             elif ann.status == "llm_suggest_rename":
                 ann.selected = True
-            self._refresh_change_cell(idx)
+            r = self._src_idx_to_render_row(idx)
+            if r >= 0:
+                self._refresh_change_cell(r)
             # llm_suggest_delete / llm_suggest_rename 批准/驳回会改变状态列文字
             # （"将删除（已批准）" / "✎ 将改名 → ..."），整表重画一次更稳
             if ann.status in ("llm_suggest_delete", "llm_suggest_rename"):
@@ -2558,30 +2737,29 @@ class LibraryInitWizard(WizardPlugin):
             # 直接从列表移除
             del self._suggestions[idx]
             self._render_preview([])
-            new_row = min(idx, len(self._suggestions) - 1)
-            if new_row >= 0:
-                self.tbl.setCurrentCell(new_row, 2)
             return
         if ann.status == "llm_suggest_delete":
             # 驳回 LLM 删除建议 → 退化为普通 existing_user_field（保留）
+            # task #21：existing_user_field 不在 Step 1 显示；驳回后该行直接消失
             ann.status = "existing_user_field"
             ann.selected = True
             ann.decision = "rejected"
             ann.reason = (
                 "LLM 曾建议删除此字段，已被你驳回；保留中。"
-                "如果想删除，可以点行操作的「删除」按钮。"
+                "下一步进入字段表后，可以再点行操作的「删除」按钮真删除。"
             )
             self._render_preview([])
             return
         if ann.status == "llm_suggest_rename":
             # 驳回 LLM 改名建议 → 退化为普通 existing_user_field（保留原名）
+            # task #21：existing_user_field 不在 Step 1 显示；驳回后该行直接消失
             ann.status = "existing_user_field"
             ann.selected = True
             ann.decision = "rejected"
             ann.llm_rename_new_name = ""
             ann.reason = (
                 "LLM 曾建议改名此字段，已被你驳回；保留原名。"
-                "如果想改名，可以用场景页的「✎ 重命名」按钮。"
+                "下一步进入字段表后，可以在那里改名。"
             )
             self._render_preview([])
             return
@@ -2590,10 +2768,12 @@ class LibraryInitWizard(WizardPlugin):
         ann.decision = "rejected"
         if ann.status in ("same_type", "system_required"):
             ann.prompt_hint = ann.existing_prompt_hint or ""
-            # 同步表格里的 LLM 提示单元格
-            it_h = self.tbl.item(idx, 4)
-            if it_h is not None:
-                it_h.setText(ann.prompt_hint)
+            # 同步表格里的 LLM 提示单元格（用渲染行号）
+            r = self._src_idx_to_render_row(idx)
+            if r >= 0:
+                it_h = self.tbl.item(r, 4)
+                if it_h is not None:
+                    it_h.setText(ann.prompt_hint)
         elif ann.status == "type_conflict":
             # task #19 Phase B：驳回 type_conflict → selected=False（action 变 skip），
             # type 回滚到现有类型，hint 还原为旧值；ann.status 仍保持
@@ -2604,7 +2784,7 @@ class LibraryInitWizard(WizardPlugin):
             ann.prompt_hint = ann.existing_prompt_hint or ""
             ann.reason = (
                 "LLM 曾建议修改此字段的类型，已被你驳回；保持不变。"
-                "如果想另建一个新名字的字段，可以用预览表底部的「＋ 添加字段」按钮。"
+                "如果还是想改类型，请用 Step 2 字段表里的类型下拉。"
             )
         # existing_user_field：本来就不算 LLM 建议（由用户行操作"删除"驱动），
         # 到这里只标 decision
@@ -2697,184 +2877,21 @@ class LibraryInitWizard(WizardPlugin):
         self.lbl_desc_decision.setVisible(True)
 
 
-    # ---- 预览页行操作（增 / 删 / 上下移） ---------------------------------
+    # ---- 预览页行操作 -----------------------------------------------------
+    # task #21 起 Step 1 不再承载"自主增删字段"动作（迁移到 Step 2）；以下
+    # 历史方法保留为空体以兼容外部调用，不再绑定到任何按钮信号
     def _current_preview_row(self) -> int:
         return self.tbl.currentRow()
 
-    def _on_preview_row_add(self) -> None:
-        """在末尾追加一条空白「new」字段，用户在表里直接编辑名字与类型。"""
-        from PySide6.QtWidgets import QInputDialog
-
-        name, ok = QInputDialog.getText(
-            self, "添加字段",
-            "字段名（默认类型：单行文本，可在表格中改）：",
-        )
-        if not ok or not name.strip():
-            return
-        name = name.strip()
-        # 防止与现有 ann 重名
-        existing_names = {a.effective_name for a in self._suggestions}
-        if name in existing_names:
-            QMessageBox.warning(
-                self, "字段名重复",
-                f"「{name}」已经在列表中存在，请换一个名字。",
-            )
-            return
-        ann = AnnotatedSuggestion(name=name, type="text", prompt_hint="")
-        ann.status = "new"
-        ann.selected = True
-        ann.llm_touched = False  # 用户手动加的，不是 LLM 建议
-        self._suggestions.append(ann)
-        # 整表重画并把光标定位到新行
-        self._render_preview([])
-        self.tbl.setCurrentCell(len(self._suggestions) - 1, 2)
-
-    def _on_preview_row_delete(self) -> None:
-        """删除当前选中行。
-
-        * ``new`` / 用户手加（``llm_touched=False`` 的 new）：
-          直接从 ``_suggestions`` 中移除
-        * ``llm_suggest_delete``：等价"批准 LLM 的删除建议"（selected=True + decision=approved），
-          状态列变红字"将删除（已批准）"
-        * ``llm_suggest_rename`` / ``type_conflict``：用户表态"我连这字段都不想要了"
-          → 退化为 ``existing_user_field`` + ``selected=False``（标记删除），
-          清掉关联的 LLM 改名/改类型痕迹
-        * ``existing_user_field`` / ``same_type``：
-          设 selected=False（标记为"将删除"）
-        * ``system_required``：拒绝删除（弹消息）
-        """
-        r = self._current_preview_row()
-        if r < 0 or r >= len(self._suggestions):
-            return
-        ann = self._suggestions[r]
-        if ann.status == "system_required":
-            QMessageBox.information(
-                self, "无法删除",
-                f"「{ann.name}」是系统必有字段，无法删除。",
-            )
-            return
-        if ann.status == "new":
-            # 直接从列表移除
-            del self._suggestions[r]
-            self._render_preview([])
-            new_row = min(r, len(self._suggestions) - 1)
-            if new_row >= 0:
-                self.tbl.setCurrentCell(new_row, 2)
-            return
-        if ann.status == "llm_suggest_delete":
-            # 行操作"删除" = 批准 LLM 的删除建议
-            ann.selected = True
-            ann.decision = "approved"
-            self._render_preview([])
-            return
-        if ann.status in ("llm_suggest_rename", "type_conflict"):
-            # 用户的意思是"这字段我不要了"：先转成普通现有字段，再走标记删除路径
-            # task #19 Phase B：type_conflict 的行删除也走这条路径——
-            # 撤掉对类型 / hint 的修改意图，把字段当现有字段标记删除
-            former = ann.status
-            ann.status = "existing_user_field"
-            ann.llm_rename_new_name = ""
-            # 还原 type / hint 到旧值，避免被当成现有字段时仍带着 LLM 给的
-            # 新 type/hint 数据
-            if ann.existing_field_type:
-                ann.type = ann.existing_field_type
-            ann.prompt_hint = ann.existing_prompt_hint or ""
-            ann.decision = "pending"
-            if former == "llm_suggest_rename":
-                ann.reason = (
-                    "LLM 曾建议改名此字段，被你转为删除；将在「应用」时删除该字段。"
-                )
-            else:  # type_conflict
-                ann.reason = (
-                    "LLM 曾建议修改此字段类型，被你转为删除；"
-                    "将在「应用」时删除该字段。"
-                )
-            self._apply_selected_change(r, False)
-            self._render_preview([])
-            return
-        # existing_user_field / same_type → 标记将删除
-        self._apply_selected_change(r, False)
-
-    def _on_preview_row_move(self, delta: int) -> None:
-        """上下移当前选中行。
-
-        约束：
-        * 系统必有字段（system_required）始终保持在最前；不允许移动它们，
-          也不允许其它字段越过它们（target 不能落到 system_required 区段里）。
-        """
-        r = self._current_preview_row()
-        if r < 0 or r >= len(self._suggestions):
-            return
-        target = r + delta
-        if target < 0 or target >= len(self._suggestions):
-            return
-        moving = self._suggestions[r]
-        if moving.status == "system_required":
-            QMessageBox.information(
-                self, "无法移动",
-                "系统必有字段（标题 / 描述 / 标签）固定在最前，无法重排。",
-            )
-            return
-        if self._suggestions[target].status == "system_required":
-            QMessageBox.information(
-                self, "无法移动",
-                "不能越过系统必有字段；其余字段必须排在其后。",
-            )
-            return
-        self._suggestions[r], self._suggestions[target] = (
-            self._suggestions[target], self._suggestions[r],
-        )
-        self._render_preview([])
-        self.tbl.setCurrentCell(target, 2)
-
-    def _wrap_cell(self, tbl: QTableWidget, row: int, col: int, widget) -> None:
-        """把 widget 居中包进单元格。"""
-        w = QWidget()
-        hl = QHBoxLayout(w)
-        hl.setContentsMargins(0, 0, 0, 0)
-        hl.addStretch(1)
-        hl.addWidget(widget)
-        hl.addStretch(1)
-        tbl.setCellWidget(row, col, w)
-
-    def _apply_selected_change(self, idx: int, on: bool) -> None:
-        """同步行的 selected 变更到表格视觉（状态列文字 / 红字）。
-
-        历史：旧版本有勾选列 + ``_on_row_checkbox_toggled`` 信号槽；6/1 晚去掉勾选
-        列后，"保留 / 删除"由顶部行操作按钮（_on_preview_row_delete）触发，
-        本函数被复用为视觉刷新入口。
-        """
-        if not (0 <= idx < len(self._suggestions)):
-            return
-        ann = self._suggestions[idx]
-        ann.selected = on
-        # existing_user_field / same_type 的"取消保留"都意味着应用时真删该字段
-        # （same_type 的 action 属性现在也对 selected=False 走 delete 路径）；
-        # 共享同一套视觉刷新规则
-        if ann.status in ("existing_user_field", "same_type"):
-            it = self.tbl.item(idx, 1)  # 状态列在新 5 列布局是第 1 列
-            if it is None:
-                return
-            from PySide6.QtGui import QColor
-            if on:
-                label, _ = self._STATUS_DISPLAY[ann.status]
-                it.setText(label)
-                # 复用默认前景（重置颜色）
-                it.setData(Qt.ForegroundRole, None)
-            else:
-                it.setText("🗑 将删除")
-                it.setForeground(QColor("#c62828"))
-        # 现有字段切到删除/保留也会改变 LLM 建议列的标签（"删除" / ""）
-        self._refresh_change_cell(idx)
-
     def _on_type_changed(self, idx: int, new_type: str) -> None:
-        """用户在表里改了类型 ComboBox。
+        """用户在 Step 1 表里改了类型 ComboBox。``idx`` 是 ``self._suggestions``
+        的真实索引（task #21）。
 
         关键逻辑（task #19 Phase B 收尾）：如果用户把 ``same_type`` 行的类型
         改成跟现有字段类型不同，自动**升级**该 ann 为 ``type_conflict`` ——
         下次 apply 时走 change_type 路径（原地改类型 + 写新 hint + supersede
-        pending）。这样用户在预览页就能用统一的"改类型"流程处理"我刚加的字段
-        类型还想改"的需求，无需返回「设置 → 字段」。
+        pending）。这样用户在 Step 1 就能用统一的"改类型"流程处理"我刚加的字段
+        类型还想改"的需求，无需返回 Step 2 / 设置。
         """
         if not (0 <= idx < len(self._suggestions)):
             return
@@ -2911,105 +2928,484 @@ class LibraryInitWizard(WizardPlugin):
     # 改名建新字段路径（写入 ann.rename_to）。task #19 Phase B 起 type_conflict
     # 改为"批准 = 原地改类型 / 驳回 = 不动"二态，LineEdit 已移除，槽函数随之删除。
 
-    # ---- 收集 / 应用 -------------------------------------------------------
-    def _collect_user_edited_payload(self) -> dict:
-        """从表格里读出当前编辑后的 fields，回灌给 history 用。
+    # ---- task #21：Step 1 → Step 2 切换 ----------------------------------
+    def _on_step1_next(self) -> None:
+        """点 Step 1 底部"下一步 →"按钮：把 Step 1 决策 + 库描述编辑同步回
+        ``self._suggestions``，然后用 ``merge_decisions_into_drafts`` 合并出
+        Step 2 字段表草稿，切到 Step 2。"""
+        if self.repo is None:
+            return
+        # 把 Step 1 表里用户对字段名 / hint 的微调收回到 ann
+        self._sync_step1_edits_into_suggestions()
 
-        副作用：同时把库描述编辑框的内容同步回 ``self._library_desc_suggested``，
-        让下一轮 ``_dispatch_call`` 拿到用户改过的版本。
+        existing = self.repo.list_fields() if self.repo else []
+        # 缓存：受保护字段的 fid 集合（用于 Step 2 渲染时判断不可改）
+        self._protected_fids = {
+            f.id for f in existing
+            if (f.id is not None) and (f.key in PROTECTED_FIELD_KEYS)
+        }
+        self._drafts = merge_decisions_into_drafts(self._suggestions, existing)
+        # 进入 Step 2 时记录基线（用于 Back 时检测是否被编辑过）
+        self._drafts_baseline = [clone_draft(d) for d in self._drafts]
+        self._render_step2_table()
+        self.stack.setCurrentIndex(PAGE_STEP2)
+
+    @staticmethod
+    def _clone_draft(d: "FieldDraft") -> "FieldDraft":
+        """task #21：浅拷贝一个 FieldDraft（转发到模块级 ``clone_draft``）。"""
+        return clone_draft(d)
+
+    def _drafts_dirty(self) -> bool:
+        """task #21：Step 2 草稿是否被用户编辑过（与 ``_drafts_baseline`` 比较）。"""
+        return drafts_are_dirty(self._drafts, self._drafts_baseline)
+
+    def _sync_step1_edits_into_suggestions(self) -> None:
+        """把 Step 1 表里用户的字段名 / hint 微调同步回 ``self._suggestions``。
+
+        注意：type 改动已通过 ``_on_type_changed`` 实时同步；这里只处理
+        name / prompt_hint。仅遍历 Step 1 当前可见的渲染行
+        （existing_user_field 行被过滤掉、不会出现在 Step 1）。同时把库描述
+        编辑框的内容同步到 ``_library_desc_suggested``。
         """
-        out = []
-        for row, ann in enumerate(self._suggestions):
-            # name（系统必有字段、type_conflict 路径都不允许从表格里改名）
-            if ann.status in ("type_conflict", "system_required"):
-                name = ann.name  # 强制不动
+        for row, src_idx in enumerate(self._step1_visible_rows):
+            if not (0 <= src_idx < len(self._suggestions)):
+                continue
+            ann = self._suggestions[src_idx]
+            # 字段名（仅 new 状态允许从 Step 1 表里改名）
+            if ann.status == "new":
+                it = self.tbl.item(row, 2)
+                if it is not None:
+                    new_name = it.text().strip()
+                    if new_name:
+                        ann.name = new_name
+            # hint（双击编辑路径已经同步 ann.prompt_hint，这里再兜一层防御）
+            it_h = self.tbl.item(row, 4)
+            if it_h is not None:
+                ann.prompt_hint = it_h.text()
+        # 库描述
+        if hasattr(self, "ed_preview_library_desc"):
+            self._library_desc_suggested = (
+                self.ed_preview_library_desc.toPlainText().strip()
+            )
+
+    # ---- task #21：Step 2 视图渲染 ---------------------------------------
+    _ORIGIN_BADGE = {
+        DRAFT_ORIGIN_EXISTING: ("📋 现有", "原本就存在的字段"),
+        DRAFT_ORIGIN_LLM_NEW: ("🤖 LLM 新增", "Step 1 批准的 LLM 新增建议"),
+        DRAFT_ORIGIN_LLM_RENAMED: ("✏ LLM 改名", "Step 1 批准的 LLM 改名建议"),
+        DRAFT_ORIGIN_LLM_TYPECHANGED: ("⚠ LLM 改类型", "Step 1 批准的 LLM 改类型建议"),
+        DRAFT_ORIGIN_LLM_DELETED: ("🗑 LLM 标删", "Step 1 批准的 LLM 删除建议"),
+        DRAFT_ORIGIN_USER_NEW: ("👤 新增", "你在 Step 2 添加的新字段"),
+    }
+
+    def _render_step2_table(self) -> None:
+        """根据 ``self._drafts`` 渲染 Step 2 字段表。"""
+        from PySide6.QtGui import QColor
+
+        tbl = self.tbl_step2
+        tbl.blockSignals(True)
+        try:
+            tbl.setRowCount(0)
+            for row, d in enumerate(self._drafts):
+                tbl.insertRow(row)
+
+                # 0：来源徽章
+                badge, badge_tip = self._ORIGIN_BADGE.get(
+                    d.origin, (d.origin, ""),
+                )
+                it_badge = QTableWidgetItem(badge)
+                it_badge.setFlags(it_badge.flags() & ~Qt.ItemIsEditable)
+                it_badge.setToolTip(badge_tip)
+                tbl.setItem(row, 0, it_badge)
+
+                # 1：字段名
+                it_name = QTableWidgetItem(d.name)
+                # 受保护字段（is_required=True）不可改名；划删线行也不可改名
+                is_protected = self._draft_is_protected(d)
+                if is_protected or d.deleted:
+                    it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
+                tbl.setItem(row, 1, it_name)
+
+                # 2：类型 ComboBox
+                cmb = QComboBox()
+                cmb.setMinimumHeight(26)
+                cmb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+                for t in FIELD_TYPES:
+                    cmb.addItem(FIELD_TYPE_LABELS.get(t, t), t)
+                # 保留未知类型（如 "tags"）
+                if cmb.findData(d.type) < 0:
+                    cmb.addItem(FIELD_TYPE_LABELS.get(d.type, d.type), d.type)
+                cmb.setCurrentIndex(max(0, cmb.findData(d.type)))
+                if is_protected or d.deleted:
+                    cmb.setEnabled(False)
+                cmb.currentIndexChanged.connect(
+                    lambda _i, ridx=row, c=cmb:
+                        self._on_step2_type_changed(ridx, c.currentData())
+                )
+                tbl.setCellWidget(row, 2, cmb)
+
+                # 3：LLM 提示
+                it_hint = QTableWidgetItem(d.prompt_hint)
+                if d.deleted:
+                    it_hint.setFlags(it_hint.flags() & ~Qt.ItemIsEditable)
+                else:
+                    # 双击走 _on_step2_cell_double_clicked 弹多行编辑器
+                    it_hint.setFlags(it_hint.flags() & ~Qt.ItemIsEditable)
+                it_hint.setToolTip(
+                    "双击此格弹出多行编辑器修改 LLM 提示" if not d.deleted
+                    else "（划删线行无法编辑）"
+                )
+                tbl.setItem(row, 3, it_hint)
+
+                # 4：操作按钮
+                op_w = QWidget()
+                op_h = QHBoxLayout(op_w)
+                op_h.setContentsMargins(2, 2, 2, 2)
+                op_h.setSpacing(4)
+                if d.deleted:
+                    b_undo = QPushButton("↩ 撤销删除")
+                    b_undo.setFixedHeight(24)
+                    b_undo.setToolTip("恢复此字段（如撤销后会重名将弹错）")
+                    b_undo.clicked.connect(
+                        lambda _c=False, ridx=row: self._on_step2_undelete(ridx)
+                    )
+                    op_h.addWidget(b_undo)
+                elif is_protected:
+                    lbl = QLabel("（受保护）")
+                    lbl.setStyleSheet("color:#999;")
+                    op_h.addWidget(lbl)
+                else:
+                    b_del = QPushButton("🗑 删除")
+                    b_del.setFixedHeight(24)
+                    b_del.setProperty("danger", True)
+                    b_del.clicked.connect(
+                        lambda _c=False, ridx=row: self._on_step2_delete(ridx)
+                    )
+                    op_h.addWidget(b_del)
+                op_h.addStretch(1)
+                tbl.setCellWidget(row, 4, op_w)
+
+                # 5：状态徽章 / 提示（用于划删线行的额外说明）
+                if d.deleted:
+                    it_st = QTableWidgetItem("🗑 将删除")
+                    it_st.setForeground(QColor("#c62828"))
+                else:
+                    it_st = QTableWidgetItem("")
+                it_st.setFlags(it_st.flags() & ~Qt.ItemIsEditable)
+                tbl.setItem(row, 5, it_st)
+
+                # 划删线行：所有 cell 灰化
+                if d.deleted:
+                    for col in range(tbl.columnCount()):
+                        c_item = tbl.item(row, col)
+                        if c_item is not None:
+                            font = c_item.font()
+                            font.setStrikeOut(True)
+                            c_item.setFont(font)
+                            c_item.setForeground(QColor("#999999"))
+        finally:
+            tbl.blockSignals(False)
+
+        # 渲染完后做一次唯一性 / 必填校验，更新警告区
+        self._refresh_step2_warnings()
+
+    def _draft_is_protected(self, d: "FieldDraft") -> bool:
+        """task #21：判断 draft 是否对应受保护字段（``is_required=True``）。
+
+        通过 ``self._protected_fids``（``_on_step1_next`` 时根据
+        ``PROTECTED_FIELD_KEYS`` 缓存的 fid 集合）判定；保护字段类型固定，
+        Step 2 渲染时禁用字段名 / 类型 / 删除按钮。
+        """
+        if d.origin != DRAFT_ORIGIN_EXISTING:
+            return False
+        if d.existing_field_id is None:
+            return False
+        return d.existing_field_id in getattr(self, "_protected_fids", set())
+
+    def _refresh_step2_warnings(self) -> None:
+        """检查 Step 2 字段表的合法性，把警告显示在底部。"""
+        msgs: list[str] = []
+        # 1) 未删除行的字段名唯一性
+        seen: dict[str, int] = {}
+        for i, d in enumerate(self._drafts):
+            if d.deleted:
+                continue
+            n = (d.name or "").strip()
+            if not n:
+                msgs.append(f"第 {i+1} 行字段名为空")
+                continue
+            if n in seen:
+                msgs.append(f"字段名「{n}」重复（第 {seen[n]+1} 行 与 第 {i+1} 行）")
             else:
-                it = self.tbl.item(row, 2)  # 字段名列（5 列布局）
-                name = it.text().strip() if it else ann.name
-                ann.name = name
-            # hint
-            it_h = self.tbl.item(row, 4)  # LLM 提示列（5 列布局）
-            hint = it_h.text() if it_h else ann.prompt_hint
-            ann.prompt_hint = hint
-            out.append({"name": name, "type": ann.type, "prompt_hint": hint})
+                seen[n] = i
+        if msgs:
+            self.lbl_step2_warnings.setText("⚠ " + "；".join(msgs))
+            self.lbl_step2_warnings.setVisible(True)
+        else:
+            self.lbl_step2_warnings.setVisible(False)
 
-        # 库描述：从预览页编辑框收回，覆盖 _library_desc_suggested
-        edited_desc = self.ed_preview_library_desc.toPlainText().strip()
+    def _on_step2_cell_double_clicked(self, row: int, col: int) -> None:
+        """Step 2 表的 LLM 提示列双击 → 弹多行编辑器。"""
+        if col != 3:
+            return
+        if not (0 <= row < len(self._drafts)):
+            return
+        d = self._drafts[row]
+        if d.deleted:
+            return
+        new_text, ok = _ask_text(
+            self, f"编辑 LLM 提示 — {d.name}",
+            "请输入该字段的 LLM 提示（多行）：",
+            initial=d.prompt_hint,
+        )
+        if not ok:
+            return
+        d.prompt_hint = new_text
+        it = self.tbl_step2.item(row, 3)
+        if it is not None:
+            it.setText(new_text)
+
+    def _on_step2_item_changed(self, item: "QTableWidgetItem") -> None:
+        """Step 2 表的 itemChanged 信号：处理用户在字段名列直接编辑。"""
+        if item is None:
+            return
+        col = item.column()
+        row = item.row()
+        if col != 1:  # 仅字段名列
+            return
+        if not (0 <= row < len(self._drafts)):
+            return
+        d = self._drafts[row]
+        if d.deleted:
+            return
+        new_name = item.text().strip()
+        if new_name == d.name:
+            return
+        d.name = new_name
+        self._refresh_step2_warnings()
+
+    def _on_step2_type_changed(self, row: int, new_type: str) -> None:
+        """Step 2 表的类型 ComboBox 改动。
+
+        如果 origin == ``existing`` 且与 ``original_type`` 不兼容、且字段已有
+        数据 / pending 建议 / 非空 hint，弹 ``_FieldTypeChangeConfirmDialog``
+        让用户确认；其它情况静默改。
+        """
+        if not (0 <= row < len(self._drafts)):
+            return
+        d = self._drafts[row]
+        if d.deleted:
+            return
+        old_type = d.type
+        if old_type == new_type:
+            return
+        # 仅对 existing 字段（有 fid）做兼容性 & 数据保护检查
+        if (
+            d.origin == DRAFT_ORIGIN_EXISTING
+            and d.existing_field_id is not None
+            and self.repo is not None
+        ):
+            from ...models import is_compatible_type_change
+            from ..settings_dialog import _FieldTypeChangeConfirmDialog
+
+            try:
+                if not is_compatible_type_change(d.original_type or old_type, new_type):
+                    f = self.repo.get_field(d.existing_field_id)
+                    if f is None:
+                        d.type = new_type
+                        return
+                    try:
+                        n_values = self.repo.count_field_filled(f)
+                    except Exception:
+                        n_values = 0
+                    m_pending = self.repo.conn.execute(
+                        "SELECT COUNT(*) FROM project_field_suggestions "
+                        "WHERE field_id=? AND status='pending'",
+                        (d.existing_field_id,),
+                    ).fetchone()[0]
+                    has_hint = bool((d.prompt_hint or "").strip())
+                    if int(n_values) == 0 and int(m_pending) == 0 and not has_hint:
+                        d.type = new_type
+                        return
+                    confirmed, _clear = _FieldTypeChangeConfirmDialog.ask(
+                        self, f, new_type, int(n_values), int(m_pending),
+                    )
+                    if not confirmed:
+                        # 用户取消 → 把 ComboBox 视觉恢复到 old_type
+                        cmb = self.tbl_step2.cellWidget(row, 2)
+                        if cmb is not None:
+                            cmb.blockSignals(True)
+                            idx_old = cmb.findData(old_type)
+                            if idx_old >= 0:
+                                cmb.setCurrentIndex(idx_old)
+                            cmb.blockSignals(False)
+                        return
+            except Exception:  # noqa: BLE001
+                pass
+        d.type = new_type
+
+    def _on_step2_delete(self, row: int) -> None:
+        """点 Step 2 表"删除"按钮：``user_new`` 直接从 drafts 移除；其余设
+        ``deleted=True`` 划删线展示。"""
+        if not (0 <= row < len(self._drafts)):
+            return
+        d = self._drafts[row]
+        if d.origin == DRAFT_ORIGIN_USER_NEW:
+            del self._drafts[row]
+        else:
+            d.deleted = True
+        self._render_step2_table()
+
+    def _on_step2_undelete(self, row: int) -> None:
+        """点 Step 2 表"撤销删除"按钮：实时校验重名，冲突时弹错。"""
+        if not (0 <= row < len(self._drafts)):
+            return
+        conflict = check_undelete_name_conflict(self._drafts, row)
+        if conflict is not None:
+            # 描述冲突来源
+            origin_desc = {
+                DRAFT_ORIGIN_USER_NEW: "你新增的字段",
+                DRAFT_ORIGIN_LLM_RENAMED: "LLM 建议改名后产生的字段",
+                DRAFT_ORIGIN_EXISTING: (
+                    f"你修改了现有字段「{conflict.original_name}」的名字"
+                    if conflict.original_name and conflict.original_name != conflict.name
+                    else "现有同名字段"
+                ),
+                DRAFT_ORIGIN_LLM_NEW: "LLM 新建的字段",
+                DRAFT_ORIGIN_LLM_TYPECHANGED: "LLM 建议改类型后保留的字段",
+            }.get(conflict.origin, "其它字段")
+            QMessageBox.warning(
+                self, "无法撤销删除",
+                f"无法撤销删除「{self._drafts[row].name}」：当前字段表里已有同名字段。\n\n"
+                f"冲突来源：{origin_desc}\n\n"
+                "请先调整冲突字段的名字，再撤销此删除。",
+            )
+            return
+        self._drafts[row].deleted = False
+        self._render_step2_table()
+
+    def _on_step2_add_field(self) -> None:
+        """点"＋ 添加字段"按钮：在末尾追加 user_new draft 并重画。"""
+        from PySide6.QtWidgets import QInputDialog
+
+        name, ok = QInputDialog.getText(
+            self, "添加字段",
+            "字段名（默认类型：单行文本，可在表格中改）：",
+        )
+        if not ok or not name.strip():
+            return
+        name = name.strip()
+        # 防止与未删除行重名
+        existing = {(d.name or "").strip() for d in self._drafts if not d.deleted}
+        if name in existing:
+            QMessageBox.warning(
+                self, "字段名重复",
+                f"「{name}」已存在于当前字段表。请换一个名字。",
+            )
+            return
+        self._drafts.append(FieldDraft(
+            origin=DRAFT_ORIGIN_USER_NEW,
+            existing_field_id=None,
+            original_name=None,
+            original_type=None,
+            name=name,
+            type="text",
+            prompt_hint="",
+            deleted=False,
+        ))
+        self._render_step2_table()
+
+    def _on_step2_back(self) -> None:
+        """点"← 放弃修改并返回"按钮：检测 drafts 是否被编辑过；有编辑则弹确认。"""
+        if self._drafts_dirty():
+            ret = QMessageBox.question(
+                self, "确认返回",
+                "返回会丢弃当前在字段表里做的所有修改（增/删/改名/改类型/改提示）。\n"
+                "Step 1 里对 LLM 建议的批准/驳回决策会保留。\n\n"
+                "确认返回？",
+                QMessageBox.Cancel | QMessageBox.Yes,
+                QMessageBox.Cancel,
+            )
+            if ret != QMessageBox.Yes:
+                return
+        # 丢弃 drafts，回 Step 1
+        self._drafts = []
+        self._drafts_baseline = []
+        self.stack.setCurrentIndex(PAGE_STEP1)
+
+    # ---- task #21：Step 2 应用 -------------------------------------------
+    def _collect_step1_feedback_payload(self) -> dict:
+        """收集 Step 1 反馈（决策 + 微调过的 hint + 库描述）作为 refine 的回灌。
+
+        与旧 ``_collect_user_edited_payload`` 的区别：**只**回灌 Step 1 反馈，
+        不含 Step 2 的字段表编辑（增 / 删 / 改名 / 改类型 / 改提示）；这些属于
+        "用户对最终落库表的私人处置"，与 LLM 无关（task #21 决策 9）。
+        """
+        # 字段名 / hint 的 Step 1 微调已通过 _sync_step1_edits_into_suggestions
+        # 同步到 ann，这里直接序列化 ann
+        out = []
+        for ann in self._suggestions:
+            out.append({
+                "name": ann.name,
+                "type": ann.type,
+                "prompt_hint": ann.prompt_hint,
+            })
+        edited_desc = (
+            self.ed_preview_library_desc.toPlainText().strip()
+            if hasattr(self, "ed_preview_library_desc") else ""
+        )
         self._library_desc_suggested = edited_desc
-
         return {
             "fields": out,
             "library_description": edited_desc,
         }
 
-    def _on_apply(self) -> None:
+    # 旧名兼容：refine 路径仍调 _collect_user_edited_payload
+    def _collect_user_edited_payload(self) -> dict:
+        """task #21：旧 API；现在转发到 ``_collect_step1_feedback_payload``。"""
+        return self._collect_step1_feedback_payload()
+
+    def _build_field_plan_from_drafts(self) -> "FieldPlan":
+        """task #21：把当前 ``self._drafts`` diff 成可应用的 FieldPlan。"""
+        existing = self.repo.list_fields() if self.repo else []
+        return diff_drafts_to_plan(self._drafts, existing)
+
+    def _on_step2_apply(self, *, continue_refine: bool = False) -> None:
+        """Step 2 应用按钮统一入口。
+
+        ``continue_refine=True`` 时走"应用并继续讨论"路径：落库后弹补充说明
+        启动新一轮 LLM；False 时落库后关闭对话框。
+        """
         if self.repo is None:
             return
-        # 同步用户的最新编辑
-        self._collect_user_edited_payload()
 
-        to_create: list[tuple[str, str, str]] = []
-        to_update_hint: list[tuple[int, str]] = []
-        to_delete: list[int] = []
-        to_rename: list[tuple[int, str]] = []
-        # task #19 Phase B：type_conflict 批准时收集 (fid, new_type, new_hint)
-        to_change_type: list[tuple[int, str, str]] = []
-        type_change_names: list[str] = []  # 用于结果消息 + 确认对话框
-        rename_names: list[tuple[str, str]] = []  # (old, new)，仅用于结果消息
-        delete_names: list[str] = []  # 用于二次确认对话框
-        # 删除来源：'user' = 用户主动取消保留；'llm' = 批准 LLM 删除建议
-        delete_sources: list[str] = []
-        for ann in self._suggestions:
-            act = ann.action
-            if act == "create":
-                name = ann.effective_name
-                if not name:
-                    QMessageBox.warning(
-                        self, "字段名为空",
-                        f"建议「{ann.name}」需要设置一个有效的名字（或重命名）后才能创建。",
-                    )
-                    return
-                to_create.append((name, ann.type, ann.prompt_hint))
-            elif act == "update_hint_only":
-                if ann.existing_field_id is not None:
-                    to_update_hint.append(
-                        (ann.existing_field_id, ann.prompt_hint),
-                    )
-            elif act == "delete":
-                if ann.existing_field_id is not None:
-                    to_delete.append(ann.existing_field_id)
-                    delete_names.append(ann.name)
-                    delete_sources.append(
-                        "llm" if ann.status == "llm_suggest_delete" else "user"
-                    )
-            elif act == "rename":
-                if ann.existing_field_id is not None and ann.llm_rename_new_name:
-                    to_rename.append(
-                        (ann.existing_field_id, ann.llm_rename_new_name),
-                    )
-                    rename_names.append((ann.name, ann.llm_rename_new_name))
-            elif act == "change_type":
-                # type_conflict 批准 → 原地改类型 + 用 LLM 新 hint 覆盖
-                if ann.existing_field_id is not None:
-                    to_change_type.append(
-                        (ann.existing_field_id, ann.type, ann.prompt_hint),
-                    )
-                    type_change_names.append(ann.name)
-
-        # 同 batch 内可能改名后撞上别的待创建字段，做一次预检
-        names = [n for n, _, _ in to_create]
-        if len(set(names)) != len(names):
-            dups = sorted({n for n in names if names.count(n) > 1})
+        # 校验 drafts 合法性
+        self._refresh_step2_warnings()
+        if self.lbl_step2_warnings.isVisible():
             QMessageBox.warning(
-                self, "字段名重复",
-                f"以下字段在本次创建中重复：{', '.join(dups)}。请改名后再应用。",
+                self, "字段表存在问题",
+                "请先解决底部警告区列出的问题（重名 / 空字段名）后再应用。",
             )
             return
 
-        # task #19 Phase B：类型变更二次确认（仅当有 change_type 时）
-        if to_change_type:
+        plan = self._build_field_plan_from_drafts()
+        if plan.is_empty:
+            QMessageBox.information(
+                self, "无变更",
+                "当前字段表与现有库一致，没有可应用的变更。",
+            )
+            return
+
+        # 应用前汇总对话框
+        dlg_summary = _ApplySummaryDialog(plan, parent=self)
+        if dlg_summary.exec() != QDialog.Accepted:
+            return
+
+        # 按 plan 内容串联二次确认
+        # 1) 类型变更确认
+        if plan.type_changes:
             type_entries: list[tuple[str, str, str, int, int]] = []
-            for (fid, new_type, _hint), name in zip(to_change_type, type_change_names):
+            for fid, new_type, _new_hint in plan.type_changes:
                 f = self.repo.get_field(fid)
                 if f is None:
                     continue
@@ -3023,41 +3419,48 @@ class LibraryInitWizard(WizardPlugin):
                     (fid,),
                 ).fetchone()[0]
                 type_entries.append(
-                    (name, f.type, new_type, int(n_values), int(m_pending)),
+                    (f.name, f.type, new_type, int(n_values), int(m_pending)),
                 )
-            dlg_tc = _BatchTypeChangeConfirmDialog(type_entries, parent=self)
-            if dlg_tc.exec() != QDialog.Accepted:
-                return
+            if type_entries:
+                dlg_tc = _BatchTypeChangeConfirmDialog(type_entries, parent=self)
+                if dlg_tc.exec() != QDialog.Accepted:
+                    return
 
-        # 删除二次确认（仅当有删除时）
+        # 2) 删除确认
         append_for_fids: set[int] = set()
-        if to_delete:
-            # 统计每个待删字段的填充率 + 来源
-            entries: list[tuple[int, str, int, str]] = []  # (fid, name, count, src)
-            for fid, name, src in zip(to_delete, delete_names, delete_sources):
+        if plan.deletes:
+            entries: list[tuple[int, str, int, str]] = []
+            for fid in plan.deletes:
                 f = self.repo.get_field(fid)
                 if f is None:
-                    entries.append((fid, name, 0, src))
+                    entries.append((fid, "(已不存在)", 0, "user"))
                     continue
                 try:
                     n = self.repo.count_field_filled(f)
                 except Exception:
                     n = 0
-                entries.append((fid, name, n, src))
-
-            dlg = _BatchDeleteConfirmDialog(entries, parent=self)
-            if dlg.exec() != QDialog.Accepted:
+                # 判定来源：从 drafts 里反查，origin == llm_deleted → llm
+                src = "user"
+                for d in self._drafts:
+                    if d.existing_field_id == fid and d.deleted:
+                        src = "llm" if d.origin == DRAFT_ORIGIN_LLM_DELETED else "user"
+                        break
+                entries.append((fid, f.name, n, src))
+            dlg_del = _BatchDeleteConfirmDialog(entries, parent=self)
+            if dlg_del.exec() != QDialog.Accepted:
                 return
-            append_for_fids = dlg.append_for_fids
+            append_for_fids = dlg_del.append_for_fids
 
-        # 事务化批量应用：改类型 + 改名 + 创建 + 更新 hint + 删除
+        # 3) 事务化批量应用
         try:
             new_ids, n_deleted, n_renamed, n_type_changed = (
                 self.repo.apply_field_plan_batch(
-                    to_create, to_update_hint, to_delete,
+                    plan.creates,
+                    plan.updates_hint,
+                    plan.deletes,
                     append_for_fids=append_for_fids,
-                    renames=to_rename,
-                    type_changes=to_change_type,
+                    renames=plan.renames,
+                    type_changes=plan.type_changes,
                 )
             )
         except Exception as e:  # noqa: BLE001
@@ -3065,42 +3468,84 @@ class LibraryInitWizard(WizardPlugin):
                 self, "应用失败",
                 f"应用字段方案时出错，已回滚（库内字段表无变化）：\n{e}",
             )
-            return  # 不关闭助手，让用户继续修改
+            return
 
-        # 库描述：一并写入 settings（事务外，幂等）
-        new_desc = self._library_desc_suggested.strip()
-        n_desc_changed = 0
+        # 4) 库描述（事务外，幂等）
+        new_desc = (self._library_desc_suggested or "").strip()
         if new_desc:
             cur_desc = self.repo.get_setting("library_description", "") or ""
             if new_desc != cur_desc:
                 self.repo.set_setting("library_description", new_desc)
-                n_desc_changed = 1
 
-        n_new = len(new_ids)
-        n_upd = len(to_update_hint)
-        msg_parts = [
-            f"已新建字段 {n_new} 个",
-            f"更新已存在字段的 LLM 提示 {n_upd} 个",
-        ]
-        if n_type_changed:
-            msg_parts.append(f"改类型 {n_type_changed} 个（{'、'.join(type_change_names)}）")
-        if n_renamed:
-            renamed_pairs = "、".join(f"{o}→{n}" for o, n in rename_names)
-            msg_parts.append(f"改名 {n_renamed} 个（{renamed_pairs}）")
-        if n_deleted:
-            msg_parts.append(f"删除字段 {n_deleted} 个")
-        if n_desc_changed:
-            msg_parts.append("已更新库描述")
-        QMessageBox.information(
-            self, "已应用", "，".join(msg_parts) + "。",
-        )
-        # 标记一次性（即使再开也不影响功能，仅供未来"是否运行过助手"判断）
+        # 标记一次性
         try:
             self.repo.set_setting("library_init_wizard_done", "1")
         except Exception:
             pass
         self._applied = True
+
+        if continue_refine:
+            # "应用并继续讨论"：弹补充说明 → 启动新一轮 LLM
+            text, ok = _ask_text(
+                self, "补充说明",
+                "字段已应用。请说明希望在落库后的字段结构基础上做什么进一步调整：",
+            )
+            if not ok or not text.strip():
+                # 用户取消补充说明 → 等价普通 "应用"，关闭对话框
+                self._notify_apply_done(plan, n_deleted, n_renamed, n_type_changed, len(new_ids))
+                self.accept()
+                return
+            # 启动新一轮：清掉 Step 1 / Step 2 状态，进 PAGE_RUNNING
+            self._suggestions = []
+            self._drafts = []
+            self._drafts_baseline = []
+            self._library_desc_decision = "pending"
+            self._dispatch_call(extra=text.strip())
+            return
+
+        # 普通 "应用"：弹结果消息后关闭
+        self._notify_apply_done(plan, n_deleted, n_renamed, n_type_changed, len(new_ids))
         self.accept()
+
+    def _notify_apply_done(
+        self, plan: "FieldPlan",
+        n_deleted: int, n_renamed: int, n_type_changed: int, n_new: int,
+    ) -> None:
+        """弹"已应用"结果对话框。"""
+        msg_parts = []
+        if n_new:
+            msg_parts.append(f"已新建字段 {n_new} 个")
+        if plan.updates_hint:
+            msg_parts.append(f"更新已存在字段的 LLM 提示 {len(plan.updates_hint)} 个")
+        if n_type_changed:
+            names = ", ".join(
+                self._fid_to_name(fid) for fid, _, _ in plan.type_changes
+            )
+            msg_parts.append(f"改类型 {n_type_changed} 个（{names}）")
+        if n_renamed:
+            renamed_pairs = ", ".join(
+                f"{self._fid_to_name(fid, prefer_old=True)}→{new_name}"
+                for fid, new_name in plan.renames
+            )
+            msg_parts.append(f"改名 {n_renamed} 个（{renamed_pairs}）")
+        if n_deleted:
+            msg_parts.append(f"删除字段 {n_deleted} 个")
+        if not msg_parts:
+            msg_parts.append("已应用")
+        QMessageBox.information(self, "已应用", "，".join(msg_parts) + "。")
+
+    def _fid_to_name(self, fid: int, *, prefer_old: bool = False) -> str:
+        """工具：fid → 字段名（用于结果消息）。"""
+        for d in self._drafts:
+            if d.existing_field_id == fid:
+                if prefer_old and d.original_name:
+                    return d.original_name
+                return d.name
+        try:
+            f = self.repo.get_field(fid) if self.repo else None
+            return f.name if f else f"#{fid}"
+        except Exception:
+            return f"#{fid}"
 
 
 # =============================================================================
@@ -3384,3 +3829,84 @@ class _BatchTypeChangeConfirmDialog(QDialog):
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
+
+
+# =============================================================================
+# 应用前汇总对话框（task #21）
+# =============================================================================
+class _ApplySummaryDialog(QDialog):
+    """task #21：Step 2 点应用后的汇总对话框（在二次确认对话框之前）。
+
+    职责：
+    * 列出 5 类变更的统计（创建 / 改名 / 改类型 / 删除 / 更新提示）；
+    * 主按钮文案随 ``FieldPlan`` 内容动态切换（"应用" / "下一步：确认类型变更"
+      / "下一步：确认删除" / "下一步：确认变更"），诚实告知后续还有几道
+      二次确认；
+    * 点取消 → 回 Step 2；点主按钮 → 关闭后由 ``_on_step2_apply`` 串联调用
+      ``_BatchTypeChangeConfirmDialog`` / ``_BatchDeleteConfirmDialog``。
+    """
+
+    def __init__(self, plan: "FieldPlan", *, parent=None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("即将应用以下变更")
+        self.setMinimumWidth(480)
+
+        v = QVBoxLayout(self)
+        v.setSpacing(10)
+
+        head = QLabel("<b>即将应用以下变更：</b>")
+        head.setTextFormat(Qt.RichText)
+        v.addWidget(head)
+
+        # 5 类变更统计；为 0 的类目整行不显示
+        lines: list[str] = []
+        if plan.creates:
+            names = "、".join(name for name, _t, _h in plan.creates)
+            lines.append(
+                f"📦 新增 <b>{len(plan.creates)}</b> 个字段："
+                f"<span style='color:#2e7d32'>{names}</span>"
+            )
+        if plan.renames:
+            # plan.renames 是 [(fid, new_name)]；旧名暂时只能写"#fid"
+            renamed_pairs = "、".join(
+                f"#{fid} → {new_name}" for fid, new_name in plan.renames
+            )
+            lines.append(
+                f"✏ 改名 <b>{len(plan.renames)}</b> 个字段："
+                f"<span style='color:#1565c0'>{renamed_pairs}</span>"
+            )
+        if plan.type_changes:
+            lines.append(
+                f"⚠ 改类型 <b>{len(plan.type_changes)}</b> 个字段"
+                f"<span style='color:#666'>（需二次确认）</span>"
+            )
+        if plan.deletes:
+            lines.append(
+                f"🗑 删除 <b>{len(plan.deletes)}</b> 个字段"
+                f"<span style='color:#666'>（需二次确认）</span>"
+            )
+        if plan.updates_hint:
+            lines.append(
+                f"📝 更新提取提示 <b>{len(plan.updates_hint)}</b> 个字段"
+            )
+        if not lines:
+            lines.append("（没有可应用的变更）")
+        body = QLabel("<br/>".join(lines))
+        body.setTextFormat(Qt.RichText)
+        body.setWordWrap(True)
+        v.addWidget(body)
+
+        v.addStretch(1)
+
+        # 按钮区
+        btns = QHBoxLayout()
+        btns.addStretch(1)
+        b_cancel = QPushButton("取消")
+        b_cancel.clicked.connect(self.reject)
+        btns.addWidget(b_cancel)
+        b_ok = QPushButton(summary_dialog_button_label(plan))
+        b_ok.setDefault(True)
+        b_ok.clicked.connect(self.accept)
+        btns.addWidget(b_ok)
+        v.addLayout(btns)
+
