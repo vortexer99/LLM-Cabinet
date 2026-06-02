@@ -483,10 +483,13 @@ def _run_all(tmp: Path, t: T) -> None:
             "子流派（same_type, hint 空 → 新）应有按钮",
             next(a for a in ann if a.name == "子流派").has_llm_change,
         )
-        # 阅读状态：same_type，现有 hint 非空 → 不会被覆盖 → 无按钮
-        t.assert_eq(
-            "阅读状态（same_type, hint 非空 → 跳过）不应有按钮",
-            next(a for a in ann if a.name == "阅读状态").has_llm_change, False,
+        # 阅读状态：same_type，现有 hint 非空 + LLM 给了不同的新 hint
+        # task #21 阶段 B：旧规则"现有 hint 非空 → 静默跳过 → 无按钮"已废弃；
+        # 新规则"hint 改了就要让用户决策"——必须有批准/驳回按钮（即使原 hint
+        # 非空也要让用户对比、显式接受/驳回）
+        t.assert_true(
+            "阅读状态（same_type, hint 改）应有按钮",
+            next(a for a in ann if a.name == "阅读状态").has_llm_change,
         )
         # 旧字段：未被 LLM 命中
         t.assert_eq(

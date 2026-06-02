@@ -244,17 +244,41 @@ def test_merge_same_type_hint_update(t: T) -> None:
 
 
 def test_merge_same_type_hint_kept(t: T) -> None:
-    """same_type 现有 hint 非空 → 跳过不覆盖。"""
+    """same_type 现有 hint 非空 + decision=rejected → 跳过不覆盖。
+
+    task #21 阶段 B 改造：旧规则是"现有 hint 非空 → 静默跳过"；新规则是
+    "未决=接受 → 覆盖；驳回 → 保留"。让用户对 LLM 的 hint 改动有显式控制权
+    （即使原 hint 非空，也要让用户看到差异并决定）。
+    """
+    existing = [_f(1, "阅读状态", "text", prompt_hint="已有 hint")]
+    suggestions = [
+        _ann("阅读状态", "same_type",
+             ftype="text", prompt_hint="新 hint",
+             existing_field_id=1, existing_field_type="text",
+             existing_prompt_hint="已有 hint",
+             decision=DECISION_REJECTED),
+    ]
+    drafts = merge_decisions_into_drafts(suggestions, existing)
+    d = drafts[0]
+    t.assert_eq("rejected → hint 保持现有", d.prompt_hint, "已有 hint")
+
+
+def test_merge_same_type_hint_replaces_when_pending(t: T) -> None:
+    """task #21 新增：same_type 现有 hint 非空 + decision=pending → 仍覆盖。
+
+    pending 视作"接受 LLM 新 hint"（卡片决策 1：未决=已批准）。
+    """
     existing = [_f(1, "阅读状态", "text", prompt_hint="已有 hint")]
     suggestions = [
         _ann("阅读状态", "same_type",
              ftype="text", prompt_hint="新 hint",
              existing_field_id=1, existing_field_type="text",
              existing_prompt_hint="已有 hint"),
+        # decision 默认 pending
     ]
     drafts = merge_decisions_into_drafts(suggestions, existing)
     d = drafts[0]
-    t.assert_eq("hint 保持现有", d.prompt_hint, "已有 hint")
+    t.assert_eq("pending → hint 被覆盖", d.prompt_hint, "新 hint")
 
 
 def test_merge_system_required_hint_update(t: T) -> None:
@@ -809,6 +833,7 @@ def main() -> int:
     test_merge_llm_suggest_rename_rejected(t)
     test_merge_same_type_hint_update(t)
     test_merge_same_type_hint_kept(t)
+    test_merge_same_type_hint_replaces_when_pending(t)
     test_merge_system_required_hint_update(t)
     test_merge_order_existing_first_then_new(t)
     # diff_drafts_to_plan

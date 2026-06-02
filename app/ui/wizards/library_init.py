@@ -250,11 +250,10 @@ class AnnotatedSuggestion:
         if self.status == "system_required":
             return self._hint_changed()
         if self.status == "same_type":
-            # 仅当 hint 真的会被覆盖（现有 hint 空 + 新 hint 非空）时才有意义
-            return (
-                not (self.existing_prompt_hint or "").strip()
-                and bool((self.prompt_hint or "").strip())
-            )
+            # task #21：只要 LLM 给的 hint 与现有 hint 不同就要让用户决策——
+            # 即便现有 hint 非空（覆盖前提示）。批准 → 用 LLM 新 hint；驳回
+            # → 保留原 hint。
+            return self._hint_changed()
         return False
 
 
@@ -585,6 +584,7 @@ def merge_decisions_into_drafts(
                 origin=DRAFT_ORIGIN_EXISTING,
                 existing_field_id=f.id,
                 original_name=f.name,
+                original_type=f.type,
                 name=f.name, type=f.type, prompt_hint=f.prompt_hint or "",
             ))
             continue
@@ -595,6 +595,7 @@ def merge_decisions_into_drafts(
                 origin=DRAFT_ORIGIN_EXISTING,
                 existing_field_id=f.id,
                 original_name=f.name,
+                original_type=f.type,
                 name=f.name, type=f.type, prompt_hint=f.prompt_hint or "",
             ))
             continue
@@ -605,6 +606,7 @@ def merge_decisions_into_drafts(
                 origin=DRAFT_ORIGIN_LLM_DELETED,
                 existing_field_id=f.id,
                 original_name=f.name,
+                original_type=f.type,
                 name=f.name, type=f.type, prompt_hint=f.prompt_hint or "",
                 deleted=True,
             ))
@@ -616,6 +618,7 @@ def merge_decisions_into_drafts(
                 origin=DRAFT_ORIGIN_LLM_RENAMED,
                 existing_field_id=f.id,
                 original_name=f.name,
+                original_type=f.type,
                 name=new_name, type=f.type, prompt_hint=f.prompt_hint or "",
             ))
             continue
@@ -633,23 +636,20 @@ def merge_decisions_into_drafts(
             continue
 
         # same_type / system_required / existing_user_field：保留为 existing
-        # 但 hint 可能由 LLM 更新（system_required + same_type 在 ann 上有 hint）
+        # 但 hint 可能由 LLM 更新。task #21 决策 1：pending 视作 approved，
+        # 所以这里"pending 或 approved"都按"接受 LLM 新 hint"处理；rejected
+        # 早在上面 DECISION_REJECTED 分支被处理掉了，不会走到这里。
         new_hint = f.prompt_hint or ""
         if ann.status in ("system_required", "same_type") and ann.selected:
-            # ann.action 决定是否真的更新 hint；这里只把"建议的新 hint"带过来，
-            # diff 阶段会与 existing_field.prompt_hint 比对决定是否进 updates_hint
-            if ann.status == "system_required":
-                # system_required 在 ann 上 hint 总是被 LLM 覆盖
+            # pending（未决=接受）或 approved 都用 LLM 新 hint 覆盖
+            if ann.decision in (DECISION_PENDING, DECISION_APPROVED):
                 new_hint = ann.prompt_hint or ""
-            elif ann.status == "same_type":
-                # same_type 仅当现有 hint 为空才接受 LLM 新 hint
-                if not (ann.existing_prompt_hint or "").strip():
-                    new_hint = ann.prompt_hint or ""
 
         drafts.append(FieldDraft(
             origin=DRAFT_ORIGIN_EXISTING,
             existing_field_id=f.id,
             original_name=f.name,
+            original_type=f.type,
             name=f.name, type=f.type, prompt_hint=new_hint,
         ))
 
@@ -1835,6 +1835,16 @@ class LibraryInitWizard(WizardPlugin):
         self.btn_step2_add.clicked.connect(self._on_step2_add_field)
         ops.addWidget(self.btn_step2_add)
         ops.addStretch(1)
+        self.btn_step2_up = QPushButton("↑ 上移")
+        self.btn_step2_up.setToolTip(
+            "把选中行上移一位（受保护字段固定在最前，不能跨越）"
+        )
+        self.btn_step2_up.clicked.connect(lambda: self._on_step2_move(-1))
+        ops.addWidget(self.btn_step2_up)
+        self.btn_step2_down = QPushButton("↓ 下移")
+        self.btn_step2_down.setToolTip("把选中行下移一位")
+        self.btn_step2_down.clicked.connect(lambda: self._on_step2_move(1))
+        ops.addWidget(self.btn_step2_down)
         v.addLayout(ops)
 
         # 警告区（重名 / 必填等校验失败时显示）
@@ -2057,10 +2067,25 @@ class LibraryInitWizard(WizardPlugin):
         it = self.tbl.item(row, 4)
         cur = it.text() if it else ann.prompt_hint
         title = f"编辑 LLM 提示 — {ann.name}"
+        # task #21 阶段 B：现有字段的 hint 编辑窗口附带"LLM 建议前的原 hint"
+        # 作为对照（only when this is an existing-field-touched ann with a
+        # different original hint）
+        ref_text = ""
+        ref_label = ""
+        if (
+            ann.status in ("same_type", "system_required", "type_conflict",
+                           "llm_suggest_rename", "llm_suggest_delete")
+            and (ann.existing_prompt_hint or "").strip()
+            and (ann.existing_prompt_hint or "") != (ann.prompt_hint or "")
+        ):
+            ref_text = ann.existing_prompt_hint or ""
+            ref_label = "<b>LLM 建议前的原提示（只读，供参考）：</b>"
         new_text, ok = _ask_text(
             self, title,
             "请输入该字段的 LLM 提示（多行；告诉 LLM 该字段的格式约束、示例等）：",
             initial=cur,
+            reference_label=ref_label,
+            reference_text=ref_text,
         )
         if not ok:
             return
@@ -2567,6 +2592,14 @@ class LibraryInitWizard(WizardPlugin):
         self.ed_preview_library_desc.blockSignals(True)
         self.ed_preview_library_desc.setPlainText(self._library_desc_suggested)
         self.ed_preview_library_desc.blockSignals(False)
+        # task #21 阶段 B：tooltip 展示用户在场景页输入的原库描述，方便对照
+        if self._desc_has_llm_change() and (self._library_desc_input or "").strip():
+            self.ed_preview_library_desc.setToolTip(
+                "LLM 建议前的原库描述：\n\n"
+                + (self._library_desc_input or "")
+            )
+        else:
+            self.ed_preview_library_desc.setToolTip("")
         self._refresh_desc_decision_ui()
         self._refresh_round_label()
 
@@ -2886,14 +2919,39 @@ class LibraryInitWizard(WizardPlugin):
     # 改为"批准 = 原地改类型 / 驳回 = 不动"二态，LineEdit 已移除，槽函数随之删除。
 
     # ---- task #21：Step 1 → Step 2 切换 ----------------------------------
+    def _promote_pending_to_approved(self) -> None:
+        """task #21：把 Step 1 上所有 pending 的 LLM 触达建议物化成 approved。
+
+        卡片决策 1：Step 1 未决条目下一步时一律视作"已批准"（含
+        ``llm_suggest_delete``，不为单一状态做特例）。物化后 Back 回 Step 1
+        看到的就是"剩余未决项全部已批准"的状态，与 Next 时的语义一致。
+        库描述若 LLM 改过且未决也同步批准。
+        """
+        for ann in self._suggestions:
+            if ann.decision != "pending":
+                continue
+            if not ann.has_llm_change:
+                continue
+            ann.decision = "approved"
+            # 跟 _on_decision_changed("approved") 行为一致：补 selected=True
+            if ann.status in (
+                "type_conflict", "llm_suggest_delete", "llm_suggest_rename",
+            ):
+                ann.selected = True
+        # 库描述：LLM 改过且未决 → 批准
+        if self._desc_has_llm_change() and self._library_desc_decision == "pending":
+            self._library_desc_decision = "approved"
+
     def _on_step1_next(self) -> None:
         """点 Step 1 底部"下一步 →"按钮：把 Step 1 决策 + 库描述编辑同步回
         ``self._suggestions``，然后用 ``merge_decisions_into_drafts`` 合并出
         Step 2 字段表草稿，切到 Step 2。"""
         if self.repo is None:
             return
-        # 把 Step 1 表里用户对字段名 / hint 的微调收回到 ann
+        # 把 Step 1 表里用户对 hint 的微调收回到 ann
         self._sync_step1_edits_into_suggestions()
+        # task #21 决策 1：未决一律视作已批准；物化到 ann，Back 时视觉一致
+        self._promote_pending_to_approved()
 
         existing = self.repo.list_fields() if self.repo else []
         # 缓存：受保护字段的 fid 集合（用于 Step 2 渲染时判断不可改）
@@ -3137,9 +3195,14 @@ class LibraryInitWizard(WizardPlugin):
     def _on_step2_type_changed(self, row: int, new_type: str) -> None:
         """Step 2 表的类型 ComboBox 改动。
 
-        如果 origin == ``existing`` 且与 ``original_type`` 不兼容、且字段已有
-        数据 / pending 建议 / 非空 hint，弹 ``_FieldTypeChangeConfirmDialog``
+        如果 origin == ``existing`` 且**与 ``original_type`` 不兼容**、且字段
+        已有数据 / pending 建议 / 非空 hint，弹 ``_FieldTypeChangeConfirmDialog``
         让用户确认；其它情况静默改。
+
+        task #21 阶段 B 关键约束：兼容性 / 弹窗里"旧类型"都以
+        ``d.original_type``（进入 Step 2 时的初始类型）为准——用户在 Step 2
+        多次改类型（单行→多行→日期）时，对话框永远显示"单行 → 日期"，而不是
+        "多行 → 日期"，确保用户参考的"原始数据语义"始终对齐库里的真值。
         """
         if not (0 <= row < len(self._drafts)):
             return
@@ -3158,8 +3221,14 @@ class LibraryInitWizard(WizardPlugin):
             from ...models import is_compatible_type_change
             from ..settings_dialog import _FieldTypeChangeConfirmDialog
 
+            # 用初始类型（original_type 优先；兜底用 repo.get_field().type）
+            base_type = d.original_type or old_type
             try:
-                if not is_compatible_type_change(d.original_type or old_type, new_type):
+                # 用户改回初始类型 → 没有变更，直接接受
+                if new_type == base_type:
+                    d.type = new_type
+                    return
+                if not is_compatible_type_change(base_type, new_type):
                     f = self.repo.get_field(d.existing_field_id)
                     if f is None:
                         d.type = new_type
@@ -3177,8 +3246,15 @@ class LibraryInitWizard(WizardPlugin):
                     if int(n_values) == 0 and int(m_pending) == 0 and not has_hint:
                         d.type = new_type
                         return
+                    # 构造一个临时 Field 让对话框显示"初始类型 → 新类型"
+                    # （而不是 f.type → 新类型；防止用户在 Step 2 连续改类型时
+                    # 对话框基于"上一次结果"显示，违反"原始数据语义"对齐）
+                    from copy import copy as _shallow_copy
+                    f_for_dialog = _shallow_copy(f)
+                    f_for_dialog.type = base_type
                     confirmed, _clear = _FieldTypeChangeConfirmDialog.ask(
-                        self, f, new_type, int(n_values), int(m_pending),
+                        self, f_for_dialog, new_type,
+                        int(n_values), int(m_pending),
                     )
                     if not confirmed:
                         # 用户取消 → 把 ComboBox 视觉恢复到 old_type
@@ -3264,6 +3340,45 @@ class LibraryInitWizard(WizardPlugin):
             deleted=False,
         ))
         self._render_step2_table()
+
+    def _on_step2_move(self, delta: int) -> None:
+        """上下移当前选中行（task #21 阶段 B 补丁）。
+
+        约束（与旧 ``_on_preview_row_move`` 一致）：
+        - 受保护字段（``_draft_is_protected``，即 ``is_required=True``）
+          始终保持在最前；不允许移动它们，也不允许其它字段越过它们
+          （target 不能落到受保护字段区段里）
+        - 划删线行（``deleted=True``）也可以参与排序——它们最后会被删除，
+          但调序不影响应用结果，保留行为简单
+        """
+        r = self.tbl_step2.currentRow()
+        if r < 0 or r >= len(self._drafts):
+            QMessageBox.information(
+                self, "请先选择一行",
+                "请先点选一行字段，再点上移 / 下移。",
+            )
+            return
+        target = r + delta
+        if target < 0 or target >= len(self._drafts):
+            return
+        moving = self._drafts[r]
+        if self._draft_is_protected(moving):
+            QMessageBox.information(
+                self, "无法移动",
+                "受保护字段（标题 / 描述 / 标签）固定在最前，无法重排。",
+            )
+            return
+        if self._draft_is_protected(self._drafts[target]):
+            QMessageBox.information(
+                self, "无法移动",
+                "不能越过受保护字段（标题 / 描述 / 标签）；其余字段必须排在其后。",
+            )
+            return
+        self._drafts[r], self._drafts[target] = (
+            self._drafts[target], self._drafts[r],
+        )
+        self._render_step2_table()
+        self.tbl_step2.setCurrentCell(target, 1)
 
     def _on_step2_back(self) -> None:
         """点"← 放弃修改并返回"按钮：检测 drafts 是否被编辑过；有编辑则弹确认。"""
@@ -3442,6 +3557,17 @@ class LibraryInitWizard(WizardPlugin):
             )
             return
 
+        # 3.5) 把 Step 2 的字段顺序写回 fields.ord
+        # 顺序源：self._drafts 中未删除行的顺序；新建字段按 plan.creates 顺序拿
+        # 到的 new_ids 一一对应
+        # 注意：apply_field_plan_batch 已经提交事务，reorder 单独发；失败不影响
+        # 字段定义本身，仅影响显示顺序，故 try/except 兜底降级
+        try:
+            self._apply_step2_reorder(plan.creates, new_ids)
+        except Exception:  # noqa: BLE001
+            # 顺序不重要到要中断流程；静默忽略
+            pass
+
         # 4) 库描述（事务外，幂等）
         new_desc = (self._library_desc_suggested or "").strip()
         if new_desc:
@@ -3478,6 +3604,44 @@ class LibraryInitWizard(WizardPlugin):
         # 普通 "应用"：弹结果消息后关闭
         self._notify_apply_done(plan, n_deleted, n_renamed, n_type_changed, len(new_ids))
         self.accept()
+
+    def _apply_step2_reorder(
+        self,
+        creates: list[tuple[str, str, str]],
+        new_ids: list[int],
+    ) -> None:
+        """task #21 阶段 B 补丁：把 Step 2 调序的结果写回 ``fields.ord``。
+
+        ``new_ids`` 是 ``apply_field_plan_batch`` 返回的"按 plan.creates 顺序
+        分配的新 fid 列表"。这里：
+        1. 建一个"原字段名 → 新 fid"的映射（用于 user_new / llm_new 行）
+        2. 按 ``self._drafts`` 中未删除行的顺序，依次取出对应 fid
+        3. 把这个 fid 列表交给 ``repo.reorder_fields``
+
+        如果 drafts 顺序与库当前顺序完全一致，``reorder_fields`` 是幂等的
+        （UPDATE 同样的 ord 值），不会有副作用。
+        """
+        if self.repo is None:
+            return
+        # 1) 新建字段名 → fid 映射
+        name_to_new_fid: dict[str, int] = {}
+        for (name, _t, _h), fid in zip(creates, new_ids):
+            name_to_new_fid[name] = fid
+
+        # 2) 按 drafts 顺序构造 fid 列表（跳过 deleted 行）
+        ordered: list[int] = []
+        for d in self._drafts:
+            if d.deleted:
+                continue
+            if d.existing_field_id is not None:
+                ordered.append(d.existing_field_id)
+            elif d.name in name_to_new_fid:
+                # user_new / llm_new：用刚分配到的 fid
+                ordered.append(name_to_new_fid[d.name])
+            # 其它情况（异常，比如 user_new 行的字段名没在 creates 里）：跳过
+
+        if ordered:
+            self.repo.reorder_fields(ordered)
 
     def _notify_apply_done(
         self, plan: "FieldPlan",
@@ -3545,11 +3709,17 @@ class _TallLineEditDelegate(QStyledItemDelegate):
 # =============================================================================
 def _ask_text(
     parent, title: str, prompt: str, *, initial: str = "",
+    reference_label: str = "", reference_text: str = "",
 ) -> tuple[str, bool]:
-    """多行输入弹窗。返回 (text, accepted)。"""
+    """多行输入弹窗。返回 (text, accepted)。
+
+    ``reference_label`` / ``reference_text``：可选的只读参考区，显示在输入框
+    下方（task #21 阶段 B 补丁：让 Step 1 hint 编辑窗口能展示"LLM 建议前的
+    原 hint"作为对照）。
+    """
     dlg = QDialog(parent)
     dlg.setWindowTitle(title)
-    dlg.resize(540, 320)
+    dlg.resize(540, 380 if reference_text else 320)
     v = QVBoxLayout(dlg)
     lbl = QLabel(prompt)
     lbl.setWordWrap(True)
@@ -3558,6 +3728,17 @@ def _ask_text(
     if initial:
         ed.setPlainText(initial)
     v.addWidget(ed, 1)
+    if reference_text:
+        ref_lbl = QLabel(reference_label or "<b>参考：</b>")
+        ref_lbl.setTextFormat(Qt.RichText)
+        ref_lbl.setWordWrap(True)
+        v.addWidget(ref_lbl)
+        ref_ed = QPlainTextEdit()
+        ref_ed.setPlainText(reference_text)
+        ref_ed.setReadOnly(True)
+        ref_ed.setMaximumHeight(100)
+        ref_ed.setStyleSheet("background: rgba(0,0,0,0.04); color: #555;")
+        v.addWidget(ref_ed)
     bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
     bb.accepted.connect(dlg.accept)
     bb.rejected.connect(dlg.reject)
