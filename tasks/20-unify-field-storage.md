@@ -298,8 +298,44 @@ Phase B 的"批准=原地改 / 驳回=不动"接管），用户体验更自然�
    - 导出旧 v3 库 → 在新 v4 库里导入 → 验证 `meta.author` 等老 key 落对位置
    - 字段助手里跑一个会让 LLM 给"日期"字段建议改类型的场景，确认不再出现
      「🔒 系统字段」状态，而是走 `type_conflict` 路径
-10. `CHANGELOG.md` 里标 📦 schema v3 → v4 + 详细说明
-11. `docs/migrations.md` 加一节
+10. **代码规范化（为未来多 tags 字段做预留）**：详见 § 为未来的多 tags 字段
+    做的代码规范化。9 处 `f.key == "tags"` / `f.type == "tags"` 条件按"读单一
+    内置 tags 字段"vs"判断 tags 类型"分别归类，不引入 schema 变化
+11. `CHANGELOG.md` 里标 📦 schema v3 → v4 + 详细说明
+12. `docs/migrations.md` 加一节
+
+### 为未来的多 tags 字段做的代码规范化
+
+未来可能允许多个 `type="tags"` 的字段（"主题标签 / 难度标签 / 来源标签"等），
+属于另一张大卡（"标签维度系统"，远期）。**#20 不动 tags 的 schema**，但顺手
+把现有 9 处 `f.key == "tags"` / `f.type == "tags"` 的混用清理一下，避免未来
+做"多 tags"时被现存代码假设阻碍。
+
+判断逻辑分两类：
+
+| 写法 | 语义 | 示例位置 |
+|---|---|---|
+| `f.key == "tags"` | 这是**那一个**内置 tags 字段，走 `Project.tags` + 独立 tags 多对多表 | `project_card._field_data` 读取、`exporter` / `importer` 的 tags 字段处理、`llm_tasks_panel._current_value` |
+| `f.type == "tags"` | **任何** tags 类型字段，做 UI 渲染 / LLM prompt 描述 / 类型判断 | `project_dialog._build_form` 选控件、`project_card._field_data` 渲染、`llm/context._build_metadata_snapshot` 写 tags 提示 |
+
+清理动作：grep 上述 9 处使用，根据语义改写：
+
+- 涉及"读 / 写 `Project.tags` 这条单一字段值"→ 用 `f.key == "tags"`，**不**
+  假设"只有一个 type=tags 字段"
+- 涉及"渲染 tags UI 控件 / 写 tags 提示文本到 LLM prompt"→ 用 `f.type == "tags"`，
+  做成不依赖"全库只有一个 tags 字段"的假设（即使现在循环里只会撞到一次）
+
+**不做**：
+
+- 不扩展 `FIELD_TYPES` 让 `tags` 出现在普通"添加字段"对话框里（这要配合
+  schema 的"维度"概念才有意义，留给未来卡）
+- 不改 `Project.tags: list[str]` dataclass 字段（仍代表"那一个内置 tags
+  字段的值"）
+- 不动 task #06 的标签层级折叠逻辑
+
+**收益**：未来做"多 tags 字段"时，扩展 tags 表 schema 加入维度概念 + 让
+add_field_dialog 允许选 `type="tags"` 即可，不需要回头清现有代码里的"硬假设
+只有一个 tags"。
 
 ## 风险与边界
 
@@ -319,15 +355,32 @@ Phase B 的"批准=原地改 / 驳回=不动"接管），用户体验更自然�
   本来就缓存了 `list_fields`
 * **「is_system」语义的悄悄变化**：不再决定存储路径，但仍标识"种入时带 key"。
   代码注释 / docstring 必须同步更新；否则后人会被"系统字段"这词迷惑
+* **多 tags 字段是未来的另一张大卡**（"标签维度系统"，远期）：#20 仅做代码
+  规范化预留，不预设 schema。未来真要做时需要的工作至少包括：扩展 tags 表加
+  入"维度"概念、让 `add_field_dialog` 允许选 `type="tags"`、给 LLM 协议加多
+  tags 字段抓取语义、改 task #06 的标签折叠逻辑支持多维度
+  - **不在本卡的 `tasks/README.md` 索引里登记占位**（远期想法尚未成形为可执行
+    工作包，登记反而是噪音）；用户提出做的时候再开新卡
 
-## 待澄清
+## 已澄清决策（卡片正文按这些决策落笔，无开放问题）
 
-1. **是否保留 `Project.author` 等的兼容性 property**？卡片默认不保留（理由：
-   property 要查 fields 表，破坏 dataclass 的纯数据语义）。如果你希望保留
-   一层薄薄的 property 防止把外部代码全改一遍，告诉我。
-2. **`rating` 字段的存储格式**：现在 `projects.rating` 是 INTEGER，迁移后
-   `project_field_values.value` 是 TEXT。卡片里 CAST 为 TEXT（如 `"4"`）。
-   这跟用户字段里的 rating 一致。**不引入新行为**，只是统一了类型。
-3. **要不要顺便把 `tags` 也"形式上"塞进 fields 抽象**？现在 tags 走独立
-   多对多表，跟 `Project.tags: list[str]` 字段对接。卡片里**不动 tags 架构**，
-   因为它的�
+1. **不保留 `Project.author` 等的兼容性 property**。所有调用方一律改成
+   `repo.get_field_value(project, f)`。理由：dataclass 上加 property 会要求
+   它依赖 `Repository.list_fields()` 拿 fid，破坏纯数据语义、形成模块依赖
+   倒置。代价是 grep + 逐个改 12+ 处访问点，但这是一次性体力活，改完代码
+   更干净。
+
+2. **`rating` 字段值在 `project_field_values.value` 里存为 TEXT**（CAST，如
+   `"4"`）。这是事实约束（`project_field_values.value` 列定义就是 TEXT），
+   且与用户字段里的 rating 行为一致。
+
+3. **不动 tags 架构**。tags 仍走独立的 `tags` + `project_tags` 多对多表，
+   `Project.tags: list[str]` 顶层字段保留。`project_field_values` 里**不**
+   存 tags 值。理由：tags 多值语义与 `project_field_values.value: TEXT` 不
+   天然契合，且改了会破坏 task #06 标签层级折叠的整套 SQL JOIN 逻辑。
+
+4. **#20 顺手做代码规范化预留多 tags 未来扩展**。详见 § 为未来的多 tags
+   字段做的代码规范化。仅清理 `f.key == "tags"` / `f.type == "tags"` 条件
+   的语义混用，不引入 schema 变化、不改 `Project.tags` 字段。未来真要做"多
+   tags 字段"时另开卡，本卡不预设 schema。
+
