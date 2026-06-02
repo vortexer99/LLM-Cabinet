@@ -1,8 +1,20 @@
 # 20 · 废弃系统字段的 projects 列分流，统一用 project_field_values
 
-> **状态**：⚪ 待开工（卡片挂起；等 task #19 Phase B 落地后再考虑动手）
+> **状态**：✅ 2026-06-03 完成
 >
-> **依赖**：建议在 task #19 Phase B 完成后再开工，避免多个动字段层的改动并行。
+> **实施分阶段提交**：
+> - 阶段 1（commit `8347557`）：schema v3→v4 迁移 + Repository 层分流改造
+>   + UI/LLM/导入导出层访问点修复 + 新增 task20 selftest 48 条
+> - 阶段 2（commit `bd1f13f`）：废弃 `system_protected` 状态 + 清理 `is_system`
+>   分支 + 新增 task11_t3 v4 type_conflict 5 条断言
+> - 阶段 3（本 commit）：CHANGELOG / migrations.md / TODO / tasks/README 同步
+>
+> **结果**：全套 10 个 selftest 共 639 条断言通过；lint 零错误。
+>
+> **关于「代码规范化（多 tags 字段预留）」**：审视后发现现有代码已按规范写法
+> 分类（`f.key == "tags"` 读那一个内置字段、`f.type == "tags"` 判断类型做
+> 处理），不假设全库只有一个 tags 字段；未来加多 tags 字段时无需回头改现有
+> 代码。详见 § 为未来的多 tags 字段做的代码规范化。
 
 ## 背景
 

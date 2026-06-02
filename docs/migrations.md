@@ -2,7 +2,7 @@
 
 > 适用范围：LLM Cabinet 本地数据（SQLite + `library/` 文件目录）
 > 维护者：项目作者
-> 最后更新：2026-06-01
+> 最后更新：2026-06-03
 
 本文档说明 **如何在新版本里安全演进数据结构**，让旧版本用户升级到新版本时
 旧数据能正确、自动地迁移过来，且失败时可以回滚。
@@ -89,6 +89,7 @@ SQLite 内置一个 32-bit 整数字段 `user_version`，专门给应用做 sche
    MIGRATIONS = [
        (1, 2, _migrate_v1_to_v2),
        (2, 3, _migrate_v2_to_v3),
+       (3, 4, _migrate_v3_to_v4),
    ]
    ```
 
@@ -132,19 +133,28 @@ def _migrate_v2_to_v3(conn: sqlite3.Connection) -> None:
 | ❌ 不要 | ✅ 用这个替代 |
 |---|---|
 | 在 `SCHEMA` 里修改已有 `CREATE TABLE` | 在迁移函数里 `ALTER TABLE` |
-| `DROP TABLE / DROP COLUMN` 用户数据表 | 留着不用即可；可以在 docstring 标 deprecated |
+| `DROP TABLE` 用户数据表 | 留着不用即可；可以在 docstring 标 deprecated |
 | 直接 `DELETE FROM ...` 不可恢复的数据 | 改成"标记为隐藏"或加新列存新值 |
 | 在迁移函数里调用 UI/网络 | 迁移必须纯本地、纯 SQL |
 | 假设上一版迁移已跑过 | 每个迁移自检 `table_info / sqlite_master` |
 
+> **关于 `DROP COLUMN`**：SQLite 3.35+ 支持 `ALTER TABLE DROP COLUMN`，本项目
+> 要求 Python 3.12+ 自带的 sqlite 一定够新。`DROP COLUMN` 用户数据列**允许**，
+> 但必须满足两个前置条件：
+> 1. 列里的现存数据已被迁移到别处（或确认无需保留）
+> 2. 迁移函数有 `PRAGMA table_info` 守卫确保幂等（已 DROP 时整段早返回）
+>
+> 实例参考 `_migrate_v3_to_v4`（task #20）：把 4 列值搬到 `project_field_values`
+> 后再 `DROP COLUMN`，且全程加 `PRAGMA table_info` 守卫。
+
 ### 4.4 不能用 `ALTER COLUMN` 怎么办？
 
-SQLite **不支持** `ALTER TABLE ... ALTER COLUMN`、`DROP COLUMN`
-（3.35+ 才支持 DROP，但旧 sqlite 不一定有）。
+SQLite **不支持** `ALTER TABLE ... ALTER COLUMN`。`DROP COLUMN` 在 3.35+ 已
+原生支持，本项目 Python 3.12+ 自带的 sqlite 一定够新（详见 § 4.3 的说明）。
 
-需要改列定义时：经典 12 步法（CREATE NEW → INSERT SELECT → DROP OLD → RENAME），
-封装好后写进迁移函数即可。Python 标准库自带的 sqlite3 模块对它没特殊支持，
-照常 `conn.executescript(...)` 即可。
+需要改列定义（如 type / NOT NULL 约束变更）时：经典 12 步法（CREATE NEW →
+INSERT SELECT → DROP OLD → RENAME），封装好后写进迁移函数即可。Python 标准
+库自带的 sqlite3 模块对它没特殊支持，照常 `conn.executescript(...)` 即可。
 
 ---
 

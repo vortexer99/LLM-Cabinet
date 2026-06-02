@@ -8,11 +8,67 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
-📦 schema v2 → v3 — 一次合并迁移：`fields` 表新增 `prompt_hint` 列（task #11 T1）、
-`files` 表新增 `missing` 列（task #14 T1 库一致性检查）；
-打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
+📦 schema v3 → v4 — 废弃系统字段的 `projects` 列分流（task #20）：把
+`projects.{author,date,source_url,rating}` 4 列的值搬到
+`project_field_values` 后 DROP COLUMN。`fields.key` 中的 `author/date/
+source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判定、新建库
+向导默认勾选、导入器宽松匹配），不再决定值的存储位置。打开旧库会自动生成
+`cabinet.v3.<时间戳>.bak` 备份后再迁移。
+
+历史上的 `📦 schema v2 → v3` 也包含在本次发布里（`fields.prompt_hint` 列
++ `files.missing` 列的合并迁移，task #11 T1 + task #14 T1）。
 
 ### Changed
+- **task #20 废弃系统字段的 projects 列分流（schema v3 → v4，2026-06-03）**：把
+  `projects.{author,date,source_url,rating}` 4 列的值搬到
+  `project_field_values` 后 DROP COLUMN，让所有非保护字段（含老 4 个系统字段）
+  值的存储完全统一。这是历史性的"二元世界观"清理：
+  - **schema 层**：`SCHEMA_VERSION = 4`；`SCHEMA` 字符串里 `projects` 表去掉
+    那 4 列；新增 `_migrate_v3_to_v4` 函数搬运数据 + `ALTER TABLE DROP COLUMN`，
+    幂等（用 `PRAGMA table_info` 守卫，列已 DROP 时整段跳过）。
+    rating "未填" 语义保护：v3 里 `rating INTEGER DEFAULT 0`，业务上 0 = 未填，
+    迁移条件 `WHERE rating != 0` 而不是 `IS NOT NULL`，避免把"未填"误写成
+    字符串 `"0"`。`INSERT OR IGNORE`：用户可能在 v3 时通过手工 SQL 已在
+    `project_field_values` 里给老系统字段写过值，迁移保留已有值不覆盖。
+  - **`Project` dataclass**：删除 `author / date / source_url / rating` 4 个
+    顶层字段。所有调用方（12+ 处 `.author/.date/.source_url/.rating` 访问）
+    改成 `repo.get_field_value(p, f)` 或直接 `p.field_values.get(fid)`。
+  - **`Repository` 层**：删除 `SYSTEM_FIELD_COLUMNS` dict（v4 后无用）；
+    `save_project / _row_to_project / list_projects keyword 搜索 /
+    apply_field_plan_batch / delete_field /
+    _collect_field_values_for_all_projects / get_field_value /
+    set_field_value_on_project` 全部走 `field_values` dict 路径（受保护字段
+    走 Project 顶层 + 独立 tags 表）。
+  - **导出导入兼容**：`exporter` 顶层 `project.{author,date,source_url,rating}`
+    保留作为向后兼容输出（从 `field_values` 反查 key→fid），同时这 4 个字段
+    也出现在 `field_values_blob` 里——这样 v3 客户端读 v4 文件能从顶层取到
+    值；v4 客户端读 v4 文件主要走 `field_values_blob`。`importer` 兜底逻辑
+    扩展：顶层老 key 通过 `key→fid` 反查写进 `fv_by_id`（v3 文件兼容）；
+    `field_values_blob` 段不再用 `is_system` 判断跳过，只跳过 `is_required`
+    保护字段（title/description/tags）。
+  - **字段助手 `system_protected` 状态彻底废除**：v3 时代用于"is_system 但
+    类型与建议不符"的特殊跳过被识别为 dead code 删除（保护字段先被
+    `_SYSTEM_REQUIRED_NAMES` 分支吃掉、改名又被 repo 拦截，永远走不到该
+    兜底）。v4 起 `author/date/source_url/rating` 等"带 key 但非 protected"
+    字段被 LLM 建议改类型时走 `type_conflict` 路径（被 task #19 Phase B 接管，
+    批准 = 原地改 / 驳回 = 不动）。
+  - **`is_system` 语义重新定义**：v4 后 `is_system`（key 非空）仅表示"种入时
+    带稳定标识"，不再决定值的存储分流。代码里曾用 `is_system` 做存储路径
+    分流的地方全部改成精确判定（`is_required` / `key in {...}`）。
+    `models.py::Field.is_system` property 的 docstring 同步更新，明确推荐用
+    `is_required` 判断保护字段、用 `key in {...}` 判断具体行为。
+  - **小改动**：移除 `ProjectCardDelegate` 在网格视图卡片底部的评分星星
+    渲染（原代码读 `p.rating > 0`；delegate 无 repo 注入无法优雅查 rating
+    fid）；项目卡片表格里的评分列仍正常显示。
+  - **selftest**：新增 `task20_unify_field_storage.py` 48 条断言（4 种迁移
+    路径 + 全新库 / 端到端 v3→v4 / Project 顶层属性删除验证 / get/set
+    field_value 走 field_values 路径）；改造 `task10_folder_import.py` 的
+    setup_lib_a/b 注入老系统字段 + 断言改成按 fid 查 field_values；改造
+    `task14_library_management.py`（`SCHEMA_VERSION = 4`）；改造
+    `task19_field_type_change.py::test_count_field_filled_for_system_fields`
+    为 v4 语义；新增 `task11_t3` 5 条 v4 type_conflict 断言（老系统字段
+    LLM 改类型走 type_conflict / 受保护字段仍走 system_required）。全套 10
+    个 selftest 共 639 条断言通过（v4 前是 9 个 / 586 条）。
 - **库字段设计助手对话框高度 +10%**（2026-06-02）：`LibraryInitWizardDialog` 默认 resize 从 `900×640` 改为 `900×704`，给预览页字段表多出约一行多的可见空间，减少 LLM 给出较多字段时需要滚动的频率。
 - **字段助手 type_conflict 改为「批准 = 原地改类型 / 驳回 = 不动」二态（task #19 Phase B，2026-06-02）**：基于 Phase A 已经把"安全地改字段类型"做安全，字段助手的 type_conflict 路径不再需要绕路"改名为 `<原名>_v2` 创建新字段"。新行为：
   - 预览表的 type_conflict 行**字段名只读 + 类型 ComboBox 禁用**（用户改类型的入口在「设置 → 字段」，字段助手里只批准/驳回 LLM 给的建议）；状态列改为 `⚠ 类型冲突 · 改类型`。
