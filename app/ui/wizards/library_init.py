@@ -441,6 +441,349 @@ def parse_and_validate(text: str) -> tuple[dict, list[str]]:
     return payload, warnings
 
 
+# =============================================================================
+# task #21 两段式向导：数据模型 + 纯函数底座
+# =============================================================================
+# Step 1 = 审阅 LLM 建议（每行 = 一条 ann）
+# Step 2 = 编辑最终字段表（每行 = 一个 FieldDraft）
+#
+# 数据流：
+#   _suggestions: list[AnnotatedSuggestion]  ← LLM annotate 阶段产出
+#         │
+#         │  Step 1 用户决策（approved / rejected / pending → 视作 approved）
+#         ▼
+#   merge_decisions_into_drafts(suggestions, existing_fields)
+#         │
+#         ▼
+#   _drafts: list[FieldDraft]  ← Step 2 用户编辑（增/删/改名/改类型/改 hint）
+#         │
+#         │  diff_drafts_to_plan(drafts, existing_fields)
+#         ▼
+#   FieldPlan(type_changes, renames, creates, updates_hint, deletes)
+#         │
+#         ▼
+#   apply_field_plan_batch(...)（一次事务）
+
+# Step 1 决策枚举（AnnotatedSuggestion.decision 取值）
+DECISION_PENDING = "pending"
+DECISION_APPROVED = "approved"
+DECISION_REJECTED = "rejected"
+
+# FieldDraft 来源徽章
+DRAFT_ORIGIN_EXISTING = "existing"          # 原本就存在的字段（含老系统字段）
+DRAFT_ORIGIN_LLM_NEW = "llm_new"            # Step 1 批准的 'new' ann
+DRAFT_ORIGIN_LLM_RENAMED = "llm_renamed"    # Step 1 批准的 'llm_suggest_rename'
+DRAFT_ORIGIN_LLM_TYPECHANGED = "llm_typechanged"  # Step 1 批准的 'type_conflict'
+DRAFT_ORIGIN_LLM_DELETED = "llm_deleted"    # Step 1 批准的 'llm_suggest_delete'（划删线）
+DRAFT_ORIGIN_USER_NEW = "user_new"          # Step 2 里点 [+ 添加字段] 加的
+
+
+@dataclass
+class FieldDraft:
+    """Step 2 字段表编辑态的一行。
+
+    与 ``AnnotatedSuggestion`` 解耦——Step 2 不再依赖 ann.status 的复杂分类，
+    只关心"应用后字段表该长什么样"。``origin`` 仅用于徽章 + 撤销路径区分，
+    不驱动行的可编辑性。
+    """
+
+    origin: str
+    # 关联到底层 fields.id；llm_new / user_new 为 None
+    existing_field_id: Optional[int]
+    # 合并时的"原始名"。用于：
+    # - origin == 'llm_renamed' 撤销 LLM 后的徽章降级
+    # - 重名校验时识别"自身行"
+    # - origin == 'existing' 时 == name；origin == 'llm_renamed' 时 == LLM 改名前的旧名
+    original_name: Optional[str]
+    # 字段三元组（Step 2 内可编辑）
+    name: str
+    type: str
+    prompt_hint: str
+    # 编辑标记：True 时该行划删线展示，apply 时进入 deletes
+    deleted: bool = False
+    # 来自 Step 1 决策的"原始 type"快照（仅 origin == 'llm_typechanged' 时记录
+    # LLM 改类型前的旧 type，用于 diff 出 type_changes）
+    original_type: Optional[str] = None
+
+
+@dataclass
+class FieldPlan:
+    """Step 2 → ``apply_field_plan_batch`` 的一次事务参数包。
+
+    与 ``Repository.apply_field_plan_batch`` 的入参对齐：
+    - ``creates``: ``[(name, type, prompt_hint), ...]``
+    - ``updates_hint``: ``[(field_id, prompt_hint), ...]``
+    - ``deletes``: ``[field_id, ...]``
+    - ``renames``: ``[(field_id, new_name), ...]``
+    - ``type_changes``: ``[(field_id, new_type, new_prompt_hint), ...]``
+    """
+
+    creates: list[tuple[str, str, str]]
+    updates_hint: list[tuple[int, str]]
+    deletes: list[int]
+    renames: list[tuple[int, str]]
+    type_changes: list[tuple[int, str, str]]
+
+    def is_empty(self) -> bool:
+        """是否完全无操作（用户没做任何变更）。"""
+        return not (
+            self.creates
+            or self.updates_hint
+            or self.deletes
+            or self.renames
+            or self.type_changes
+        )
+
+
+def merge_decisions_into_drafts(
+    suggestions: list[AnnotatedSuggestion],
+    existing_fields: list,
+) -> list[FieldDraft]:
+    """把 Step 1 的决策状态合并成 Step 2 的字段表草稿。
+
+    关键规则：
+    - 未决（``decision == 'pending'``）一律按"已批准"处理（含
+      ``llm_suggest_delete``，不为单一状态做特例）。
+    - 受保护字段（is_required: title/description/tags）始终以 origin=existing
+      合并，不论 LLM 怎么提；保护字段类型固定，hint 走 system_required 的
+      "更新 hint"路径，但合并时不区分——Step 2 字段表里它们就是普通行
+      （只是 UI 渲染时禁用编辑）。
+
+    返回的 list 顺序：先 existing_fields 的 ord 顺序（含被改名/改类型/删除的
+    行，原位呈现），再 LLM 新建（按 suggestions 顺序）。
+    """
+    # 索引：字段名 → ann（便于查找 LLM 在该字段上的决策）
+    # ann 的 status 可能是 system_required / same_type / type_conflict /
+    # llm_suggest_rename / llm_suggest_delete / existing_user_field / new
+    ann_by_name = {a.name: a for a in suggestions}
+    # llm_renamed：旧名 → ann
+    rename_ann_by_old_name = {
+        a.name: a for a in suggestions
+        if a.status == "llm_suggest_rename"
+    }
+
+    drafts: list[FieldDraft] = []
+    seen_existing_ids: set[int] = set()
+
+    # 第一遍：按现有字段 ord 顺序处理
+    for f in existing_fields:
+        if f.id is None:
+            continue
+        seen_existing_ids.add(f.id)
+        ann = ann_by_name.get(f.name)
+
+        if ann is None:
+            # LLM 没碰这个字段（虽然 annotate 一定会产出 existing_user_field
+            # 的 ann，但保留这条防御性分支）
+            drafts.append(FieldDraft(
+                origin=DRAFT_ORIGIN_EXISTING,
+                existing_field_id=f.id,
+                original_name=f.name,
+                name=f.name, type=f.type, prompt_hint=f.prompt_hint or "",
+            ))
+            continue
+
+        # 用户驳回的 LLM 建议 → 退化为 existing
+        if ann.decision == DECISION_REJECTED:
+            drafts.append(FieldDraft(
+                origin=DRAFT_ORIGIN_EXISTING,
+                existing_field_id=f.id,
+                original_name=f.name,
+                name=f.name, type=f.type, prompt_hint=f.prompt_hint or "",
+            ))
+            continue
+
+        # 默认未决 = 已批准（含 llm_suggest_delete）
+        if ann.status == "llm_suggest_delete":
+            drafts.append(FieldDraft(
+                origin=DRAFT_ORIGIN_LLM_DELETED,
+                existing_field_id=f.id,
+                original_name=f.name,
+                name=f.name, type=f.type, prompt_hint=f.prompt_hint or "",
+                deleted=True,
+            ))
+            continue
+
+        if ann.status == "llm_suggest_rename":
+            new_name = ann.llm_rename_new_name or f.name
+            drafts.append(FieldDraft(
+                origin=DRAFT_ORIGIN_LLM_RENAMED,
+                existing_field_id=f.id,
+                original_name=f.name,
+                name=new_name, type=f.type, prompt_hint=f.prompt_hint or "",
+            ))
+            continue
+
+        if ann.status == "type_conflict":
+            drafts.append(FieldDraft(
+                origin=DRAFT_ORIGIN_LLM_TYPECHANGED,
+                existing_field_id=f.id,
+                original_name=f.name,
+                name=f.name,
+                type=ann.type,                  # LLM 给的新 type
+                prompt_hint=ann.prompt_hint or "",  # LLM 给的新 hint
+                original_type=f.type,           # 改类型前的旧 type
+            ))
+            continue
+
+        # same_type / system_required / existing_user_field：保留为 existing
+        # 但 hint 可能由 LLM 更新（system_required + same_type 在 ann 上有 hint）
+        new_hint = f.prompt_hint or ""
+        if ann.status in ("system_required", "same_type") and ann.selected:
+            # ann.action 决定是否真的更新 hint；这里只把"建议的新 hint"带过来，
+            # diff 阶段会与 existing_field.prompt_hint 比对决定是否进 updates_hint
+            if ann.status == "system_required":
+                # system_required 在 ann 上 hint 总是被 LLM 覆盖
+                new_hint = ann.prompt_hint or ""
+            elif ann.status == "same_type":
+                # same_type 仅当现有 hint 为空才接受 LLM 新 hint
+                if not (ann.existing_prompt_hint or "").strip():
+                    new_hint = ann.prompt_hint or ""
+
+        drafts.append(FieldDraft(
+            origin=DRAFT_ORIGIN_EXISTING,
+            existing_field_id=f.id,
+            original_name=f.name,
+            name=f.name, type=f.type, prompt_hint=new_hint,
+        ))
+
+    # 第二遍：处理 LLM 新建字段（status='new' 且未驳回）
+    for ann in suggestions:
+        if ann.status != "new":
+            continue
+        if ann.decision == DECISION_REJECTED:
+            continue
+        drafts.append(FieldDraft(
+            origin=DRAFT_ORIGIN_LLM_NEW,
+            existing_field_id=None,
+            original_name=None,
+            name=ann.name, type=ann.type,
+            prompt_hint=ann.prompt_hint or "",
+        ))
+
+    # llm_renamed 的副作用：原本 existing_user_field 的字段不应单独再出现一行
+    # —— 上面第一遍已经按"name 命中 rename_ann"处理（origin=llm_renamed），
+    # 不会重复产出。如果 LLM 给的旧名在 existing_fields 中找不到，rename ann
+    # 会被忽略（annotate_conflicts 阶段的容错）；这里不做额外处理。
+    _ = rename_ann_by_old_name
+
+    return drafts
+
+
+def diff_drafts_to_plan(
+    drafts: list[FieldDraft],
+    existing_fields: list,
+) -> FieldPlan:
+    """把 Step 2 的最终字段表草稿 diff 成 ``FieldPlan``（apply 入参）。
+
+    规则：
+    - ``deleted=True`` 行 → 进 ``deletes``（仅当对应 fid 真存在；user_new
+      / llm_new 行没有 fid，被标删等于"未应用"，直接丢弃）
+    - ``origin in {llm_new, user_new}`` 且非 deleted → 进 ``creates``
+    - ``origin == existing`` 且 name 改了 → 进 ``renames``
+    - ``origin == existing`` 且 type 改了 → 进 ``type_changes``（注意：
+      Step 2 改类型可能是用户自己改的，origin 仍是 existing）
+    - ``origin == llm_renamed`` 且 name 与原 LLM 改名一致 → 进 ``renames``；
+      若用户在 Step 2 又改了名，以 Step 2 名为准
+    - ``origin == llm_typechanged`` 且 type 与原 LLM 改类型后一致 → 进
+      ``type_changes``；若用户在 Step 2 又改回原 type，diff 不出现
+    - hint 改了（与现有字段 prompt_hint 比对）→ 进 ``updates_hint``，但
+      不与 type_changes 重叠（type_changes 已含 hint 写入，避免重复）
+    """
+    creates: list[tuple[str, str, str]] = []
+    updates_hint: list[tuple[int, str]] = []
+    deletes: list[int] = []
+    renames: list[tuple[int, str]] = []
+    type_changes: list[tuple[int, str, str]] = []
+
+    existing_by_id = {f.id: f for f in existing_fields if f.id is not None}
+
+    for d in drafts:
+        if d.deleted:
+            if d.existing_field_id is not None:
+                deletes.append(d.existing_field_id)
+            # else: user_new / llm_new 标删 → 丢弃，不进 plan
+            continue
+
+        if d.existing_field_id is None:
+            # llm_new / user_new 新建
+            creates.append((d.name, d.type, d.prompt_hint))
+            continue
+
+        # 现有字段（含 origin in {existing, llm_renamed, llm_typechanged}）
+        ex = existing_by_id.get(d.existing_field_id)
+        if ex is None:
+            # 异常：fid 在 existing_fields 里找不到（应该不会发生）；保守跳过
+            continue
+
+        type_changed = (d.type != ex.type)
+        name_changed = (d.name != ex.name)
+        hint_changed = ((d.prompt_hint or "") != (ex.prompt_hint or ""))
+
+        if type_changed:
+            type_changes.append((ex.id, d.type, d.prompt_hint))
+            # type_changes 已写 hint，不再 updates_hint
+        elif hint_changed:
+            updates_hint.append((ex.id, d.prompt_hint))
+
+        if name_changed:
+            renames.append((ex.id, d.name))
+
+    return FieldPlan(
+        creates=creates,
+        updates_hint=updates_hint,
+        deletes=deletes,
+        renames=renames,
+        type_changes=type_changes,
+    )
+
+
+def check_undelete_name_conflict(
+    drafts: list[FieldDraft],
+    target_index: int,
+) -> Optional[FieldDraft]:
+    """检查"撤销删除第 target_index 行"是否会产生重名冲突。
+
+    规则：扫描 drafts 中其它 ``not deleted`` 的行，若存在 ``name == target.name``
+    的，返回该冲突行；否则返回 None（可安全撤销删除）。
+
+    不修改 drafts。
+    """
+    if target_index < 0 or target_index >= len(drafts):
+        return None
+    target = drafts[target_index]
+    if not target.deleted:
+        return None  # 不是划删线行，不需要校验
+    for i, d in enumerate(drafts):
+        if i == target_index:
+            continue
+        if d.deleted:
+            continue
+        if d.name == target.name:
+            return d
+    return None
+
+
+# 应用前汇总对话框的主按钮文案矩阵（不依赖 Qt，便于测试）
+def summary_dialog_button_label(plan: FieldPlan) -> str:
+    """根据 ``FieldPlan`` 内容动态返回主按钮文案。
+
+    诚实告知用户接下来还有几道二次确认对话框：
+    - 含 type_changes（改类型，task #19 风险）→ 还要弹批量类型变更确认
+    - 含 deletes（删除，task #16 风险）→ 还要弹批量删除确认
+    - 仅 creates / renames / updates_hint → 直接落库
+    """
+    has_type = bool(plan.type_changes)
+    has_del = bool(plan.deletes)
+    if has_type and has_del:
+        return "下一步：确认变更"
+    if has_type:
+        return "下一步：确认类型变更"
+    if has_del:
+        return "下一步：确认删除"
+    return "应用"
+
+
 def annotate_conflicts(
     suggestions: list[dict],
     existing_fields: list,
