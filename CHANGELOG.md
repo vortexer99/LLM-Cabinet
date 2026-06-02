@@ -37,6 +37,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 「最近打开」子菜单（默认 5 个，默认库永驻），含「管理列表...」对话框：列表底部「🔀 切换到选中库」按钮（仅对非当前库 enable）+ 双击列表项 = 切换；右键菜单顶端也加「🔀 切换到此库」，原本的「从列表移除 / 删除整个库... / 改名...」保留
   - **「删除整个库...」加外来文件保护**：删除前 `scan_library_for_deletion(root)` 把库根目录顶层条目分成"库自身"（`cabinet.db` / `cabinet.db-wal` / `cabinet.db-shm` / `library/` / `.llm-cabinet` / `cabinet.v*.bak`）与"用户外来内容"两组；当存在外来内容时，在确认（1/2）之后插入第二段对话框列出这些条目，强制让用户在「🟢 保留这些文件，只删除库数据（推荐）」与「🔴 一并删除（含目录）」之间显式选择，避免 `rmtree(root)` 误删用户在库目录里放的笔记 / 备份。新公开 API：`app.cabinet.scan_library_for_deletion()` / `delete_library_owned_only()` / `LibraryDeleteScan`
   - 切换走应用重启（`os.execv`），稳定且简单
+  - **「切换库」严格只切换、不创建**：选到非库目录（空目录或普通目录）直接拒绝，明确引导用户改用「新建库」走 task #15 多页向导。原本"选空目录 → 询问是否新建"的简化路径已移除（它会绕过 onboarding，留下没库描述 / 没字段配置 / 没默认视图的半残库）
   - 跨库全局配置存于 `%APPDATA%/LLMCabinet/cabinet.json`；损坏自动备份重建
   - 当前库 label 显示在标题栏；当前活动库与默认库的"删除/移除"菜单项强制 disabled
 - **字段级 LLM 提示（task #11 T1/T2/T4）**：
@@ -110,6 +111,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   单个目录与含散文件的拖入行为不变。
 
 ### Fixed
+- **「最近打开 → (默认库)」点击切换提示"不是有效库"**：当本次活动库不是默认库时，默认库目录因为只放了 `cabinet.json`、没有 `.llm-cabinet` 标记 / `cabinet.db`，会被 `is_library_dir` 判定为无效库。修复方式：`app/main.py` 启动时**无条件** `mark_as_library(app_data_dir())`（仅 touch 标记文件，不写 db），保证默认库始终可作为有效库识别
+- **「管理列表」对话框里的"切换"会无声切回原库**：原本管理列表的切换按钮 / 双击 / 右键菜单都直奔 `_confirm_and_restart_to`，绕过了 `_lib_open_recent` 的有效性校验；如果选中项目录已损坏（标记 / cabinet.db 缺失 / 目录被外部删除），会先 `cabinet_config.touch` 再重启，重启时 `_resolve_active_library_root` 又会降级回原库——表现是"按了切换却没切走"。修复：管理列表的切换统一走 `_lib_open_recent`，目录无效时明确报错
 - `app/utils.py` 中 `human_size()` 重复定义了两次（前者支持 `int|float` 与浮点格式化，后者只 `int` 且会修改入参）。删除后者，仅保留前者。
 
 ### Deprecated

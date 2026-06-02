@@ -75,12 +75,15 @@ def main() -> int:
     # ---- 解析当前要打开的库 ----
     library_root = _resolve_active_library_root(cabinet)
 
-    # 默认库目录如果还没标记，补一下（兼容老用户）
-    if library_root == app_data_dir():
-        try:
-            mark_as_library(library_root)
-        except Exception:
-            pass
+    # 默认库目录始终保持"可作为有效库识别"——即便本次活动库是其它库，默认库
+    # 仍然要 mark 一下，否则用户从「最近打开 → (默认库)」点击切换时会被
+    # `is_library_dir` 判定无效（`cabinet.json` 单独存在不构成库）。这是低成本
+    # 兜底：mark_as_library 仅 touch `.llm-cabinet` 标记，不写 db / 不创目录结构。
+    # 同时也覆盖了"当前活动库 == 默认库"的老用户首次升级场景。
+    try:
+        mark_as_library(app_data_dir())
+    except Exception:
+        pass
 
     db_path, library_subdir = resolve_library_paths(library_root)
 

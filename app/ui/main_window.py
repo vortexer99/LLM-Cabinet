@@ -325,7 +325,10 @@ class MainWindow(QMainWindow):
         d = QFileDialog.getExistingDirectory(self, "选择库目录")
         if not d:
             return
-        self._lib_open_recent(_Path(d), allow_init=True)
+        # 严格边界：「切换库」只打开已存在的库目录（含 .llm-cabinet 标记），
+        # 选到空目录 / 普通目录 → 直接报错让用户改走「新建库」，不在此路径里
+        # 走"问是否新建"——新建必须经过 task #15 多页向导（要采集描述/字段/视图等）。
+        self._lib_open_recent(_Path(d))
 
     def _lib_new(self) -> None:
         """新建一个空库目录（task #15 T1：多页向导，晚建 + 失败 rmtree 回滚）。"""
@@ -343,14 +346,15 @@ class MainWindow(QMainWindow):
             label=label.label if label else None,
         )
 
-    def _lib_open_recent(self, path, allow_init: bool = False) -> None:
-        """打开指定路径的库（来自最近列表 / 切换对话框）。"""
+    def _lib_open_recent(self, path) -> None:
+        """打开指定路径的库（来自最近列表 / 切换对话框）。
+
+        严格边界：path 必须已经是有效的 LLM Cabinet 库（含 ``.llm-cabinet``
+        标记或 ``cabinet.db``）；不是 → 直接报错引导用户走「新建库」。本方法
+        **不会**在任何情况下顺手创建新库 —— 创建走 task #15 的多页向导。
+        """
         from PySide6.QtWidgets import QMessageBox
-        from ..cabinet import (
-            is_library_dir, is_empty_or_safe_for_library, mark_as_library,
-            resolve_library_paths,
-        )
-        from ..db import connect as _connect
+        from ..cabinet import is_library_dir
         from pathlib import Path as _Path
         path = _Path(path)
 
@@ -359,36 +363,13 @@ class MainWindow(QMainWindow):
             return
 
         if not is_library_dir(path):
-            if not allow_init:
-                QMessageBox.warning(
-                    self, "无法打开",
-                    f"目录 {path} 不是有效的 LLM Cabinet 库。\n"
-                    "请通过『新建库』功能初始化它，或选择其它目录。",
-                )
-                return
-            # 来自"切换库"对话框 + 目录是空的 → 询问是否新建
-            if not is_empty_or_safe_for_library(path):
-                QMessageBox.warning(
-                    self, "目录不可用",
-                    f"目录 {path} 既不是已有库，也不是空目录，无法在此初始化。",
-                )
-                return
-            ans = QMessageBox.question(
-                self, "新建库？",
-                f"目录 {path} 还不是 LLM Cabinet 库。\n"
-                "是否在此目录新建一个库？",
+            QMessageBox.warning(
+                self, "无法打开",
+                f"目录\n  {path}\n不是有效的 LLM Cabinet 库"
+                "（缺少 .llm-cabinet 标记 / cabinet.db）。\n\n"
+                "如果想在此创建新库，请改用「库 → 新建库...」走完整向导。",
             )
-            if ans != QMessageBox.Yes:
-                return
-            try:
-                mark_as_library(path)
-                db_path, lib_subdir = resolve_library_paths(path)
-                lib_subdir.mkdir(parents=True, exist_ok=True)
-                conn = _connect(db_path)
-                conn.close()
-            except Exception as e:
-                QMessageBox.critical(self, "新建失败", f"无法初始化新库：{e}")
-                return
+            return
 
         self.cabinet_config.touch(path)
         self.cabinet_config.save()
@@ -646,11 +627,15 @@ class MainWindow(QMainWindow):
             btn_switch.setEnabled(path.resolve() != cur)
 
         def _do_switch(p):
-            """关闭本对话框，再走标准的"确认 + 重启"流程切到目标库。"""
-            handle = self.cabinet_config.find(p)
-            label = handle.display_name if handle else None
+            """关闭本对话框，再走标准的"校验 + 确认 + 重启"流程切到目标库。
+
+            统一入口走 ``_lib_open_recent`` 而不是直奔 ``_confirm_and_restart_to``，
+            目的是让"管理列表里的切换"享受与"最近打开二级菜单 / 切换库..."完全
+            一致的严格边界（如果选中项的目录已被删除 / 缺少 .llm-cabinet 标记 /
+            无 cabinet.db，也会被拒绝并明确报错而不是无声地切回原库）。
+            """
             dlg.accept()
-            self._confirm_and_restart_to(p, label)
+            self._lib_open_recent(p)
 
         def _on_switch_clicked():
             it = lst.currentItem()
