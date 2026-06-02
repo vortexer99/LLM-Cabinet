@@ -41,13 +41,36 @@ from app.repository import Repository
 # 数据准备
 # =============================================================================
 def setup_lib_a(tmp: Path) -> tuple[Repository, Library, list[Project]]:
-    """库 A：含字段定义、3 个项目。"""
+    """库 A：含字段定义、3 个项目。
+
+    task #20 schema v4 起：author/date/rating 这些"老系统字段"通过 fields 表
+    记录 + field_values 存值，跟用户字段同构。
+    """
     db_a = tmp / "lib_a.db"
     lib_a_root = tmp / "lib_a_files"
     lib_a_root.mkdir()
 
     repo = Repository(connect(db_a))
     library = Library(lib_a_root)
+
+    # task #20 v4：手动注入 author/date/rating 字段（模拟新建库向导勾选）
+    cur = repo.conn.cursor()
+    cur.execute(
+        "INSERT INTO fields(name, type, ord, visible, key) "
+        "VALUES('作者', 'text', 5, 1, 'author')"
+    )
+    fid_author = cur.lastrowid
+    cur.execute(
+        "INSERT INTO fields(name, type, ord, visible, key) "
+        "VALUES('日期', 'date', 6, 1, 'date')"
+    )
+    fid_date = cur.lastrowid
+    cur.execute(
+        "INSERT INTO fields(name, type, ord, visible, key) "
+        "VALUES('评分', 'rating', 7, 1, 'rating')"
+    )
+    fid_rating = cur.lastrowid
+    repo.conn.commit()
 
     fid_isbn = repo.add_field("ISBN", "text")
     fid_pages = repo.add_field("pages", "number")
@@ -65,13 +88,18 @@ def setup_lib_a(tmp: Path) -> tuple[Repository, Library, list[Project]]:
 
     # 项目 1：纯 link 模式
     p1 = Project(
-        title="科幻小说A", author="Alice", date="2024-01",
-        rating=5, description_md="一段描述", storage_mode="link",
+        title="科幻小说A", description_md="一段描述", storage_mode="link",
     )
     p1.tags = ["科幻", "翻译"]
+    p1.field_values = {
+        fid_author: "Alice",
+        fid_date: "2024-01",
+        fid_rating: "5",
+    }
     pid1 = repo.save_project(p1)
     p1.id = pid1
-    p1.field_values = {fid_isbn: "978-111", fid_pages: "320"}
+    p1.field_values[fid_isbn] = "978-111"
+    p1.field_values[fid_pages] = "320"
     repo.save_project(p1)
     repo.add_file(FileItem(
         project_id=pid1, path=str(file1.resolve()),
@@ -84,11 +112,12 @@ def setup_lib_a(tmp: Path) -> tuple[Repository, Library, list[Project]]:
     projects.append(repo.get_project(pid1))
 
     # 项目 2：纯 copy 模式 + 标题含非法字符
-    p2 = Project(title="项目B/危险:字符?", author="Bob", storage_mode="copy")
+    p2 = Project(title="项目B/危险:字符?", storage_mode="copy")
     p2.tags = ["技术"]
+    p2.field_values = {fid_author: "Bob"}
     pid2 = repo.save_project(p2)
     p2.id = pid2
-    p2.field_values = {fid_isbn: "978-222"}
+    p2.field_values[fid_isbn] = "978-222"
     repo.save_project(p2)
     rel1 = library.import_copy(pid2, file1)
     rel2 = library.import_copy(pid2, file3)
@@ -114,12 +143,31 @@ def setup_lib_a(tmp: Path) -> tuple[Repository, Library, list[Project]]:
 
 
 def setup_lib_b(tmp: Path) -> tuple[Repository, Library]:
-    """库 B：故意只有 ISBN 字段（pages 字段缺失，模拟未匹配字段）。"""
+    """库 B：故意只有 ISBN 字段（pages 字段缺失，模拟未匹配字段）。
+
+    task #20 schema v4 起：同样注入 author/date/rating 字段，以便从库 A 导入
+    时这些值能落到正确的 fid。
+    """
     db_b = tmp / "lib_b.db"
     lib_b_root = tmp / "lib_b_files"
     lib_b_root.mkdir()
     repo = Repository(connect(db_b))
     library = Library(lib_b_root)
+    # task #20 v4：手动注入 author/date/rating 字段
+    cur = repo.conn.cursor()
+    cur.execute(
+        "INSERT INTO fields(name, type, ord, visible, key) "
+        "VALUES('作者', 'text', 5, 1, 'author')"
+    )
+    cur.execute(
+        "INSERT INTO fields(name, type, ord, visible, key) "
+        "VALUES('日期', 'date', 6, 1, 'date')"
+    )
+    cur.execute(
+        "INSERT INTO fields(name, type, ord, visible, key) "
+        "VALUES('评分', 'rating', 7, 1, 'rating')"
+    )
+    repo.conn.commit()
     repo.add_field("ISBN", "text")
     return repo, library
 
@@ -265,14 +313,22 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
         "import[append][p1]: title 还原",
         proj_p1_a.title, projects_a[0].title,
     )
+    # task #20 schema v4 起：author/rating 通过 field_values 还原
+    src_fields_a = {f.key: f for f in repo_b.list_fields() if f.key}
+    fid_author_b = src_fields_a["author"].id
+    fid_rating_b = src_fields_a["rating"].id
+    # 库 A 中对应 fid 不一定与库 B 相同（按 INSERT 顺序）；按 key 查找
+    src_fields_orig = None  # 暂时无法直接复用 setup_lib_a 的 fid（不同库）
+    # 项目 1 在库 A 里的 author 值是 "Alice"，rating "5"
     t.assert_eq(
-        "import[append][p1]: author 还原",
-        proj_p1_a.author, projects_a[0].author,
+        "import[append][p1]: author 还原（field_values 路径）",
+        proj_p1_a.field_values.get(fid_author_b), "Alice",
     )
     t.assert_eq(
-        "import[append][p1]: rating 还原",
-        proj_p1_a.rating, projects_a[0].rating,
+        "import[append][p1]: rating 还原（field_values 路径）",
+        proj_p1_a.field_values.get(fid_rating_b), "5",
     )
+    _ = src_fields_orig  # 抑制未使用警告
     t.assert_eq(
         "import[append][p1]: tags 还原（库 B 自动创建）",
         sorted(proj_p1_a.tags), sorted(projects_a[0].tags),

@@ -260,14 +260,16 @@ class LLMTaskQueue(QObject):
 
     @staticmethod
     def _current_value(p: Project, f: Field) -> str:
-        if f.is_system:
-            if f.key == "title": return p.title
-            if f.key == "author": return p.author
-            if f.key == "date": return p.date
-            if f.key == "rating": return str(p.rating) if p.rating else ""
-            if f.key == "source_url": return p.source_url
-            if f.key == "description": return p.description_md or ""
-            return ""
+        """task #20 schema v4 起：除受保护字段（title/description/tags）外，
+        所有字段值（含老 author/date/source_url/rating）统一在 p.field_values。
+        """
+        if f.is_required:
+            if f.key == "title":
+                return p.title
+            if f.key == "description":
+                return p.description_md or ""
+            if f.key == "tags":
+                return ", ".join(p.tags)
         return p.field_values.get(f.id or -1, "")
 
     def _emit_counts(self) -> None:

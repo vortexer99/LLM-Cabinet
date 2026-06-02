@@ -303,14 +303,16 @@ class LLMTasksDialog(QDialog):
 
     @staticmethod
     def _current_value(p, f) -> str:
-        """与 queue._current_value 同步：取项目当前字段值（用于与建议对比）。"""
-        if f.is_system:
-            if f.key == "title": return p.title
-            if f.key == "author": return p.author
-            if f.key == "date": return p.date
-            if f.key == "rating": return str(p.rating) if p.rating else ""
-            if f.key == "source_url": return p.source_url
-            if f.key == "description": return p.description_md or ""
-            if f.key == "tags": return ", ".join(p.tags)
-            return ""
+        """与 queue._current_value 同步：取项目当前字段值（用于与建议对比）。
+
+        task #20 schema v4 起：除受保护字段（title/description/tags）外，所有
+        字段值（含老 author/date/source_url/rating）统一在 p.field_values。
+        """
+        if f.is_required:
+            if f.key == "title":
+                return p.title
+            if f.key == "description":
+                return p.description_md or ""
+            if f.key == "tags":
+                return ", ".join(p.tags)
         return p.field_values.get(f.id or -1, "")

@@ -264,12 +264,15 @@ def test_set_field_type_noop_when_same(t: T, tmp: Path) -> None:
 
 
 def test_count_field_filled_for_system_fields(t: T, tmp: Path) -> None:
-    """系统字段（author/date/source_url/rating）的值存在 projects 表对应列里，
-    不在 project_field_values。
+    """task #20 schema v4 起：老系统字段（author/date/source_url/rating）的值
+    跟用户字段一样存在 project_field_values；本测试保证 ``count_field_filled``
+    能正确统计这些"种入时带 key"的字段值。
 
-    UI 层 ``_count_field_impact`` 必须经 ``repo.count_field_filled``，否则
-    系统字段永远算 0，误走"三条全空 → 静默切"路径而不弹确认对话框
-    （这是 task #19 Phase A 首发版本的 bug，已修）。
+    历史背景：v3 时这 4 个字段值存在 projects 表对应列里，必须经
+    ``_collect_field_values_for_all_projects`` 做 dispatch；UI 层
+    ``_count_field_impact`` 直接查 project_field_values 会漏算 → task #19
+    Phase A 首发版本的 bug。v4 起 dispatch 已不需要（CASCADE 一处搞定），
+    但本测试保留作为回归护栏。
     """
     db = tmp / "task19_sysfield.db"
     repo = Repository(connect(db))
@@ -284,29 +287,32 @@ def test_count_field_filled_for_system_fields(t: T, tmp: Path) -> None:
         author_fid = cur.lastrowid
         repo.conn.commit()
 
-        # 造 3 个项目：2 个填了 author、1 个空
-        for title, author in [
+        # 造 3 个项目：2 个填了 author 值（task #20 v4 起：通过 field_values 写）、
+        # 1 个空
+        for title, author_v in [
             ("书 X", "鲁迅"), ("书 Y", "巴金"), ("书 Z", ""),
         ]:
-            p = Project(title=title, author=author)
+            p = Project(title=title)
+            if author_v:
+                p.field_values = {author_fid: author_v}
             repo.save_project(p)
 
         f = repo.get_field(author_fid)
-        t.assert_true("找到 author 字段且 is_system", f.is_system)
+        t.assert_true("找到 author 字段且 is_system（key 非空）", f.is_system)
         t.assert_eq(
-            "count_field_filled 正确统计系统字段值（=2）",
+            "count_field_filled 正确统计字段值（=2）",
             repo.count_field_filled(f), 2,
         )
 
-        # 反例：只查 project_field_values 会漏算系统字段（=0）
+        # v4 起直接查 project_field_values 也能算对（不再需要 dispatch）
         raw_count = repo.conn.execute(
             "SELECT COUNT(*) FROM project_field_values "
             "WHERE field_id=? AND value IS NOT NULL AND value!=''",
             (author_fid,),
         ).fetchone()[0]
         t.assert_eq(
-            "（反例）直接查 project_field_values 会漏算（=0）",
-            int(raw_count), 0,
+            "（v4 验证）直接查 project_field_values 也能正确算（=2，与 helper 一致）",
+            int(raw_count), 2,
         )
 
 

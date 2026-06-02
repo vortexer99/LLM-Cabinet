@@ -250,16 +250,32 @@ def _build_project_from_plan(
     else:
         proj.title = plan.folder.name
 
-    # 系统字段（向前兼容核心字段）
-    if isinstance(proj_data.get("author"), str):
-        proj.author = proj_data["author"]
-    if isinstance(proj_data.get("date"), str):
-        proj.date = proj_data["date"]
-    if isinstance(proj_data.get("source_url"), str):
-        proj.source_url = proj_data["source_url"]
+    # 顶层老系统字段（v3 schema 兼容兜底）：
+    # v3 导出的 project.json 顶层 ``project.{author,date,source_url,rating}``
+    # 是真实数据；v4 起这 4 个字段值在 ``field_values_blob`` 里也会出现，但
+    # 顶层仍保留作为向后兼容。这里通过 fields 表 key→fid 把顶层值落进
+    # ``fv_by_id``；后续 field_values 段如果有同 fid 的条目会覆盖（以更详细
+    # 的为准）。
+    # 注意：title / description_md 仍是 projects 表列，按 proj 顶层属性赋值。
+    key_to_fid = {f.key: f.id for f in repo.list_fields()
+                  if f.key and f.id is not None}
+    if isinstance(proj_data.get("author"), str) and proj_data["author"]:
+        fid = key_to_fid.get("author")
+        if fid is not None:
+            fv_by_id[fid] = proj_data["author"]
+    if isinstance(proj_data.get("date"), str) and proj_data["date"]:
+        fid = key_to_fid.get("date")
+        if fid is not None:
+            fv_by_id[fid] = proj_data["date"]
+    if isinstance(proj_data.get("source_url"), str) and proj_data["source_url"]:
+        fid = key_to_fid.get("source_url")
+        if fid is not None:
+            fv_by_id[fid] = proj_data["source_url"]
     rating = proj_data.get("rating")
-    if isinstance(rating, int):
-        proj.rating = max(0, min(5, rating))
+    if isinstance(rating, int) and rating > 0:
+        fid = key_to_fid.get("rating")
+        if fid is not None:
+            fv_by_id[fid] = str(max(0, min(5, rating)))
     desc = proj_data.get("description_md")
     if isinstance(desc, str):
         proj.description_md = desc
@@ -274,7 +290,11 @@ def _build_project_from_plan(
             if isinstance(t, str) and t.strip():
                 tags.append(t.strip())
 
-    # 已匹配字段值：按 field_name 在库内查到字段定义，把值落到 fv_by_id
+    # 已匹配字段值：按 field_name 在库内查到字段定义，把值落到 fv_by_id。
+    # task #20 schema v4 起：除受保护字段（title/description/tags）外，所有
+    # 字段（含老 author/date/source_url/rating）都走 field_values 路径；
+    # 不再用 is_system 判断跳过——只跳过受保护字段（title/description/tags
+    # 是 Project 顶层属性 + 独立 tags 表，不通过 field_values 写）。
     name_to_field = {f.name: f for f in repo.list_fields() if f.id is not None}
     field_values = pj.get("field_values") or []
     for fv in field_values:
@@ -286,8 +306,9 @@ def _build_project_from_plan(
         target = name_to_field.get(fname)
         if target is None or target.id is None:
             continue
-        if target.is_system:
-            # 系统字段：值已在上面的"系统字段"段落处理过；不重复落 field_values
+        if target.is_required:
+            # title / description / tags 走 Project 顶层属性 + 独立 tags 表，
+            # 不进 field_values（title/description 已在上面处理过；tags 走 raw_tags）
             continue
         value = fv.get("value")
         if value is None or value == "":

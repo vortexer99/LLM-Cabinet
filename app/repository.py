@@ -77,9 +77,9 @@ class Repository:
         """
         params: list = []
         if keyword:
-            sql += " AND (p.title LIKE ? OR p.author LIKE ? OR p.description_md LIKE ?)"
+            sql += " AND (p.title LIKE ? OR p.description_md LIKE ?)"
             kw = f"%{keyword}%"
-            params += [kw, kw, kw]
+            params += [kw, kw]
         if tag:
             sql += " AND t.name = ?"
             params.append(tag)
@@ -109,22 +109,19 @@ class Repository:
         if p.id is None:
             cur.execute(
                 """INSERT INTO projects
-                   (title, author, date, source_url, rating, description_md,
-                    storage_mode, cover_file_id)
-                   VALUES (?,?,?,?,?,?,?,?)""",
-                (p.title, p.author, p.date, p.source_url, p.rating,
-                 p.description_md, p.storage_mode, p.cover_file_id),
+                   (title, description_md, storage_mode, cover_file_id)
+                   VALUES (?,?,?,?)""",
+                (p.title, p.description_md, p.storage_mode, p.cover_file_id),
             )
             p.id = cur.lastrowid
         else:
             cur.execute(
                 """UPDATE projects SET
-                     title=?, author=?, date=?, source_url=?, rating=?,
-                     description_md=?, storage_mode=?, cover_file_id=?,
+                     title=?, description_md=?, storage_mode=?, cover_file_id=?,
                      updated_at=datetime('now')
                    WHERE id=?""",
-                (p.title, p.author, p.date, p.source_url, p.rating,
-                 p.description_md, p.storage_mode, p.cover_file_id, p.id),
+                (p.title, p.description_md, p.storage_mode, p.cover_file_id,
+                 p.id),
             )
         self._set_tags(p.id, p.tags)
         self._set_field_values(p.id, p.field_values)
@@ -187,9 +184,9 @@ class Repository:
         """
         params: list = []
         if keyword:
-            sql += " AND (p.title LIKE ? OR p.author LIKE ? OR p.description_md LIKE ?)"
+            sql += " AND (p.title LIKE ? OR p.description_md LIKE ?)"
             kw = f"%{keyword}%"
-            params += [kw, kw, kw]
+            params += [kw, kw]
         sql += " ORDER BY p.updated_at DESC, p.id DESC"
         rows = self.conn.execute(sql, params).fetchall()
         return self._attach_project_extras(
@@ -219,16 +216,15 @@ class Repository:
             )
 
     # ------------------------------------------------------------------ fields (schema)
-    # 系统字段 key → projects 表列名
-    SYSTEM_FIELD_COLUMNS = {
-        "title": "title",
-        "author": "author",
-        "date": "date",
-        "source_url": "source_url",
-        "rating": "rating",
-        "description": "description_md",
-    }
-
+    # task #20 schema v4 起：移除 SYSTEM_FIELD_COLUMNS dict。
+    # 历史上 author/date/source_url/rating/description 的 key 用来 dispatch 到
+    # projects 表的同名列。v4 起：
+    # - title / description_md 仍存 projects 列，但它们 is_required=True，
+    #   永远不会走 delete_field / count 路径
+    # - tags 走独立 tags + project_tags 多对多表
+    # - 其它一切字段值（含老 author/date/source_url/rating）统一存
+    #   project_field_values
+    # 因此 dispatch dict 已不再需要。
     def list_fields(self) -> list[Field]:
         rows = self.conn.execute(
             "SELECT id, name, type, ord, visible, key, suggest_enabled, prompt_hint "
@@ -339,8 +335,9 @@ class Repository:
             项目历史值通过 ``field_values`` 关联保持不动）
           - creates：新建用户字段（同 ``add_fields_batch``）
           - updates_hint：仅更新 prompt_hint
-          - deletes：删除字段（系统字段会清空对应 projects 列；用户字段
-            走 ``project_field_values`` 的 CASCADE）
+          - deletes：删除字段。task #20 schema v4 起所有非保护字段值都在
+            project_field_values，CASCADE 自动清；受保护字段（title/description
+            /tags）拒绝删除。
 
         执行顺序：type_changes → renames → creates → updates_hint → deletes。
         理由：
@@ -517,12 +514,11 @@ class Repository:
                             "updated_at=datetime('now') WHERE id=?",
                             (new_desc, project_id),
                         )
-                # 系统非必有字段（作者/日期/评分/来源）：清空 projects 对应列
-                if f.key in self.SYSTEM_FIELD_COLUMNS:
-                    col = self.SYSTEM_FIELD_COLUMNS[f.key]
-                    default = 0 if f.key == "rating" else ""
-                    cur.execute(f"UPDATE projects SET {col}=?", (default,))
-                # 用户字段：CASCADE 会清 project_field_values
+                # 系统非必有字段（作者/日期/评分/来源）：
+                # task #20 schema v4 起，这些字段值统一存在
+                # project_field_values，CASCADE 会自动清；不再需要单独清空
+                # projects 表的列（4 列已经在迁移里 DROP 了）
+                # 受保护字段（title/description/tags）已在上面拒绝，不会到这里
                 cur.execute("DELETE FROM fields WHERE id=?", (fid,))
                 n_deleted += 1
 
@@ -608,9 +604,12 @@ class Repository:
     ) -> None:
         """删除字段定义。
 
-        title 字段不允许删除。
+        受保护字段（title/description/tags）不允许删除。
         - append_to_description=True：把每个项目的该字段值追加到 description_md 末尾后删除
-        - append_to_description=False：直接删除（CASCADE 清理用户字段值；系统字段对应列清空）
+        - append_to_description=False：直接删除（CASCADE 清理 project_field_values）
+
+        task #20 schema v4 起，所有非保护字段值都存 project_field_values，
+        CASCADE 自动清；不再需要清空 projects 表的列。
         """
         f = self.get_field(fid)
         if f is None:
@@ -638,40 +637,60 @@ class Repository:
                     (new_desc, project_id),
                 )
 
-        # 若是系统字段，需要清空对应列
-        if f.is_system and f.key in self.SYSTEM_FIELD_COLUMNS:
-            col = self.SYSTEM_FIELD_COLUMNS[f.key]
-            default = 0 if f.key == "rating" else ""
-            cur.execute(f"UPDATE projects SET {col}=?", (default,))
-
-        # 删除字段定义（CASCADE 会同时删除 project_field_values 中的相关行）
+        # 删除字段定义（CASCADE 自动删除 project_field_values 中的相关行）
         cur.execute("DELETE FROM fields WHERE id=?", (fid,))
         self.conn.commit()
 
     def _collect_field_values_for_all_projects(
         self, f: Field
     ) -> list[tuple[int, str]]:
-        """返回 [(project_id, value), ...]，空值跳过。"""
+        """返回 [(project_id, value), ...]，空值跳过。
+
+        task #20 schema v4 起的存储分布：
+        - title / description_md：仍存 projects 列（受保护字段）
+        - tags：独立 tags + project_tags 多对多表（受保护字段）
+        - 其它一切字段（含老 author/date/source_url/rating）：project_field_values
+        """
         out: list[tuple[int, str]] = []
-        if f.is_system and f.key in self.SYSTEM_FIELD_COLUMNS:
-            col = self.SYSTEM_FIELD_COLUMNS[f.key]
-            rows = self.conn.execute(
-                f"SELECT id, {col} AS v FROM projects WHERE {col} IS NOT NULL AND {col} != ''"
-            ).fetchall()
-            for r in rows:
-                v = r["v"]
-                if isinstance(v, int):
-                    v = str(v) if v else ""
-                if v:
-                    out.append((r["id"], str(v)))
-        else:
-            rows = self.conn.execute(
-                "SELECT project_id, value FROM project_field_values "
-                "WHERE field_id=? AND value IS NOT NULL AND value != ''",
-                (f.id,),
-            ).fetchall()
-            for r in rows:
-                out.append((r["project_id"], r["value"]))
+        if f.is_required:
+            # 受保护字段不会被 delete_field 删，但 count_field_filled 可能被调用
+            if f.key == "title":
+                rows = self.conn.execute(
+                    "SELECT id, title AS v FROM projects "
+                    "WHERE title IS NOT NULL AND title != ''"
+                ).fetchall()
+                for r in rows:
+                    out.append((r["id"], r["v"]))
+                return out
+            if f.key == "description":
+                rows = self.conn.execute(
+                    "SELECT id, description_md AS v FROM projects "
+                    "WHERE description_md IS NOT NULL AND description_md != ''"
+                ).fetchall()
+                for r in rows:
+                    out.append((r["id"], r["v"]))
+                return out
+            if f.key == "tags":
+                rows = self.conn.execute(
+                    """SELECT pt.project_id AS pid, GROUP_CONCAT(t.name, ', ') AS v
+                       FROM project_tags pt
+                       JOIN tags t ON t.id = pt.tag_id
+                       GROUP BY pt.project_id"""
+                ).fetchall()
+                for r in rows:
+                    if r["v"]:
+                        out.append((r["pid"], r["v"]))
+                return out
+        # 普通字段（含老 author/date/source_url/rating） + 用户自定义字段
+        if f.id is None:
+            return out
+        rows = self.conn.execute(
+            "SELECT project_id, value FROM project_field_values "
+            "WHERE field_id=? AND value IS NOT NULL AND value != ''",
+            (f.id,),
+        ).fetchall()
+        for r in rows:
+            out.append((r["project_id"], r["value"]))
         return out
 
     def count_field_filled(self, f: Field) -> int:
@@ -679,59 +698,50 @@ class Repository:
 
     # ------------------------------------------------------------------ field values (统一接口)
     def get_field_value(self, project: Project, f: Field) -> str:
-        """从 Project 对象按字段抽取值（系统字段读列，用户字段读 field_values dict）。
-        tags 字段返回逗号分隔的字符串。"""
-        if f.is_system:
+        """从 Project 对象按字段抽取值。
+
+        task #20 schema v4 起的存储分布：
+        - title / description_md：projects 顶层属性
+        - tags：project.tags 列表（返回逗号分隔字符串）
+        - 其它一切字段（含老 author/date/source_url/rating）：project.field_values dict
+        """
+        if f.is_required:
             if f.key == "title":
                 return project.title
-            if f.key == "author":
-                return project.author
-            if f.key == "date":
-                return project.date
-            if f.key == "source_url":
-                return project.source_url
-            if f.key == "rating":
-                return str(project.rating) if project.rating else ""
             if f.key == "description":
                 return project.description_md
             if f.key == "tags":
                 return ", ".join(project.tags)
-            return ""
         if f.id is None:
             return ""
         return project.field_values.get(f.id, "")
 
     def set_field_value_on_project(self, project: Project, f: Field, value: str) -> None:
         """把字段值写回 Project 对象（在 save_project 之前调用）。
-        tags 字段：用逗号/中文逗号分隔。"""
-        if f.is_system:
+        tags 字段：用逗号/中文逗号分隔。
+
+        task #20 schema v4 起：除受保护字段（title/description_md/tags）外，
+        所有字段值都写入 project.field_values dict（含老 author/date/source_url/rating）。
+        """
+        if f.is_required:
             if f.key == "title":
                 project.title = value
-            elif f.key == "author":
-                project.author = value
-            elif f.key == "date":
-                project.date = value
-            elif f.key == "source_url":
-                project.source_url = value
-            elif f.key == "rating":
-                try:
-                    project.rating = int(value) if value else 0
-                except ValueError:
-                    project.rating = 0
-            elif f.key == "description":
+                return
+            if f.key == "description":
                 project.description_md = value
-            elif f.key == "tags":
+                return
+            if f.key == "tags":
                 # 兼容半/全角逗号、分号
                 import re
                 parts = [t.strip() for t in re.split(r"[,，;；]", value or "")]
                 project.tags = [t for t in parts if t]
-        else:
-            if f.id is not None:
-                v = (value or "").strip()
-                if v:
-                    project.field_values[f.id] = v
-                else:
-                    project.field_values.pop(f.id, None)
+                return
+        if f.id is not None:
+            v = (value or "").strip()
+            if v:
+                project.field_values[f.id] = v
+            else:
+                project.field_values.pop(f.id, None)
 
     # 旧版接口（用户字段值的低层读写，保留）
     def get_field_values(self, pid: int) -> dict[int, str]:
@@ -1026,10 +1036,6 @@ class Repository:
         return Project(
             id=row["id"],
             title=row["title"] or "",
-            author=row["author"] or "",
-            date=row["date"] or "",
-            source_url=row["source_url"] or "",
-            rating=row["rating"] or 0,
             description_md=row["description_md"] or "",
             storage_mode=row["storage_mode"] or "link",
             cover_file_id=row["cover_file_id"],

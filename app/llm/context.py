@@ -490,15 +490,13 @@ def build_messages(
         return False
 
     # ---- 当前元数据（所有上下文字段）
+    # task #20 schema v4 起：除受保护字段（title/description/tags）外，所有
+    # 字段值（含老 author/date/source_url/rating）统一在 project.field_values。
     cur: dict[str, str] = {}
     for f in context_fields:
-        if f.is_system:
-            if f.key == "title": cur[f.name] = project.title
-            elif f.key == "author": cur[f.name] = project.author
-            elif f.key == "date": cur[f.name] = project.date
-            elif f.key == "rating":
-                cur[f.name] = str(project.rating) if project.rating else ""
-            elif f.key == "source_url": cur[f.name] = project.source_url
+        if f.is_required:
+            if f.key == "title":
+                cur[f.name] = project.title
             elif f.key == "description":
                 cur[f.name] = (project.description_md or "")[:300]
             elif f.key == "tags":

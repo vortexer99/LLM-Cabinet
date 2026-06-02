@@ -147,18 +147,12 @@ class ProjectModel(QAbstractTableModel):
 
     def _field_data(self, p: Project, f: Field, role: int):
         # 取原始值
+        # task #20 schema v4 起：除受保护字段（title/description/tags）外，
+        # 所有字段值（含老 author/date/source_url/rating）统一在 p.field_values。
         v = ""
-        if f.is_system:
+        if f.is_required:
             if f.key == "title":
                 v = p.title or "(未命名)"
-            elif f.key == "author":
-                v = p.author
-            elif f.key == "date":
-                v = p.date
-            elif f.key == "source_url":
-                v = p.source_url
-            elif f.key == "rating":
-                v = ("★" * p.rating + "☆" * (5 - p.rating)) if p.rating > 0 else ""
             elif f.key == "description":
                 v = (p.description_md or "").strip().replace("\n", " ")[:120]
             elif f.key == "tags":
@@ -287,12 +281,9 @@ class ProjectCardDelegate(QStyledItemDelegate):
             subtitle = fm.elidedText(str(subtitle), Qt.ElideRight, text_rect.width())
             painter.drawText(text_rect.left(), text_rect.top() + 22 + fm.ascent(), subtitle)
 
-        if p.rating > 0:
-            painter.setPen(QColor("#f5a623"))
-            painter.drawText(
-                text_rect.left(),
-                text_rect.bottom() - 4,
-                "★" * p.rating + "☆" * (5 - p.rating),
-            )
+        # task #20 schema v4 起：rating 不再是 Project 顶层属性，统一在
+        # p.field_values。grid 视图卡片底部的评分渲染暂移除（卡片表格里仍能
+        # 看到评分）；如需恢复，需通过 delegate 注入字段表查 rating fid 后从
+        # p.field_values 读。
 
         painter.restore()

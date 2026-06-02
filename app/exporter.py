@@ -233,9 +233,20 @@ def export_project(
 # 辅助：构建 JSON / Markdown
 # =============================================================================
 def _build_project_blob(project: Project, fields: list) -> dict:
-    """打包 project.json 内容。"""
-    # field_id → field 对象，便于查 name/type
+    """打包 project.json 内容。
+
+    task #20 schema v4 起：
+    - 所有非保护字段值（含老 author/date/source_url/rating）都在
+      project.field_values，导出时统一进 ``field_values_blob``
+    - 顶层 ``project`` 字典里仍**保留** ``author/date/source_url/rating`` 4 个
+      老 key，从 field_values 反查得到。这是为了让旧版客户端（v3 schema 时代）
+      能读 v4 导出文件的兼容兜底——旧版只会读顶层这 4 个键
+    - v4 客户端读 v4 文件时主要消费 ``field_values_blob``（避免双源不一致）
+    """
+    # field_id → field 对象，便于查 name/type；key → field_id，便于反查老系统字段
     field_by_id = {f.id: f for f in fields if f.id is not None}
+    key_to_fid = {f.key: f.id for f in fields if f.key and f.id is not None}
+
     field_values_blob = []
     for fid, value in project.field_values.items():
         f = field_by_id.get(fid)
@@ -262,6 +273,19 @@ def _build_project_blob(project: Project, fields: list) -> dict:
         for f in fields
     ]
 
+    # 顶层老系统字段：从 field_values 反查（向后兼容旧版客户端）
+    def _legacy(key: str) -> str:
+        fid = key_to_fid.get(key)
+        if fid is None:
+            return ""
+        return project.field_values.get(fid, "") or ""
+
+    rating_str = _legacy("rating")
+    try:
+        rating_int = int(rating_str) if rating_str else 0
+    except ValueError:
+        rating_int = 0
+
     return {
         "schema": EXPORT_SCHEMA,
         "exported_at": datetime.now().astimezone().isoformat(timespec="seconds"),
@@ -269,10 +293,11 @@ def _build_project_blob(project: Project, fields: list) -> dict:
         "exporter_schema_version": SCHEMA_VERSION,
         "project": {
             "title": project.title,
-            "author": project.author,
-            "date": project.date,
-            "source_url": project.source_url,
-            "rating": project.rating,
+            # 4 个老系统字段：v4 起从 field_values 反查；保留是为了向后兼容
+            "author": _legacy("author"),
+            "date": _legacy("date"),
+            "source_url": _legacy("source_url"),
+            "rating": rating_int,
             "description_md": project.description_md,
             "storage_mode": project.storage_mode,
             "cover_file_id": project.cover_file_id,
@@ -298,15 +323,34 @@ def _build_readme(project: Project, fields: list, result: ExportResult, files: l
     lines.append("")
 
     # 基本信息
+    # task #20 schema v4 起：老系统字段（作者/日期/评分/来源）的值从 field_values
+    # 反查，按 field key 找；保留这 4 行展示是为了 README 的可读性
+    key_to_field = {f.key: f for f in fields if f.key and f.id is not None}
+
+    def _legacy(key: str) -> str:
+        f = key_to_field.get(key)
+        if f is None or f.id is None:
+            return ""
+        return project.field_values.get(f.id, "") or ""
+
     info_rows: list[tuple[str, str]] = []
-    if project.author:
-        info_rows.append(("作者", project.author))
-    if project.date:
-        info_rows.append(("日期", project.date))
-    if project.rating:
-        info_rows.append(("评分", "★" * project.rating))
-    if project.source_url:
-        info_rows.append(("来源", project.source_url))
+    author_v = _legacy("author")
+    if author_v:
+        info_rows.append(("作者", author_v))
+    date_v = _legacy("date")
+    if date_v:
+        info_rows.append(("日期", date_v))
+    rating_v = _legacy("rating")
+    if rating_v:
+        try:
+            r = int(rating_v)
+            if r > 0:
+                info_rows.append(("评分", "★" * r))
+        except ValueError:
+            pass
+    source_v = _legacy("source_url")
+    if source_v:
+        info_rows.append(("来源", source_v))
     if project.tags:
         info_rows.append(("标签", "、".join(project.tags)))
     if info_rows:

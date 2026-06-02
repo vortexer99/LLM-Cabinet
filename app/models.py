@@ -83,10 +83,6 @@ class Field:
 class Project:
     id: Optional[int] = None
     title: str = ""
-    author: str = ""
-    date: str = ""
-    source_url: str = ""
-    rating: int = 0
     description_md: str = ""
     storage_mode: str = "link"
     cover_file_id: Optional[int] = None
@@ -94,7 +90,8 @@ class Project:
     updated_at: str = ""
 
     tags: list[str] = field(default_factory=list)
-    # 用户自定义字段值：field_id -> value
+    # 用户自定义字段值 + 老系统字段值（task #20 schema v4 起统一存这里）：
+    # field_id -> value
     field_values: dict[int, str] = field(default_factory=dict)
 
 

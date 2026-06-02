@@ -51,9 +51,9 @@ def main() -> int:
 
 def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     # ----------------------------------------------------------------
-    # 阶段 1：schema v3 + missing 列
+    # 阶段 1：schema v4 + missing 列
     # ----------------------------------------------------------------
-    t.assert_eq("SCHEMA_VERSION = 3", SCHEMA_VERSION, 3)
+    t.assert_eq("SCHEMA_VERSION = 4", SCHEMA_VERSION, 4)
 
     db_a = tmp / "a.db"
     repo_a = Repository(connect(db_a))
