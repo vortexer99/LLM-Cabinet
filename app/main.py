@@ -38,6 +38,65 @@ from .utils import app_icon_path
 log = logging.getLogger(__name__)
 
 
+def _install_crash_logger() -> None:
+    """安装全局异常捕获 —— 让"窗口悄悄消失"问题可调查。
+
+    背景：
+      * PyInstaller GUI 子系统打包后没有 stderr console，未捕获异常会**静默退出**，
+        用户只看到"窗口什么都没出现"，没线索可查。
+      * 直接 ``python run.py`` 时若用户用 .pyw / 双击 .py / IDE 默默吞掉 stderr，
+        现象一样。
+
+    所以：
+      * 任何**未在 except 中捕获**的异常 → 写到 ``%APPDATA%/LLMCabinet/crash.log``，
+        每次启动追加一段含时间戳 + traceback 的记录；
+      * 同时尝试弹一个 QMessageBox（如果 QApplication 还在），让用户至少
+        能看到"启动失败：XXX，详见 crash.log"。
+
+    这是**纯诊断兜底**：不替任何上层 try/except 接锅，也不改主流程。
+    """
+    import traceback
+    from datetime import datetime
+    from .utils import app_data_dir
+
+    def _hook(exc_type, exc, tb) -> None:
+        # KeyboardInterrupt 不写日志（用户主动 Ctrl+C）
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        msg = "".join(traceback.format_exception(exc_type, exc, tb))
+        try:
+            log_path = app_data_dir() / "crash.log"
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            with log_path.open("a", encoding="utf-8") as f:
+                f.write(f"\n===== {datetime.now().isoformat()} =====\n")
+                f.write(msg)
+        except Exception:
+            pass
+        # 仍照常打到 stderr（python run.py 终端能看到）
+        try:
+            sys.__excepthook__(exc_type, exc, tb)
+        except Exception:
+            pass
+        # 尝试弹 QMessageBox —— 仅当 QApplication 已存在（启动早期未必有）
+        try:
+            from PySide6.QtWidgets import QApplication, QMessageBox
+            qapp = QApplication.instance()
+            if qapp is not None:
+                QMessageBox.critical(
+                    None, "LLM Cabinet 启动失败",
+                    f"出现未捕获异常：\n\n{exc_type.__name__}: {exc}\n\n"
+                    f"详见 crash.log：\n{app_data_dir() / 'crash.log'}",
+                )
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+
+_install_crash_logger()
+
+
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("LLM Cabinet")

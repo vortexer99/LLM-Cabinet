@@ -79,17 +79,15 @@ class FirstRunBanner(QFrame):
         super().__init__(parent)
         self.setObjectName("FirstRunBanner")
         self.setFrameShape(QFrame.NoFrame)
-        # 圆角浅蓝背景 — 与全局主题相容（不写死颜色，靠 stylesheet）
-        self.setStyleSheet(
-            "#FirstRunBanner {"
-            "  background-color: #e8f4fd;"
-            "  border: 1px solid #b3d9f5;"
-            "  border-radius: 6px;"
-            "}"
-            "#FirstRunBanner QLabel {"
-            "  color: #0d47a1;"
-            "}"
-        )
+        # 横幅配色按当前主题取色（B4，2026-06-02）：
+        # 之前写死浅蓝底 + 深蓝字，深色模式下蓝底碰到深色窗口边缘很扎眼。
+        # 现在按 ``palette().window()`` 亮度判定深浅：浅色保持原配色；深色
+        # 改成低饱和深蓝底 + 高对比浅蓝字，避免"白方块挖洞"观感。
+        try:
+            self._apply_palette_styles()
+        except Exception:  # 兜底：palette/stylesheet 解析挂掉不应阻塞主窗口
+            pass
+
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
 
         outer = QVBoxLayout(self)
@@ -118,13 +116,39 @@ class FirstRunBanner(QFrame):
         b_fields.setToolTip("自己手动加几个字段")
         b_fields.clicked.connect(self.open_settings_fields_requested)
         actions.addWidget(b_fields)
-        hint = QLabel(
-            "<span style='color:#1565c0'>或者把第一份资料拖到下方 DropZone 试试</span>"
-        )
-        hint.setTextFormat(Qt.RichText)
+        # 不再写死 color，让 #FirstRunBanner QLabel 选择器统一接管文字颜色
+        # （在 _apply_palette_styles() 里随主题切换）
+        hint = QLabel("或者把第一份资料拖到下方 DropZone 试试")
         actions.addWidget(hint)
         actions.addStretch(1)
         outer.addLayout(actions)
+
+    # -------------------------------------------------------------- palette
+    def _apply_palette_styles(self) -> None:
+        """按当前 palette 选浅 / 深两套配色，并写入 stylesheet。
+
+        注意：这里**只在构造时调用一次**。曾经实现过 ``changeEvent`` 自动跟随
+        主题切换，但 ``setStyleSheet`` 在 PySide6 6.11 + Python 3.14 上会触发
+        QEvent.StyleChange，重入 ``changeEvent`` → 无限递归 → 进程 abort。
+        简单退一步：主题切换走全局 ``apply_theme(app, …)`` 重 apply 主 QSS 时，
+        本 banner 通过 palette 继承拿到新底色已经够看；不再追求"banner 内部
+        颜色精确响应主题切换"，避免那条危险的递归路径。
+        """
+        from PySide6.QtGui import QPalette
+        win = self.palette().color(QPalette.Window)
+        dark = win.lightness() < 128
+        if dark:
+            bg, border, fg = "#1c2c44", "#2d4a73", "#9ec5fe"
+        else:
+            bg, border, fg = "#e8f4fd", "#b3d9f5", "#0d47a1"
+        self.setStyleSheet(
+            f"#FirstRunBanner {{"
+            f"  background-color: {bg};"
+            f"  border: 1px solid {border};"
+            f"  border-radius: 6px;"
+            f"}}"
+            f"#FirstRunBanner QLabel {{ color: {fg}; }}"
+        )
 
     def _on_dismiss(self) -> None:
         self.dismissed.emit()

@@ -1102,12 +1102,16 @@ class MainWindow(QMainWindow):
 
         ans = QMessageBox.question(
             self, "恢复完成",
-            f"已恢复到：{root}\n是否立即切换到这个库？",
+            f"已恢复到：\n{root}\n\n"
+            "是否立即切换到这个库？应用将重启以加载新库。",
         )
         if ans == QMessageBox.Yes and self.cabinet_config is not None:
             self.cabinet_config.touch(root)
             self.cabinet_config.save()
-            self._confirm_and_restart_to(root)
+            # 直接走 _confirm_and_restart_to 的"重启"分支，不再二次弹"切换库"确认框
+            # （恢复完成的对话框文案已经把"应用将重启"说明了，再多弹一次冗余）
+            self._pending_switch_to = root
+            self.close()
 
     # ============================================================ toolbar
     def _build_toolbar(self) -> None:
@@ -1805,6 +1809,9 @@ class MainWindow(QMainWindow):
             pid = self._current_project_id
         if pid is None or self.llm_queue is None:
             return
+        # 未配置 API → 提示用户去设置但不主动跳转（按用户偏好：文字引导即可）
+        if not self._llm_check_configured_or_prompt():
+            return
         p = self.repo.get_project(pid)
         if not p:
             return
@@ -1823,6 +1830,9 @@ class MainWindow(QMainWindow):
     def _launch_llm_from_dialog(self, edit_dlg, project) -> None:
         """从项目编辑对话框中点 ✨ 触发：弹 LLMSuggestDialog；执行后关闭编辑对话框。"""
         if self.llm_queue is None or project.id is None:
+            return
+        # 与右键入口一致：未配置 API 时给文字提示，不强行跳转
+        if not self._llm_check_configured_or_prompt(parent=edit_dlg):
             return
         files = self.repo.list_files(project.id)
         from ..llm import load_config
@@ -1851,6 +1861,26 @@ class MainWindow(QMainWindow):
         except Exception as e:
             QMessageBox.warning(self, "失败", str(e))
 
+    def _llm_check_configured_or_prompt(self, *, parent=None) -> bool:
+        """检查默认 provider 是否配好 API Key；未配则弹提示并返回 False。
+
+        提示走「文字引导、不主动跳转」路线（用户偏好：避免帮用户决定下一步）：
+        - 默认 provider 不存在 / api_key 为空 → 弹 information 框，文案明确指向
+          「设置 → API」，但不自动打开该页。
+        """
+        from ..llm import load_config
+        cfg = load_config(self.repo)
+        active = cfg.active()
+        if active is not None and (active.api_key or "").strip():
+            return True
+        QMessageBox.information(
+            parent or self,
+            "未配置 API",
+            "尚未配置 LLM API Key，无法生成元数据建议。\n\n"
+            "请打开「设置 → API」页填入默认 provider 的 API Key 后再试。",
+        )
+        return False
+
     # 信号槽
     def _on_llm_counts(self, n: int) -> None:
         self.lbl_llm_count.setText(f"⚡ LLM 任务: {n}")
@@ -1871,12 +1901,9 @@ class MainWindow(QMainWindow):
     def action_new_project(self) -> None:
         initial = Project()
         dlg = ProjectDialog(initial, repo=self.repo, parent=self)
-        # 新建项目尚无 id，无法发起 LLM；按下按钮提示
-        dlg.request_llm_suggest.connect(
-            lambda: QMessageBox.information(
-                self, "提示", "请先保存项目再发起 LLM 建议。"
-            )
-        )
+        # 新建对话框不再展示 ✨ LLM 建议按钮（M1 决策，2026-06-02）：
+        # 此时项目还没文件、没历史，建议无意义；统一改为引导用户先保存再请 LLM。
+        # request_llm_suggest 信号在新建模式下永远不会触发，所以这里也不再连接。
         if dlg.exec() == ProjectDialog.Accepted:
             p = dlg.project()
             pid = self.repo.save_project(p)

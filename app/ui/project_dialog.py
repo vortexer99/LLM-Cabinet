@@ -11,7 +11,7 @@ from typing import Optional
 
 from PySide6.QtCore import QDate, Qt, Signal
 from PySide6.QtWidgets import (
-    QDateEdit,
+    QCalendarWidget,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -19,18 +19,86 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
 from ..models import Field, FieldSuggestion, Project
 from ..repository import Repository
 from .widgets import StarRating
+
+
+# =============================================================================
+# Date editor —— 项目编辑里 date 字段的"可空"输入控件（B1，2026-06-02）
+# =============================================================================
+# 设计要点：
+#   - 真正存值的是一个 ``QLineEdit``（支持空字符串，置空就是"未填"）；
+#   - 旁边一个 📅 按钮弹出 ``QCalendarWidget``，选完写回 ``yyyy-MM-dd``；
+#   - 一个 ✕ 按钮一键清空。
+# 选这套实现而不是 ``QDateEdit + setSpecialValueText`` 的原因：QDateEdit 一旦
+# 用户拨过日期就回不到 "special value" 那一档，没法真正回到"空"。
+class _DateEditor(QFrame):
+    """``yyyy-MM-dd`` 字符串编辑器；支持空值；text() 永远返回当前可见文本。"""
+
+    def __init__(self, value: str = "", parent=None) -> None:
+        super().__init__(parent)
+        self.setFrameShape(QFrame.NoFrame)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(4)
+
+        self._edit = QLineEdit()
+        self._edit.setPlaceholderText("yyyy-MM-dd（留空表示未填）")
+        # 保留输入合法性的轻量校验：用户手动输入时只做格式提示，不强制阻止
+        # （保存阶段在 _read_editor 兜底处理）
+        self._edit.setText(value or "")
+        h.addWidget(self._edit, 1)
+
+        self._b_pick = QToolButton()
+        self._b_pick.setText("📅")
+        self._b_pick.setToolTip("从日历选取日期")
+        self._b_pick.clicked.connect(self._open_calendar)
+        h.addWidget(self._b_pick)
+
+        self._b_clear = QToolButton()
+        self._b_clear.setText("✕")
+        self._b_clear.setToolTip("清空（置为未填）")
+        self._b_clear.clicked.connect(lambda: self._edit.setText(""))
+        h.addWidget(self._b_clear)
+
+    def text(self) -> str:
+        return (self._edit.text() or "").strip()
+
+    def setText(self, v: str) -> None:
+        self._edit.setText(v or "")
+
+    def _open_calendar(self) -> None:
+        # 用 QMenu 包一层 QCalendarWidget，弹一个临时浮层
+        menu = QMenu(self)
+        cal = QCalendarWidget()
+        cal.setGridVisible(True)
+        cur = QDate.fromString(self.text(), "yyyy-MM-dd")
+        if cur.isValid():
+            cal.setSelectedDate(cur)
+        wa = QWidgetAction(menu)
+        wa.setDefaultWidget(cal)
+        menu.addAction(wa)
+
+        def _picked(d: QDate) -> None:
+            self._edit.setText(d.toString("yyyy-MM-dd"))
+            menu.close()
+
+        cal.clicked.connect(_picked)
+        # 弹在 📅 按钮下方
+        menu.exec(self._b_pick.mapToGlobal(self._b_pick.rect().bottomLeft()))
 
 
 class ProjectDialog(QDialog):
@@ -45,6 +113,11 @@ class ProjectDialog(QDialog):
 
         self._project = project or Project()
         self._repo = repo
+        # 新建模式 = 还没存进 db（id 为 None）：此时项目内没有任何文件、也没历史
+        # 数据可参考，弹 LLM 建议得到的就是空内容，意义不大。按 TODO M1 决策：
+        # 整块「✨ LLM 建议 / 全部接受 / 全部驳回」操作条直接隐藏，并在表单底部加一
+        # 行引导提示，告诉用户保存后可以再来这里点 ✨。
+        self._is_new_project = self._project.id is None
 
         # 字段编辑器：field_id -> (Field, widget, suggestion_row_widget_or_None)
         self._editors: dict[int, tuple[Field, QWidget, Optional[QWidget]]] = {}
@@ -60,23 +133,32 @@ class ProjectDialog(QDialog):
         body_l.setSpacing(10)
 
         # 顶部操作条：✨ LLM 建议 + 全部接受 / 全部驳回（仅当有 pending 时）
-        top_row = QHBoxLayout()
-        self.btn_llm = QPushButton("✨ LLM 建议")
-        self.btn_llm.setProperty("primary", True)
-        self.btn_llm.clicked.connect(self._on_request_llm)
-        top_row.addWidget(self.btn_llm)
-        top_row.addStretch(1)
-        self.btn_accept_all = QPushButton("✓ 全部接受")
-        self.btn_accept_all.setProperty("flat", True)
-        self.btn_accept_all.clicked.connect(self._accept_all)
-        self.btn_reject_all = QPushButton("✗ 全部驳回")
-        self.btn_reject_all.setProperty("flat", True)
-        self.btn_reject_all.setProperty("danger", True)
-        self.btn_reject_all.clicked.connect(self._reject_all)
-        top_row.addWidget(self.btn_accept_all)
-        top_row.addWidget(self.btn_reject_all)
-        body_l.addLayout(top_row)
-        self._update_bulk_buttons()
+        # M1（2026-06-02）：新建模式下整块隐藏，因为新项目还没文件、没历史，
+        # 此时调 LLM 得不到有意义的建议；改在表单末尾用一行 hint 引导用户
+        # 保存项目后再来。
+        if not self._is_new_project:
+            top_row = QHBoxLayout()
+            self.btn_llm = QPushButton("✨ LLM 建议")
+            self.btn_llm.setProperty("primary", True)
+            self.btn_llm.clicked.connect(self._on_request_llm)
+            top_row.addWidget(self.btn_llm)
+            top_row.addStretch(1)
+            self.btn_accept_all = QPushButton("✓ 全部接受")
+            self.btn_accept_all.setProperty("flat", True)
+            self.btn_accept_all.clicked.connect(self._accept_all)
+            self.btn_reject_all = QPushButton("✗ 全部驳回")
+            self.btn_reject_all.setProperty("flat", True)
+            self.btn_reject_all.setProperty("danger", True)
+            self.btn_reject_all.clicked.connect(self._reject_all)
+            top_row.addWidget(self.btn_accept_all)
+            top_row.addWidget(self.btn_reject_all)
+            body_l.addLayout(top_row)
+            self._update_bulk_buttons()
+        else:
+            # 新建模式：把按钮引用置 None，避免后续代码引用时 AttributeError
+            self.btn_llm = None  # type: ignore[assignment]
+            self.btn_accept_all = None  # type: ignore[assignment]
+            self.btn_reject_all = None  # type: ignore[assignment]
 
         # 字段表单
         form = QFormLayout()
@@ -118,6 +200,17 @@ class ProjectDialog(QDialog):
                 self._editors[f.id] = (f, editor, sug_widget)
 
         body_l.addLayout(form)
+
+        # 新建模式末尾的引导文案（M1：替代被去掉的 ✨ LLM 建议按钮）
+        if self._is_new_project:
+            llm_hint = QLabel(
+                "💡 项目创建完成后，可在项目列表右键「✨ LLM 元数据建议…」"
+                "或在编辑对话框点 ✨ 让 LLM 帮你补全字段。"
+            )
+            llm_hint.setProperty("hint", True)
+            llm_hint.setWordWrap(True)
+            body_l.addWidget(llm_hint)
+
         body_l.addStretch(1)
 
         scroll = QScrollArea()
@@ -148,14 +241,10 @@ class ProjectDialog(QDialog):
             w.setPlaceholderText("逗号分隔，例如：科幻, 翻译")
             return w
         if t == "date":
-            w = QDateEdit()
-            w.setCalendarPopup(True)
-            w.setDisplayFormat("yyyy-MM-dd")
-            d = QDate.fromString(value, "yyyy-MM-dd")
-            if not d.isValid():
-                d = QDate.currentDate()
-            w.setDate(d)
-            return w
+            # B1（2026-06-02）：date 字段默认空、可清空。
+            # 旧实现用 ``QDateEdit`` 强制有值，且新建时默认今天，无法表达"未填"
+            # 语义；改用自定义 ``_DateEditor``（文本框 + 📅 选取 + ✕ 清空）。
+            return _DateEditor(value or "")
         if t == "rating":
             try:
                 v = int(value) if value else 0
@@ -181,7 +270,14 @@ class ProjectDialog(QDialog):
         if t == "textarea":
             return w.toPlainText()
         if t == "date":
-            return w.date().toString("yyyy-MM-dd")
+            # _DateEditor.text() 返回当前文本（可能为空）；轻量校验日期格式，
+            # 非法字符串保存为空（避免库里出现 "abc" 这样的脏值）。
+            txt = w.text() if hasattr(w, "text") else ""
+            txt = (txt or "").strip()
+            if not txt:
+                return ""
+            d = QDate.fromString(txt, "yyyy-MM-dd")
+            return d.toString("yyyy-MM-dd") if d.isValid() else ""
         if t == "rating":
             return str(w.value())
         if t == "number":
@@ -193,9 +289,10 @@ class ProjectDialog(QDialog):
         if t == "textarea":
             w.setPlainText(value or "")
         elif t == "date":
-            d = QDate.fromString(value, "yyyy-MM-dd")
-            if d.isValid():
-                w.setDate(d)
+            # _DateEditor.setText 接受任意字符串（含空）；非法日期作为字符串
+            # 直接保留，由用户决定是否更正
+            if hasattr(w, "setText"):
+                w.setText(value or "")
         elif t == "rating":
             try:
                 w.set_value(int(value) if value else 0)
@@ -271,6 +368,9 @@ class ProjectDialog(QDialog):
             self._reject_one(fid)
 
     def _update_bulk_buttons(self) -> None:
+        # 新建模式整块顶部条不存在；按钮引用为 None 时直接跳过
+        if self.btn_accept_all is None or self.btn_reject_all is None:
+            return
         has = bool(self._suggestions)
         self.btn_accept_all.setVisible(has)
         self.btn_reject_all.setVisible(has)

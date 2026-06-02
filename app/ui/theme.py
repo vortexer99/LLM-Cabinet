@@ -69,6 +69,49 @@ QFrame#Card {
     border-radius: 8px;
 }
 
+/* ===== GroupBox =====
+ * 没写这条规则时 Qt fusion 会给 GroupBox 一个写死的浅色 panel，
+ * 导致深色窗口下 group 标题 / 内部 form label 上覆盖一道白条。
+ */
+QGroupBox {
+    background: transparent;
+    border: 1px solid #373a40;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 12px 10px 10px 10px;
+    color: #e9ecef;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background: #1a1b1e;
+    color: #adb5bd;
+}
+/* GroupBox 内部 form 自动生成的 buddy label：fusion 默认给一个偏暗的灰，
+ * 落在深色背景上几乎看不见。强制走主文字色。
+ * 用两条选择器（直接子 + 后代）覆盖嵌套布局（form 里的 label 通常是 GroupBox
+ * 的孙子节点而不是直接 child）。 */
+QGroupBox > QLabel,
+QGroupBox QLabel {
+    color: #e9ecef;
+    background: transparent;
+}
+
+/* 设置 → API 那个 QScrollArea + 内部 host 跟随窗口色。
+ * 不动 viewport 选择器（那个会牵到 QTableView / QListView），改为给 host 设
+ * objectName 后用 ID 选择器精准刷。 */
+QScrollArea#AppScrollArea {
+    background: #1a1b1e;
+    border: none;
+}
+QWidget#ApiScrollHost {
+    background: #1a1b1e;
+}
+
+
+
 /* ===== 输入框 ===== */
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
     background: #25262b;
@@ -271,6 +314,21 @@ QSlider::handle:horizontal {
 }
 QSlider::handle:horizontal:hover { background: #74c0fc; }
 
+/* ===== MenuBar（主窗口顶部菜单栏） ===== */
+QMenuBar {
+    background: #1a1b1e;
+    color: #e9ecef;
+    border-bottom: 1px solid #2c2e33;
+    padding: 2px 4px;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected { background: #2c2e33; }
+QMenuBar::item:pressed  { background: #373a40; }
+
 /* ===== Menu ===== */
 QMenu {
     background: #25262b;
@@ -369,6 +427,40 @@ QToolBar::separator { background: #dee2e6; width: 1px; margin: 6px 6px; }
 
 QWidget#SidePanel, QWidget#CenterPanel, QWidget#DetailPanel { background: #ffffff; }
 QFrame#Card { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; }
+
+/* GroupBox（与 dark 主题对称：避免 fusion 默认 panel 引发的视觉错位） */
+QGroupBox {
+    background: transparent;
+    border: 1px solid #dee2e6;
+    border-radius: 6px;
+    margin-top: 14px;
+    padding: 12px 10px 10px 10px;
+    color: #212529;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    subcontrol-position: top left;
+    left: 10px;
+    padding: 0 6px;
+    background: #ffffff;
+    color: #495057;
+}
+QGroupBox > QLabel,
+QGroupBox QLabel {
+    color: #212529;
+    background: transparent;
+}
+
+/* 与 dark 主题对称的设置 → API ScrollArea 规则 */
+QScrollArea#AppScrollArea {
+    background: #ffffff;
+    border: none;
+}
+QWidget#ApiScrollHost {
+    background: #ffffff;
+}
+
+
 
 /* 输入 */
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
@@ -487,6 +579,21 @@ QSlider::handle:horizontal {
     margin: -5px 0; border-radius: 6px;
 }
 QSlider::handle:horizontal:hover { background: #228be6; }
+
+/* MenuBar（主窗口顶部菜单栏） */
+QMenuBar {
+    background: #f8f9fa;
+    color: #212529;
+    border-bottom: 1px solid #dee2e6;
+    padding: 2px 4px;
+}
+QMenuBar::item {
+    background: transparent;
+    padding: 4px 10px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected { background: #e9ecef; }
+QMenuBar::item:pressed  { background: #dee2e6; }
 
 /* Menu */
 QMenu { background: #ffffff; border: 1px solid #dee2e6; border-radius: 6px; padding: 4px; }

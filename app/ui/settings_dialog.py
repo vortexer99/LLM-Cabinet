@@ -95,7 +95,9 @@ class SettingsDialog(QDialog):
         body.addWidget(self.cat_list)
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet("color:#373a40;")
+        # 不再写死颜色：之前用 #373a40 仅适配深色，浅色模式下会显得"黑棒"。
+        # 让 Qt 用当前 palette 的默认 frame 颜色，浅 / 深都自然。
+        sep.setFrameShadow(QFrame.Sunken)
         body.addWidget(sep)
         body.addWidget(self.stack, 1)
 
@@ -162,27 +164,9 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(gb)
 
-        # LLM 助手设置（task #11 T3 决策 2b：轮数上限）
-        gb_wiz = QGroupBox("LLM 助手")
-        form_wiz = QFormLayout(gb_wiz)
-        form_wiz.setLabelAlignment(Qt.AlignLeft)
-        from .wizards.library_init import (
-            DEFAULT_MAX_ROUNDS, get_max_rounds, set_max_rounds,
-        )
-        self._wiz_set_max_rounds = set_max_rounds  # 保存引用，避免闭包重复 import
-        self.spin_wiz_rounds = QSpinBox()
-        self.spin_wiz_rounds.setRange(1, 20)
-        self.spin_wiz_rounds.setValue(get_max_rounds(self.repo))
-        self.spin_wiz_rounds.valueChanged.connect(self._on_wiz_rounds_changed)
-        form_wiz.addRow("一次会话的最大对话轮数：", self.spin_wiz_rounds)
-        hint_w = QLabel(
-            f"默认 {DEFAULT_MAX_ROUNDS}。每次「让 LLM 给出建议」或「在当前基础上调整」算一轮，"
-            "用户编辑预览不计数；达上限后只能「重新开始」或采用当前结果。"
-        )
-        hint_w.setProperty("hint", True)
-        hint_w.setWordWrap(True)
-        form_wiz.addRow("", hint_w)
-        lay.addWidget(gb_wiz)
+        # LLM 助手对话轮数曾在此页（task #11 T3 决策 2b）；2026-06-02 起搬到「API」页，
+        # 与 LLM 平台/默认 provider/默认语言归在一起，语义更聚焦。
+        # 见 `_build_api_page` 末尾的「对话/重试」分组。
 
         lay.addStretch(1)
         return w
@@ -712,9 +696,17 @@ class SettingsDialog(QDialog):
         # 各平台分组（可滚动）
         from PySide6.QtWidgets import QScrollArea
         scroll = QScrollArea()
+        scroll.setObjectName("AppScrollArea")  # 对应 theme.py QScrollArea#AppScrollArea
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        # 关键：让 viewport 不要 autoFillBackground，否则 fusion 默认浅色会盖住
+        # theme.py 给 ScrollArea 设的窗口色背景，深色主题下视觉上整片白底。
+        try:
+            scroll.viewport().setAutoFillBackground(False)
+        except Exception:
+            pass
         host = QWidget()
+        host.setObjectName("ApiScrollHost")  # 对应 theme.py QWidget#ApiScrollHost
         host_l = QVBoxLayout(host)
         host_l.setSpacing(8)
         host_l.setContentsMargins(0, 0, 0, 0)
@@ -725,6 +717,28 @@ class SettingsDialog(QDialog):
         host_l.addStretch(1)
         scroll.setWidget(host)
         outer.addWidget(scroll, 1)
+
+        # LLM 助手对话轮数（task #11 T3 决策 2b；原在「通用」页，2026-06-02 搬来此处）
+        gb_wiz = QGroupBox("LLM 助手")
+        form_wiz = QFormLayout(gb_wiz)
+        form_wiz.setLabelAlignment(Qt.AlignLeft)
+        from .wizards.library_init import (
+            DEFAULT_MAX_ROUNDS, get_max_rounds, set_max_rounds,
+        )
+        self._wiz_set_max_rounds = set_max_rounds  # 保存引用，避免闭包重复 import
+        self.spin_wiz_rounds = QSpinBox()
+        self.spin_wiz_rounds.setRange(1, 20)
+        self.spin_wiz_rounds.setValue(get_max_rounds(self.repo))
+        self.spin_wiz_rounds.valueChanged.connect(self._on_wiz_rounds_changed)
+        form_wiz.addRow("一次会话的最大对话轮数：", self.spin_wiz_rounds)
+        hint_w = QLabel(
+            f"默认 {DEFAULT_MAX_ROUNDS}。每次「让 LLM 给出建议」或「在当前基础上调整」算一轮，"
+            "用户编辑预览不计数；达上限后只能「重新开始」或采用当前结果。"
+        )
+        hint_w.setProperty("hint", True)
+        hint_w.setWordWrap(True)
+        form_wiz.addRow("", hint_w)
+        outer.addWidget(gb_wiz)
 
         return w
 

@@ -1081,6 +1081,15 @@ class LibraryInitWizard(WizardPlugin):
             "<b>当前库的字段</b>　（可在调用 LLM 之前先调整；"
             "操作语义与「设置 → 字段」一致）"
         ))
+        lbl_preadjust_hint = QLabel(
+            "💡 这里的增删改只是 <b>给 LLM 的输入起点</b>，"
+            "<b>点「让 LLM 给出建议」之前都不会写入当前库</b>；"
+            "想直接编辑库字段请用「设置 → 字段」。"
+        )
+        lbl_preadjust_hint.setProperty("hint", True)
+        lbl_preadjust_hint.setWordWrap(True)
+        lbl_preadjust_hint.setTextFormat(Qt.RichText)
+        v.addWidget(lbl_preadjust_hint)
         self.tbl_existing = QTableWidget(0, 5)
         # 第 4 列原本叫"LLM 建议"，与预览页的「LLM 字段方案建议」列同名，
         # 在助手语境下容易让用户误以为"是否参与 LLM 给出修改建议"，

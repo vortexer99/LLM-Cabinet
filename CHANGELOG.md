@@ -12,6 +12,20 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 `files` 表新增 `missing` 列（task #14 T1 库一致性检查）；
 打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
 
+### Changed
+- **TODO 小修小补一锅出（2026-06-02）**：清掉 `TODO.md` 里 5 条 🐛 + 1 条 🧺。
+  - **设置 → 通用 的「LLM 助手对话轮数」搬到设置 → API 页**：与默认 provider / 默认语言 / 各平台 base_url+key+model 同页，更聚焦 LLM 配置入口。`wizard_max_rounds` 这个 setting key 不变，老库无需迁移；通用页留一行注释指向新位置。
+  - **库字段设计助手第一页加预调整提示**：在「当前库的字段」标签下方追加一行 hint，明确说明"这里增删改只是给 LLM 的输入起点，**点「让 LLM 给出建议」之前不会写入当前库**，想直接编辑库字段请用「设置 → 字段」"。避免新用户误以为已经在编辑现库。
+  - **未配置 API 时调用 LLM 元数据建议改为文字引导**：`MainWindow.action_llm_suggest_for_project`（右键菜单入口）和 `_launch_llm_from_dialog`（项目编辑对话框 ✨ 入口）都加了入口预检 `_llm_check_configured_or_prompt`：若默认 provider 不存在 / `api_key` 为空，弹 `QMessageBox.information` 提示"尚未配置 LLM API Key…请打开「设置 → API」页填入"。**不主动跳转**到设置页（按用户偏好：避免帮用户决定下一步）。
+  - **新建项目对话框去掉 ✨ LLM 建议按钮**：`ProjectDialog` 引入 `_is_new_project = (project.id is None)` 标志位；新建模式下整块顶部操作条（✨ LLM 建议 / ✓ 全部接受 / ✗ 全部驳回）不构造，三个按钮引用置 `None`，`_update_bulk_buttons` 加空守护。表单底部加一行 hint："💡 项目创建完成后，可在项目列表右键「✨ LLM 元数据建议…」或在编辑对话框点 ✨ 让 LLM 帮你补全字段"。`MainWindow.action_new_project` 顺手删掉了原来兜底"请先保存项目再发起 LLM 建议"的 connect（信号永远不会触发）。
+  - **项目编辑里的 date 字段默认空 + 支持清空**（B1）：旧实现用 `QDateEdit` 强制有值，新建时默认今天，无法表达"未填"。新增 `_DateEditor`（`QFrame`）：`QLineEdit`（占位 `yyyy-MM-dd（留空表示未填）`）+ 📅 按钮弹 `QCalendarWidget` 选日期 + ✕ 按钮一键清空。`_read_editor` 在保存阶段做轻量校验：空字符串保留为空，非法字符串也保存为空（避免库里出现 `"abc"` 脏值）。数据层零改动（系统字段 `date` 列允许空字符串，optional 字段 `date` 也是字符串类型）。
+- **深色模式适配收尾（B4）**：
+  - **`FirstRunBanner` 跟随主题切换配色**：旧版 hardcoded 浅蓝底（`#e8f4fd`）+ 深蓝字（`#0d47a1`），深色窗口下"白方块挖洞"。改为 `_apply_palette_styles()` 按 `palette().window().lightness()` 选两套配色（浅色保留原配色；深色用低饱和深蓝底 `#1c2c44` + 高对比浅蓝字 `#9ec5fe`）。**注意**：本来还实现了 `changeEvent` 钩 `PaletteChange / StyleChange / ThemeChange` 让 banner 跟随运行时主题切换；但在 PySide6 6.11.1 + Python 3.14 下 `setStyleSheet` 自身会再触发 `StyleChange`，重入 `changeEvent` → 无限递归 → **进程 native abort，主窗口完全不出来**（任务栏无图标、无 traceback、stderr 空）。**已移除 `changeEvent` 钩子**：banner 配色只在构造时按 palette 选定一次；用户运行时切主题，banner 内部颜色不会立刻变（但全局 QSS 重 apply 时 palette 会变，靠 palette 继承也够看），换来不会启动崩。banner 内 hint label 不再写 `<span style='color:#1565c0'>`，改由外层 stylesheet 选择器 `#FirstRunBanner QLabel` 统一接管。
+  - **新建库向导内的 hint 文字**：3 处 `<span style='color:#666'>...</span>` 全部改为 `setProperty("hint", True)`，由全局 `QLabel[hint="true"]` 选择器接管浅色 / 深色配色。其中描述页的"备忘 + LLM 上下文"长 hint 拆成 `intro`（普通色）+ `intro_hint`（hint 色）两个 label。
+  - **设置对话框左右栏分隔线**：`QFrame.VLine` 之前 hardcoded `color:#373a40`，浅色模式下显得"黑棒"。改为不写 stylesheet、设 `setFrameShadow(QFrame.Sunken)`，由 palette 默认 frame 色接管。
+  - **`QGroupBox` 终于有显式 stylesheet**（`app/ui/theme.py` 浅 / 深两套都补）：之前两套 QSS 都漏了 `QGroupBox`，Qt fusion 给的默认 panel 在深色窗口上叠加成"白条遮住组标题 + 内部 form label"的诡异效果（设置 → API 里每个 provider GroupBox 标签那一行都被遮住）。现在显式给 `QGroupBox` 透明背景 + palette 协调的边框 + `::title` 用窗口色背景悬浮，浅 / 深都干净。
+- **启动期未捕获异常 crash logger**（`app/main.py::_install_crash_logger`）：装一个全局 `sys.excepthook`，把任何未被 except 抓住的异常追加到 `%APPDATA%/LLMCabinet/crash.log`（含时间戳 + traceback），并尝试弹 QMessageBox 提示用户。专治 PyInstaller GUI 子系统 / 双击 .pyw / IDE 静默吞 stderr 等"窗口悄悄消失"场景。注：仅捕 Python 层异常；Qt 内部 `qFatal` / abort / segfault 仍然不会触发本钩子（那种情况只能靠 Windows 事件查看器或 PyInstaller debug 模式抓）。
+
 ### Added
 - **新建库 onboarding（task #15 T1/T2/T3）**：把"新建库"从一次性技术操作（选目录→起名→重启）升级为带入门引导的多步流程。
   - **T1 多页向导**（`app/ui/wizards/new_library_wizard.py`）：第 1 页选目录 + 名称、第 2 页库描述、第 3 页默认字段（必有字段标题/描述/标签都列出，描述/标签的「列表显示」可在向导里直接勾选；可选默认字段作者 / 日期 / 评分 / 来源每个独立配「列表显示」复选框）、第 4 页（仅当已有其它库时）「从其它库迁移 API 配置」（**不迁移 / 仅 LLM 配置 / 全部迁移** 三档单选放在源库选择器上方；源库选择器为近期库下拉 + 末项「📂 浏览其它库目录...」，浏览要求目录含 `.llm-cabinet` 标记，选中的非已知库目录会插入到下拉里）。每页底部不再有「跳过」按钮（「下一步」对空内容已直通，语义重复）；描述页提示从底部合并到顶部，明确写出"用于备忘 + 发给 LLM 参考，也可暂时留空"。**晚建语义**（D1）：1~4 页只收集表单数据，最后一步「创建库」按钮才一次性原子化建库（mark + connect + seed + 应用必有字段可见性 + 加可选字段 + 写描述 + **写 `default_view_mode="list"`**（新建库默认列表视图，与「列表显示」复选框心智一致；既有库全局 fallback 仍 `"grid"`）+ 迁移 API），任意页取消零副作用；中途出错自动 `rmtree(root)` 回滚。

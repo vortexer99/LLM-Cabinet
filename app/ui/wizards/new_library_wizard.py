@@ -209,10 +209,8 @@ class NewLibraryWizard(QDialog):
         form.addRow("名称：", self.ed_label)
         v.addLayout(form)
 
-        hint = QLabel(
-            "<span style='color:#666'>💡 建议选择空目录；非空目录会被拒绝。</span>"
-        )
-        hint.setTextFormat(Qt.RichText)
+        hint = QLabel("💡 建议选择空目录；非空目录会被拒绝。")
+        hint.setProperty("hint", True)
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch(1)
@@ -223,15 +221,16 @@ class NewLibraryWizard(QDialog):
         v = QVBoxLayout(w)
         v.setSpacing(10)
         v.addWidget(QLabel("<h3>📝 库描述（可选）</h3>"))
-        intro = QLabel(
-            "这个库打算管理什么内容？有什么特别约定？<br/>"
-            "<span style='color:#666'>这段描述用于你自己备忘、以及发给 LLM 作为"
-            "「库字段设计助手」的核心上下文；现在也可以暂时留空，之后随时回到"
-            "「设置 → 库」补写。</span>"
-        )
-        intro.setTextFormat(Qt.RichText)
+        intro = QLabel("这个库打算管理什么内容？有什么特别约定？")
         intro.setWordWrap(True)
+        intro_hint = QLabel(
+            "这段描述用于你自己备忘、以及发给 LLM 作为「库字段设计助手」的核心上下文；"
+            "现在也可以暂时留空，之后随时回到「设置 → 库」补写。"
+        )
+        intro_hint.setProperty("hint", True)
+        intro_hint.setWordWrap(True)
         v.addWidget(intro)
+        v.addWidget(intro_hint)
         self.ed_description = QPlainTextEdit()
         self.ed_description.setPlaceholderText(
             "例如：管理我读过的科幻小说与论文；标题用书名/篇名；"
@@ -284,14 +283,12 @@ class NewLibraryWizard(QDialog):
             self._opt_widgets.append((cb_use, cb_vis))
 
         hint = QLabel(
-            "<span style='color:#666'>"
             "💡 不确定要哪些？直接「下一步」即可，建完库后可在「LLM 助手 → 库字段设计助手」里"
-            "让 AI 根据你的库描述给出方案。<br/>"
+            "让 AI 根据你的库描述给出方案。\n"
             "💡 「列表显示」决定字段是否出现在主界面项目列表中；建库后随时可在"
             "「设置 → 字段」里改。"
-            "</span>"
         )
-        hint.setTextFormat(Qt.RichText)
+        hint.setProperty("hint", True)
         hint.setWordWrap(True)
         v.addWidget(hint)
         v.addStretch(1)

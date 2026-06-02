@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QFont, QIcon
+from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QDialog,
     QFileDialog,
@@ -66,29 +66,29 @@ class WelcomeDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("欢迎使用 LLM Cabinet")
-        # 高度加大以容纳放大后的品牌区 + 4 个选项区块
-        self.setMinimumSize(680, 680)
+        # 高度加大以容纳放大后的品牌区（图标 160 + 大字标题 + 副标题）+ 4 个选项区块
+        self.setMinimumSize(700, 720)
         self.cabinet_config = cabinet_config
         self.opened_path: Optional[Path] = None
         # 上次活动库失效时，UI 角落显示提示
         self._stale_active: Optional[Path] = stale_active
 
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(40, 32, 40, 18)
-        outer.setSpacing(10)
+        outer.setContentsMargins(40, 36, 40, 18)
+        outer.setSpacing(12)
 
         # ====== 顶部品牌区（图标 + 标题 + 副标题），约占 40% 高度 ======
         brand_box = QWidget()
         brand_lay = QVBoxLayout(brand_box)
         brand_lay.setContentsMargins(0, 0, 0, 0)
-        brand_lay.setSpacing(8)
+        brand_lay.setSpacing(14)
         brand_lay.addStretch(1)
 
-        # 应用图标（居中，128×128，高 DPI 友好）
+        # 应用图标（居中，160×160，高 DPI 友好）
         from ..utils import app_icon_path
         icon_path = app_icon_path()
         if icon_path is not None:
-            target_logical = 128
+            target_logical = 160
             dpr = self.devicePixelRatioF() or 1.0
             target_phys = int(round(target_logical * dpr))
             ico_lbl = QLabel()
@@ -97,26 +97,29 @@ class WelcomeDialog(QDialog):
             if not pix.isNull():
                 pix.setDevicePixelRatio(dpr)
                 ico_lbl.setPixmap(pix)
-                ico_lbl.setFixedHeight(target_logical)
+                # setFixedSize 替代 setFixedHeight：保证 label 不被横向压缩、
+                # pixmap 能足额显示
+                ico_lbl.setFixedSize(target_logical, target_logical)
                 brand_lay.addWidget(ico_lbl, 0, Qt.AlignCenter)
 
         # 标题
+        # 用 stylesheet 写字号，绕开 theme.py 全局 `* { font-size: 13px }`
+        # 通配符规则——QFont.setPointSize 在 QSS 之下不生效。
         ttl = QLabel("LLM Cabinet")
-        f = QFont(); f.setPointSize(36); f.setBold(True)
-        ttl.setFont(f)
+        ttl.setStyleSheet("font-size: 32pt; font-weight: 700;")
         ttl.setAlignment(Qt.AlignCenter)
         brand_lay.addWidget(ttl)
 
         # 副标题
         sub = QLabel("你的本地资料库 / AI 元数据助理")
-        sf = QFont(); sf.setPointSize(13)
-        sub.setFont(sf)
+        sub.setStyleSheet("font-size: 13pt;")
         sub.setAlignment(Qt.AlignCenter)
         sub.setProperty("muted", True)
         brand_lay.addWidget(sub)
         brand_lay.addStretch(1)
-        # 占整体大约 40% 高度
-        brand_box.setMinimumHeight(280)
+        # 提高 brand_box 最小高度匹配新尺寸（图标 160 + 标题 ~60 + 副标题 ~28
+        # + 间距留白，整体接近 320）
+        brand_box.setMinimumHeight(320)
         outer.addWidget(brand_box, 2)  # stretch=2
 
         # 启动兜底场景：失效的 active 用红字提示
@@ -183,6 +186,15 @@ class WelcomeDialog(QDialog):
             rb_lay.addWidget(self.lst_recent)
             row = QHBoxLayout()
             row.addStretch(1)
+            # 「管理列表...」语义与主菜单 → 库 → 最近打开 → 管理列表... 一致；
+            # welcome 这个入口只暴露「移除 / 改名」两条破坏性较低的操作，避免误
+            # 触"删除整个库"这种重操作（那个仍然只在主界面的同名对话框里给）。
+            b_manage_recent = QPushButton("管理列表...")
+            b_manage_recent.setAutoDefault(False)
+            b_manage_recent.setDefault(False)
+            b_manage_recent.setProperty("flat", True)
+            b_manage_recent.clicked.connect(self._on_manage_recent_clicked)
+            row.addWidget(b_manage_recent)
             b_open_recent = QPushButton("打开选中的库")
             b_open_recent.setAutoDefault(False)
             b_open_recent.setDefault(False)
@@ -256,6 +268,106 @@ class WelcomeDialog(QDialog):
             return
         self.opened_path = path
         self.done(RESULT_OPEN_EXISTING)
+
+    # ---- 选项 2 副 ：管理最近列表（移除 / 改名） ---------------------------
+    # 语义对齐主菜单 → 库 → 最近打开 → 管理列表...：
+    # - 「从列表移除」：从 cabinet.json 的 recent 中删除该条（**不动磁盘**）
+    # - 「改名」：修改显示名（仅本地展示，不动目录名）
+    # 不在 welcome 里给「切换到此库」（用户用列表 + 「打开选中的库」就能切），
+    # 也不给「删除整个库」（破坏性操作仍然只在主界面同名对话框里给）。
+    def _on_manage_recent_clicked(self) -> None:
+        if self.lst_recent is None:
+            return
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtGui import QAction as _QA
+        from PySide6.QtWidgets import (
+            QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem,
+            QMenu,
+        )
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("管理最近打开的库")
+        dlg.resize(560, 360)
+        v = QVBoxLayout(dlg)
+        tip = QLabel(
+            "右键单条目可「从列表移除」/「改名」。这两项都不会改动磁盘上的库。"
+        )
+        tip.setProperty("hint", True)
+        tip.setWordWrap(True)
+        v.addWidget(tip)
+        lst = QListWidget()
+        lst.setContextMenuPolicy(_Qt.CustomContextMenu)
+        v.addWidget(lst)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(dlg.reject)
+        bb.accepted.connect(dlg.accept)
+        v.addWidget(bb)
+
+        def _refresh():
+            lst.clear()
+            for h in self.cabinet_config.recent_libraries:
+                it = QListWidgetItem(f"{h.display_name}\n  {h.path}")
+                it.setData(_Qt.UserRole, str(h.path))
+                lst.addItem(it)
+
+        def _remove_from_list(p: Path):
+            self.cabinet_config.remove(p)
+            self.cabinet_config.save()
+            _refresh()
+
+        def _rename_lib(p: Path):
+            handle = self.cabinet_config.find(p)
+            cur_label = handle.display_name if handle else p.name
+            new_label, ok = QInputDialog.getText(
+                dlg, "改名", "新名称：", text=cur_label,
+            )
+            if not ok or not new_label.strip():
+                return
+            self.cabinet_config.rename(p, new_label.strip())
+            self.cabinet_config.save()
+            _refresh()
+
+        def _on_menu(pos):
+            it = lst.itemAt(pos)
+            if it is None:
+                return
+            path = Path(str(it.data(_Qt.UserRole)))
+            menu = QMenu(dlg)
+            a_rm = _QA("从列表移除", dlg)
+            a_rm.triggered.connect(lambda _c=False: _remove_from_list(path))
+            menu.addAction(a_rm)
+            a_ren = _QA("改名...", dlg)
+            a_ren.triggered.connect(lambda _c=False: _rename_lib(path))
+            menu.addAction(a_ren)
+            menu.exec(lst.viewport().mapToGlobal(pos))
+
+        lst.customContextMenuRequested.connect(_on_menu)
+        _refresh()
+        dlg.exec()
+
+        # 关闭管理对话框后，回灌外层 welcome 列表 —— 保持显示与 cabinet.json 同步
+        self._reload_recent_list()
+
+    def _reload_recent_list(self) -> None:
+        """重新填充 ``self.lst_recent``，反映 cabinet.json 当前内容。
+        渲染规则与 ``__init__`` 里的初次填充完全一致（避免管理对话框关闭后
+        视觉与初次进入不一致）。"""
+        if self.lst_recent is None:
+            return
+        from PySide6.QtWidgets import QListWidgetItem
+        self.lst_recent.clear()
+        for h in self.cabinet_config.recent_libraries:
+            stale = (
+                self._stale_active is not None
+                and h.path.resolve() == self._stale_active.resolve()
+            )
+            tag = "  ⚠ 不可用" if stale else ""
+            it = QListWidgetItem(f"{h.display_name}  —  {h.path}{tag}")
+            it.setData(Qt.UserRole, str(h.path))
+            it.setToolTip(str(h.path))
+            if stale:
+                it.setFlags(it.flags() & ~Qt.ItemIsEnabled)
+            self.lst_recent.addItem(it)
 
     # ---- 选项 3：打开其它已有库目录（浏览） --------------------------------
     def _on_open_existing_browse(self) -> None:
