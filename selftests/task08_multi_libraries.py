@@ -28,8 +28,9 @@ from selftests._common import T
 
 from app.cabinet import (
     CABINET_JSON, CabinetConfig, LIBRARY_MARKER, MAX_RECENT,
-    import_settings_from_other_db, is_empty_or_safe_for_library, is_library_dir,
-    mark_as_library, resolve_library_paths,
+    delete_library_owned_only, import_settings_from_other_db,
+    is_empty_or_safe_for_library, is_library_dir, mark_as_library,
+    resolve_library_paths, scan_library_for_deletion,
 )
 from app.db import connect
 from app.repository import Repository
@@ -257,6 +258,76 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     # 不存在的 db
     out2 = import_settings_from_other_db(tmp / "nonexistent.db", ["llm_config"])
     t.assert_eq("不存在的 db → 空 dict", out2, {})
+
+    # ----------------------------------------------------------------
+    # 阶段 8：scan_library_for_deletion / delete_library_owned_only
+    # （删除整个库时识别"用户外来内容"，避免误删笔记 / 备份等）
+    # ----------------------------------------------------------------
+    delroot = tmp / "delete_test_lib"
+    delroot.mkdir()
+    # 库自身条目（白名单）
+    (delroot / LIBRARY_MARKER).write_text("")
+    (delroot / "cabinet.db").write_bytes(b"x" * 1024)
+    (delroot / "cabinet.db-wal").write_bytes(b"w" * 32)
+    (delroot / "cabinet.db-shm").write_bytes(b"s" * 16)
+    (delroot / "cabinet.v3.bak").write_bytes(b"b" * 64)
+    (delroot / "cabinet.v2.20260101120000.bak").write_bytes(b"b" * 48)
+    libsub = delroot / "library"
+    libsub.mkdir()
+    (libsub / "project_1.txt").write_bytes(b"y" * 256)
+    # 用户外来内容
+    (delroot / "notes.md").write_bytes(b"u" * 100)
+    (delroot / "backup_2024.zip").write_bytes(b"z" * 200)
+    foreign_dir = delroot / "myfolder"
+    foreign_dir.mkdir()
+    (foreign_dir / "inner.txt").write_bytes(b"f" * 50)
+
+    scan = scan_library_for_deletion(delroot)
+    owned_names = {p.name for p in scan.owned}
+    foreign_names = {p.name for p in scan.foreign}
+    t.assert_eq("scan owned 含库标记", LIBRARY_MARKER in owned_names, True)
+    t.assert_eq("scan owned 含 cabinet.db", "cabinet.db" in owned_names, True)
+    t.assert_eq("scan owned 含 cabinet.db-wal", "cabinet.db-wal" in owned_names, True)
+    t.assert_eq("scan owned 含 cabinet.db-shm", "cabinet.db-shm" in owned_names, True)
+    t.assert_eq("scan owned 含 cabinet.vN.bak", "cabinet.v3.bak" in owned_names, True)
+    t.assert_eq(
+        "scan owned 含 cabinet.vN.<时间戳>.bak",
+        "cabinet.v2.20260101120000.bak" in owned_names, True,
+    )
+    t.assert_eq("scan owned 含 library/", "library" in owned_names, True)
+    t.assert_eq("scan foreign 含 notes.md", "notes.md" in foreign_names, True)
+    t.assert_eq("scan foreign 含外来 zip", "backup_2024.zip" in foreign_names, True)
+    t.assert_eq("scan foreign 含外来子目录", "myfolder" in foreign_names, True)
+    t.assert_eq(
+        "scan owned + foreign 数量 = 顶层条目数",
+        len(scan.owned) + len(scan.foreign), 10,
+    )
+    t.assert_eq("scan foreign_size > 0", scan.foreign_size > 0, True)
+    t.assert_eq("scan owned_size > 0", scan.owned_size > 0, True)
+
+    # 执行 owned-only 删除
+    failures = delete_library_owned_only(delroot)
+    t.assert_eq("delete_owned_only 全部成功", failures, [])
+    t.assert_eq("delroot 目录本身保留", delroot.is_dir(), True)
+    t.assert_eq("库标记被删", (delroot / LIBRARY_MARKER).exists(), False)
+    t.assert_eq("cabinet.db 被删", (delroot / "cabinet.db").exists(), False)
+    t.assert_eq("library/ 被删", libsub.exists(), False)
+    t.assert_eq("cabinet.v3.bak 被删", (delroot / "cabinet.v3.bak").exists(), False)
+    t.assert_eq("notes.md 保留", (delroot / "notes.md").is_file(), True)
+    t.assert_eq("backup_2024.zip 保留", (delroot / "backup_2024.zip").is_file(), True)
+    t.assert_eq("myfolder 保留", foreign_dir.is_dir(), True)
+    t.assert_eq("myfolder/inner.txt 保留", (foreign_dir / "inner.txt").is_file(), True)
+    # 删完后，目录已不再是有效库
+    t.assert_eq("删完后 is_library_dir = False", is_library_dir(delroot), False)
+
+    # 干净库（无外来内容）扫描结果：foreign 为空
+    cleanroot = tmp / "delete_test_clean"
+    cleanroot.mkdir()
+    (cleanroot / LIBRARY_MARKER).write_text("")
+    (cleanroot / "cabinet.db").write_bytes(b"x" * 32)
+    scan2 = scan_library_for_deletion(cleanroot)
+    t.assert_eq("干净库 scan: foreign 空", scan2.foreign, [])
+    t.assert_eq("干净库 scan: owned 非空", len(scan2.owned) >= 2, True)
 
 
 if __name__ == "__main__":

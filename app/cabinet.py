@@ -283,6 +283,103 @@ def mark_as_library(root: Path) -> None:
     (root / LIBRARY_MARKER).touch(exist_ok=True)
 
 
+# 库内"白名单"——这些顶层条目属于库自身，"删除整个库"时无条件清掉
+# （注意 SQLite WAL 模式的 -wal / -shm 边车文件；schema 自动备份 cabinet.v*.bak）
+def _is_library_owned_entry(name: str) -> bool:
+    """判断库根目录下顶层条目名是否属于"库自身"。"""
+    if name == LIBRARY_MARKER:
+        return True
+    if name == "library":  # copy 模式仓储根
+        return True
+    if name in ("cabinet.db", "cabinet.db-wal", "cabinet.db-shm"):
+        return True
+    # schema 自动备份：cabinet.vN.bak / cabinet.vN.<时间戳>.bak
+    if name.startswith("cabinet.v") and name.endswith(".bak"):
+        return True
+    return False
+
+
+@dataclass
+class LibraryDeleteScan:
+    """``scan_library_for_deletion`` 的结果，用于 UI 二次确认。
+
+    - ``owned``：库自身的顶层条目（删除整个库时无条件清掉）
+    - ``foreign``：库目录下属于用户自己的额外内容（默认应保留，让 UI 显式询问）
+    - ``total_size``：所有项的递归总大小（粗略，遇 OSError 部分跳过）
+    - ``owned_size`` / ``foreign_size``：分别按归属统计的大小
+    """
+    owned: list[Path]
+    foreign: list[Path]
+    total_size: int
+    owned_size: int
+    foreign_size: int
+
+
+def _entry_size(p: Path) -> int:
+    """递归估算条目大小；不抛错。"""
+    try:
+        if p.is_file():
+            return p.stat().st_size
+        if p.is_dir():
+            return sum(
+                f.stat().st_size for f in p.rglob("*") if f.is_file()
+            )
+    except OSError:
+        return 0
+    return 0
+
+
+def scan_library_for_deletion(root: Path) -> LibraryDeleteScan:
+    """扫描库目录，把顶层条目分成"库自身"和"用户外来内容"两组。
+
+    供"删除整个库"的二次确认 UI 使用：当 ``foreign`` 非空时，应该让用户在
+    「保留外来文件、只删库数据」与「一并删除」之间显式选择。
+    """
+    root = Path(root)
+    owned: list[Path] = []
+    foreign: list[Path] = []
+    owned_size = 0
+    foreign_size = 0
+    try:
+        for p in sorted(root.iterdir(), key=lambda x: x.name.lower()):
+            sz = _entry_size(p)
+            if _is_library_owned_entry(p.name):
+                owned.append(p)
+                owned_size += sz
+            else:
+                foreign.append(p)
+                foreign_size += sz
+    except OSError:
+        pass
+    return LibraryDeleteScan(
+        owned=owned,
+        foreign=foreign,
+        total_size=owned_size + foreign_size,
+        owned_size=owned_size,
+        foreign_size=foreign_size,
+    )
+
+
+def delete_library_owned_only(root: Path) -> list[tuple[Path, str]]:
+    """只删除库内白名单条目，保留 ``root`` 目录本体与所有外来内容。
+
+    返回失败列表 ``[(path, error_message), ...]``。成功项不返回。
+    """
+    import shutil as _sh
+    failures: list[tuple[Path, str]] = []
+    scan = scan_library_for_deletion(root)
+    for p in scan.owned:
+        try:
+            if p.is_dir() and not p.is_symlink():
+                _sh.rmtree(p)
+            else:
+                p.unlink()
+        except OSError as e:
+            failures.append((p, str(e)))
+    return failures
+
+
+
 def import_settings_from_other_db(other_db_path: Path, keys: list[str]) -> dict[str, str]:
     """以只读方式打开另一个库的 db，读出指定 settings 项。
 
@@ -320,11 +417,14 @@ def _now_iso() -> str:
 __all__ = [
     "CabinetConfig",
     "LibraryHandle",
+    "LibraryDeleteScan",
     "MAX_RECENT",
     "LIBRARY_MARKER",
     "resolve_library_paths",
     "is_library_dir",
     "is_empty_or_safe_for_library",
     "mark_as_library",
+    "scan_library_for_deletion",
+    "delete_library_owned_only",
     "import_settings_from_other_db",
 ]

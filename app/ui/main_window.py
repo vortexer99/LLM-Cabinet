@@ -106,6 +106,78 @@ class NoElideDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+def _ask_delete_mode(parent, root_path, scan) -> str | None:
+    """删除整个库时，库目录下还存在外来内容时的"删除范围"选择对话框。
+
+    返回：``"owned"`` = 仅删库数据保留外来文件 / ``"all"`` = 一并删除（含目录）/
+    ``None`` = 用户取消。
+
+    UI：上方一段说明 + 一份"外来内容"清单（最多展示 N 行 + "更多 K 项"省略）+
+    两个 RadioButton + Cancel/OK。默认选 owned（更安全）。
+    """
+    from PySide6.QtWidgets import (
+        QButtonGroup, QDialog, QDialogButtonBox, QLabel, QPlainTextEdit,
+        QRadioButton, QVBoxLayout,
+    )
+    dlg = QDialog(parent)
+    dlg.setWindowTitle("检测到非库内容")
+    dlg.setMinimumWidth(560)
+    v = QVBoxLayout(dlg)
+
+    intro = QLabel(
+        f"<b>库目录下检测到 {len(scan.foreign)} 项不属于库自身的内容</b>"
+        f"（共 {_human_size(scan.foreign_size)}）。<br/>"
+        "这些内容**不是** LLM Cabinet 创建的（可能是你自己放进库目录的笔记、"
+        "备份、临时文件等）。请选择如何处理："
+    )
+    intro.setTextFormat(Qt.RichText)
+    intro.setWordWrap(True)
+    v.addWidget(intro)
+
+    # 外来清单（只读文本框，避免对话框被巨长列表撑爆）
+    MAX_LINES = 30
+    lines: list[str] = []
+    for entry in scan.foreign[:MAX_LINES]:
+        suffix = "/" if entry.is_dir() else ""
+        lines.append(f"  • {entry.name}{suffix}")
+    if len(scan.foreign) > MAX_LINES:
+        lines.append(f"  ... 还有 {len(scan.foreign) - MAX_LINES} 项")
+    lst = QPlainTextEdit()
+    lst.setReadOnly(True)
+    lst.setPlainText("\n".join(lines))
+    lst.setMaximumHeight(180)
+    v.addWidget(lst)
+
+    rb_owned = QRadioButton(
+        "🟢 保留这些文件，只删除库数据（推荐）"
+    )
+    rb_owned.setToolTip(
+        "删除 cabinet.db / library/ / .llm-cabinet 等库自身条目，保留目录本身"
+        "与上面列出的外来文件。删完后该目录将不再是 LLM Cabinet 的库。"
+    )
+    rb_owned.setChecked(True)
+    rb_all = QRadioButton(
+        "🔴 一并删除（包括上面列出的外来文件，以及目录本身）"
+    )
+    rb_all.setToolTip(
+        "等同于 rmtree(库目录)；连同你自己放进来的内容也一起删。"
+    )
+    grp = QButtonGroup(dlg)
+    grp.addButton(rb_owned)
+    grp.addButton(rb_all)
+    v.addWidget(rb_owned)
+    v.addWidget(rb_all)
+
+    bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+    bb.accepted.connect(dlg.accept)
+    bb.rejected.connect(dlg.reject)
+    v.addWidget(bb)
+
+    if dlg.exec() != QDialog.Accepted:
+        return None
+    return "all" if rb_all.isChecked() else "owned"
+
+
 class MainWindow(QMainWindow):
     def __init__(
         self,
@@ -648,25 +720,45 @@ class MainWindow(QMainWindow):
                 self.setWindowTitle(f"LLM Cabinet — {new_label.strip()}")
 
         def _delete_lib(p):
+            """删除整个库的二次/三次确认流程。
+
+            额外保护：扫描目录顶层条目，区分"库自身"（cabinet.db / library/ /
+            .llm-cabinet / cabinet.v*.bak / db-wal / db-shm）与"用户外来内容"，
+            发现外来内容时强制让用户在「保留这些文件，只删库数据」与「一并删除」
+            之间显式选择，避免误删用户在库目录里放的笔记 / 备份等。
+            """
+            from ..cabinet import (
+                delete_library_owned_only, scan_library_for_deletion,
+            )
             handle = self.cabinet_config.find(p)
             display = handle.display_name if handle else p.name
-            # 双重确认：先列出代价
-            try:
-                size = sum(
-                    f.stat().st_size for f in p.rglob("*") if f.is_file()
-                )
-            except OSError:
-                size = 0
+
+            # 第 1 步：列出代价 + 概览
+            scan = scan_library_for_deletion(p)
             ans1 = QMessageBox.warning(
                 dlg, "确认删除（1/2）",
-                f"将永久删除整个库目录：\n\n{p}\n\n"
-                f"占用空间：{_human_size(size)}\n\n"
-                f"此操作**不可恢复**。继续？",
+                f"将删除库『{display}』：\n\n{p}\n\n"
+                f"库数据占用：{_human_size(scan.owned_size)}"
+                + (
+                    f"\n⚠ 目录下还有 {len(scan.foreign)} 项非库内容"
+                    f"（{_human_size(scan.foreign_size)}），下一步需要你选择如何处理。"
+                    if scan.foreign else
+                    "\n（目录下没有非库内容）"
+                )
+                + "\n\n此操作**不可恢复**。继续？",
                 QMessageBox.Yes | QMessageBox.No,
             )
             if ans1 != QMessageBox.Yes:
                 return
-            # 第二步：要求输入 label 作为最终确认
+
+            # 第 2 步（仅当存在外来内容）：选删除模式
+            mode = "all"  # "owned" = 仅删库数据保留外来；"all" = 一并删除（含目录）
+            if scan.foreign:
+                mode = _ask_delete_mode(dlg, p, scan)
+                if mode is None:
+                    return  # 用户取消
+
+            # 第 3 步：要求输入 label 作为最终确认
             typed, ok = QInputDialog.getText(
                 dlg, "确认删除（2/2）",
                 f"请输入库的名称『{display}』以确认删除：",
@@ -674,7 +766,28 @@ class MainWindow(QMainWindow):
             if not ok or typed.strip() != display:
                 QMessageBox.information(dlg, "已取消", "名称不匹配，取消删除。")
                 return
+
             # 执行
+            if mode == "owned":
+                # 仅删库自身白名单条目，保留目录本身与外来内容
+                failures = delete_library_owned_only(p)
+                if failures:
+                    msg = "\n".join(f"• {fp.name}：{err}" for fp, err in failures[:10])
+                    QMessageBox.warning(
+                        dlg, "部分删除失败",
+                        f"以下库内条目未能删除（其余已成功）：\n{msg}",
+                    )
+                # 即便有失败，也把它从最近列表移除——目录已不再是有效库（标记被删/db 被删）
+                self.cabinet_config.remove(p)
+                self.cabinet_config.save()
+                _refresh()
+                QMessageBox.information(
+                    dlg, "完成",
+                    f"已删除库数据，外来文件保留在：\n{p}",
+                )
+                return
+
+            # mode == "all"：维持原 rmtree(root) 行为
             try:
                 import shutil as _sh
                 _sh.rmtree(p, ignore_errors=False)

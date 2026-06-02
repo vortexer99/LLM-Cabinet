@@ -35,6 +35,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - **多项目库并存与切换（task #08）**：每个"库"是一个完整的目录（含 `cabinet.db` + `library/` + `.llm-cabinet` 标记）。新增主菜单 **「库」**：
   - 切换库... (Ctrl+Shift+O) / 新建库... (Ctrl+Shift+N) / 当前库信息... / 从其它库导入 API 配置...
   - 「最近打开」子菜单（默认 5 个，默认库永驻），含「管理列表...」对话框：列表底部「🔀 切换到选中库」按钮（仅对非当前库 enable）+ 双击列表项 = 切换；右键菜单顶端也加「🔀 切换到此库」，原本的「从列表移除 / 删除整个库... / 改名...」保留
+  - **「删除整个库...」加外来文件保护**：删除前 `scan_library_for_deletion(root)` 把库根目录顶层条目分成"库自身"（`cabinet.db` / `cabinet.db-wal` / `cabinet.db-shm` / `library/` / `.llm-cabinet` / `cabinet.v*.bak`）与"用户外来内容"两组；当存在外来内容时，在确认（1/2）之后插入第二段对话框列出这些条目，强制让用户在「🟢 保留这些文件，只删除库数据（推荐）」与「🔴 一并删除（含目录）」之间显式选择，避免 `rmtree(root)` 误删用户在库目录里放的笔记 / 备份。新公开 API：`app.cabinet.scan_library_for_deletion()` / `delete_library_owned_only()` / `LibraryDeleteScan`
   - 切换走应用重启（`os.execv`），稳定且简单
   - 跨库全局配置存于 `%APPDATA%/LLMCabinet/cabinet.json`；损坏自动备份重建
   - 当前库 label 显示在标题栏；当前活动库与默认库的"删除/移除"菜单项强制 disabled
