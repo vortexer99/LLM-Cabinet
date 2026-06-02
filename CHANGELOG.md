@@ -33,13 +33,13 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - **📦 备份此库...**：把整个库目录打成 zip（自动 WAL checkpoint、记忆上次备份目录）
   - **📥 从备份恢复库...**：从 zip 解到空目录，确认后自动切换到新库
 - **多项目库并存与切换（task #08）**：每个"库"是一个完整的目录（含 `cabinet.db` + `library/` + `.llm-cabinet` 标记）。新增主菜单 **「库」**：
-  - 切换库... (Ctrl+Shift+O) / 新建库... (Ctrl+Shift+N) / 当前库信息... / 从其它库导入 API 配置...
-  - 「最近打开」子菜单（默认 5 个，默认库永驻），含「管理列表...」对话框：列表底部「🔀 切换到选中库」按钮（仅对非当前库 enable）+ 双击列表项 = 切换；右键菜单顶端也加「🔀 切换到此库」，原本的「从列表移除 / 删除整个库... / 改名...」保留
-  - **「删除整个库...」加外来文件保护**：删除前 `scan_library_for_deletion(root)` 把库根目录顶层条目分成"库自身"（`cabinet.db` / `cabinet.db-wal` / `cabinet.db-shm` / `library/` / `.llm-cabinet` / `cabinet.v*.bak`）与"用户外来内容"两组；当存在外来内容时，在确认（1/2）之后插入第二段对话框列出这些条目，强制让用户在「🟢 保留这些文件，只删除库数据（推荐）」与「🔴 一并删除（含目录）」之间显式选择，避免 `rmtree(root)` 误删用户在库目录里放的笔记 / 备份。新公开 API：`app.cabinet.scan_library_for_deletion()` / `delete_library_owned_only()` / `LibraryDeleteScan`
+  - 切换库... (Ctrl+Shift+O) / 新建库... (Ctrl+Shift+N) / 🏠 回到欢迎页... / 当前库信息... / 从其它库导入 API 配置...
+  - 「最近打开」子菜单（默认 5 个），含「管理列表...」对话框：列表底部「🔀 切换到选中库」按钮（仅对非当前库 enable）+ 双击列表项 = 切换；右键菜单顶端也加「🔀 切换到此库」，原本的「从列表移除 / 删除整个库... / 改名...」保留
+  - **「删除整个库...」加外来文件保护**：删除前 `scan_library_for_deletion(root)` 把库根目录顶层条目分成三组——"库自身"（`cabinet.db` / `cabinet.db-wal` / `cabinet.db-shm` / `library/` / `.llm-cabinet` / `cabinet.v*.bak`）/ "软件全局"（`cabinet.json` 及 `.bak.<ts>.json`，**任何模式下都保留**）/ "用户外来内容"。当存在外来内容时，在确认（1/2）之后插入第二段对话框列出这些条目，强制让用户在「🟢 保留这些文件，只删除库数据（推荐）」与「🔴 一并删除（含目录）」之间显式选择，避免 `rmtree(root)` 误删用户在库目录里放的笔记 / 备份。新公开 API：`app.cabinet.scan_library_for_deletion()` / `delete_library_owned_only()` / `delete_library_all()` / `LibraryDeleteScan`（含 `app_global` 字段）
   - 切换走应用重启（`os.execv`），稳定且简单
   - **「切换库」严格只切换、不创建**：选到非库目录（空目录或普通目录）直接拒绝，明确引导用户改用「新建库」走 task #15 多页向导。原本"选空目录 → 询问是否新建"的简化路径已移除（它会绕过 onboarding，留下没库描述 / 没字段配置 / 没默认视图的半残库）
   - 跨库全局配置存于 `%APPDATA%/LLMCabinet/cabinet.json`；损坏自动备份重建
-  - 当前库 label 显示在标题栏；当前活动库与默认库的"删除/移除"菜单项强制 disabled
+  - 当前库 label 显示在标题栏；当前活动库的"删除 / 移除"菜单项**也允许操作**（删除当前库或从列表移除当前库 = 弹二次确认 → 关主窗口走 Welcome 兜底重新选择库，详见下方"启动期 Welcome 兜底"）。**默认库不再有任何特权**：可以删、可以从列表移除、可以被截断挤出最近列表
 - **字段级 LLM 提示（task #11 T1/T2/T4）**：
   - 「设置 → 字段」每个字段加一列「LLM 提示」按钮，点击弹文本编辑器，自定义该字段在 LLM 建议时的格式说明（如"标题不超过 30 字"、"描述 200~400 字分段说明"）。留空 = 使用默认。单条最大 500 字超限自动截断
   - prompt 拼装时把每个字段的 `prompt_hint` 注入到 user prompt 中"字段格式要求"区段；「查看 Prompt」对话框可见拼接结果
@@ -105,14 +105,21 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 标签自动创建：导入项目时碰到库内不存在的标签会**直接创建**（沿用 Repository 现有行为）。
 
 ### Changed
+- ⚠️ **「默认库」概念彻底取消 + 启动期 Welcome 兜底**：`%APPDATA%/LLMCabinet/` 不再被视作"自动登记的默认库"，仅作为软件全局配置（`cabinet.json` 及其备份）的存放点。具体行为：
+  - **空配置** = 空配置：`CabinetConfig._default()` 不再自动塞一条"(默认库)"到 `recent_libraries`；`active_library = None`，`recent_libraries = []`。第一次安装、`cabinet.json` 损坏后回退、用户在主界面把所有库都"删除整个库"了——这三种情况下都进入空配置
+  - **启动期 Welcome 兜底**（`app/main.py:_resolve_active_library_root`）：active 不可用 + 没有任何可降级的有效 recent → 弹 Welcome 让用户重新选；上次 active 失效但有具体路径时 Welcome 顶部显示「⚠ 上次打开的库已不可用：&lt;path&gt;」红字提示
+  - **Welcome 选项重设**：移除「使用默认位置」选项（默认位置不再有意义）；新增「打开最近使用的库」列表（仅当 `cabinet.recent_libraries` 非空时显示，列出已知库 + 失效项灰显）；新增「📥 从备份 zip 恢复库...」入口（与「工具 → 📥 从备份恢复库...」共享 `app.library_check.restore_library`，但完成后直接走 `RESULT_OPEN_EXISTING` 进主窗口，无需重启切换）；保留「新建库...」「打开其它已有库目录...」「退出」。**视觉**：顶部品牌区显著放大 — 应用图标 128×128 居中、标题 36pt 加粗、副标题 13pt，整体约占对话框 40% 高度（`brand_box.setMinimumHeight(280)` + 父布局 stretch=2）；不再写"这是你第一次使用"等不准确的引导语 — 仅在 `stale_active != None` 时显示红字「⚠ 上次打开的库已不可用：&lt;path&gt;」。「📁 新建库」/「🔍 打开其它已有库目录」/「📥 从备份恢复库」改为**单行按钮**（高 48px、内边距 12×20px），文字直接说明动作；「📂 打开最近使用的库」用 `QFrame{StyledPanel}` 包成区块，**每个库占一行**展示「名字 — 路径」（`uniformItemSizes(True)`、行高 26px、最多 5 行可见），路径完整内容用 tooltip 兜底，区块整体高度按条数自适应。**修复 Welcome 出现在 `apply_theme()` 之前导致灰底**：`main()` 启动时立刻 `apply_theme(app, "light")` 作为兜底（之前要等到打开库读到 `settings.theme` 后才 apply，Welcome 弹出时 stylesheet 还没加载，整个对话框就只能显示 fusion 默认灰色背景，与后续主窗口的白底观感断裂）；打开库后会再次 apply 一次，dark 主题用户的偏好不丢。**关掉所有按钮的焦点环 + auto-default**（`setFocusPolicy(Qt.NoFocus)` + `setAutoDefault(False)`），避免任一项被 Qt 自动画上"默认按钮"蓝边。**左下角加「ℹ 关于」按钮**：弹独立的 `app/ui/about_dialog.py:AboutDialog`（与「设置 → 关于」内容一致但不依赖已打开的库 / Repository，可在 Welcome 期间调用）
+  - **主菜单「库」新增「🏠 回到欢迎页...」**：用户可主动关闭当前库回到 Welcome（弹二次确认 → `_pending_switch_to = "__welcome__"` + 关主窗口 → main 重启走 Welcome）；当前库不删，仍在最近列表里可重新打开。**重启时会附加 `--welcome` 命令行参数**，让 main 强制走 Welcome 而不是从 recent 自动降级回原库（recent 头部就是用户刚离开的库，不加 `--welcome` 的话 `_resolve_active_library_root` 会把它选回来，"回到欢迎页"就没生效）。`--welcome` 是一次性的，下次重启会被自动剥掉
+  - **默认库特权全砍**：`cabinet.remove(default)` 不再硬阻挡；`_trim_recents()` 不再强制保留默认库；管理列表对话框里默认库的"从列表移除 / 删除整个库"不再 disable
+  - **当前库也允许删 / 移除**：在管理列表对话框里对当前库点"从列表移除"或"删除整个库..."会弹二次确认，确认后通过新的哨兵 `_pending_switch_to = "__welcome__"` + 关主窗口 → main 检测后 restart 走 Welcome 让用户重新选。**删之前先释放 sqlite 句柄**：`MainWindow._release_active_db_resources()` 会 `llm_queue.stop(join_timeout=2.0)` + `repo.conn.close()`，避免 Windows 下"另一个进程正在使用此文件"导致 `cabinet.db` / `-wal` / `-shm` 删不掉。`LLMTaskQueue.stop` 新增 `join_timeout` 参数等 worker 真正退出
+  - **`cabinet.json` 在删除整个库时永远保留**：当库根目录恰好包含软件全局文件时，`delete_library_owned_only` / `delete_library_all` 都会跳过 `app_global` 这一类，目录本体也保留（避免 rmtree 连带 cabinet.json）；同时 `LibraryDeleteScan` 新增 `app_global` / `app_global_size` 字段，UI 里的"非库内容"清单也不会让 `cabinet.json` 出现造成困惑
+  - **修复**（被本次重构吸收）：原"二级菜单点默认库提示不是有效库"+ "管理列表里切换默认库无声回滚"两 bug 自然消失——默认库不再被自动登记进 recent，不存在那个误导性条目；切换路径已统一走 `_lib_open_recent` 校验
 - **新建库默认字段精简**：新建库时只创建 **标题 / 标签 / 描述** 三个保护字段（之前会一并创建作者/日期/评分/来源 7 个）。`projects` 表的 `author`/`date`/`source_url`/`rating` 列保留作为系统字段值的存放后端，用户可在「设置 → 字段」用相同名字重新加，或运行「LLM 助手 → 库字段设计助手」按场景规划。**已有库不受影响**（`_seed_fields` 仅在 `fields` 表为空时插入）。未来「新建库」流程会加一个对话框让用户选择是否一并创建这 4 个常见字段（task #15 / TODO）。
 - 拖到 DropZone 的对象**全是目录且 ≥ 2 个**时，行为由"全部并入一个新项目"改为
   先弹模式选择对话框（默认"分别建立"）；旧的合并行为通过对话框中的「合并为同一项目」保留。
   单个目录与含散文件的拖入行为不变。
 
 ### Fixed
-- **「最近打开 → (默认库)」点击切换提示"不是有效库"**：当本次活动库不是默认库时，默认库目录因为只放了 `cabinet.json`、没有 `.llm-cabinet` 标记 / `cabinet.db`，会被 `is_library_dir` 判定为无效库。修复方式：`app/main.py` 启动时**无条件** `mark_as_library(app_data_dir())`（仅 touch 标记文件，不写 db），保证默认库始终可作为有效库识别
-- **「管理列表」对话框里的"切换"会无声切回原库**：原本管理列表的切换按钮 / 双击 / 右键菜单都直奔 `_confirm_and_restart_to`，绕过了 `_lib_open_recent` 的有效性校验；如果选中项目录已损坏（标记 / cabinet.db 缺失 / 目录被外部删除），会先 `cabinet_config.touch` 再重启，重启时 `_resolve_active_library_root` 又会降级回原库——表现是"按了切换却没切走"。修复：管理列表的切换统一走 `_lib_open_recent`，目录无效时明确报错
 - `app/utils.py` 中 `human_size()` 重复定义了两次（前者支持 `int|float` 与浮点格式化，后者只 `int` 且会修改入参）。删除后者，仅保留前者。
 
 ### Deprecated

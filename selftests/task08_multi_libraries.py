@@ -28,9 +28,9 @@ from selftests._common import T
 
 from app.cabinet import (
     CABINET_JSON, CabinetConfig, LIBRARY_MARKER, MAX_RECENT,
-    delete_library_owned_only, import_settings_from_other_db,
-    is_empty_or_safe_for_library, is_library_dir, mark_as_library,
-    resolve_library_paths, scan_library_for_deletion,
+    delete_library_all, delete_library_owned_only,
+    import_settings_from_other_db, is_empty_or_safe_for_library, is_library_dir,
+    mark_as_library, resolve_library_paths, scan_library_for_deletion,
 )
 from app.db import connect
 from app.repository import Repository
@@ -78,21 +78,16 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     cabinet_json_path = default_root / CABINET_JSON
 
     # ----------------------------------------------------------------
-    # 阶段 1：load 缺失文件 → 默认值（默认库登记）
+    # 阶段 1：load 缺失文件 → 空配置（不再自动登记默认库）
     # ----------------------------------------------------------------
     cfg = CabinetConfig.load()
     t.assert_eq(
-        "缺失 cabinet.json：active 默认为默认库",
-        Path(cfg.active_library).resolve() if cfg.active_library else None,
-        default_root,
+        "缺失 cabinet.json：active = None（空配置）",
+        cfg.active_library, None,
     )
     t.assert_eq(
-        "缺失：recent 含 1 条（默认库）",
-        len(cfg.recent_libraries), 1,
-    )
-    t.assert_eq(
-        "默认库 path 正确",
-        cfg.recent_libraries[0].path.resolve(), default_root,
+        "缺失：recent 为空",
+        len(cfg.recent_libraries), 0,
     )
 
     # save 后能 load 回来
@@ -101,42 +96,43 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     cfg2 = CabinetConfig.load()
     t.assert_eq(
         "save+load 往返：recent 数量",
-        len(cfg2.recent_libraries), 1,
+        len(cfg2.recent_libraries), 0,
     )
 
     # ----------------------------------------------------------------
-    # 阶段 2：touch 新增 / 提升 / 上限
+    # 阶段 2：touch 新增 / 提升 / 上限（默认库不再有特权）
     # ----------------------------------------------------------------
-    libs = [tmp / f"lib{i}" for i in range(1, 7)]
+    libs = [tmp / f"lib{i}" for i in range(1, 8)]
     for p in libs:
         p.mkdir()
         mark_as_library(p)
 
     cfg.touch(libs[0], label="L1")
     t.assert_eq("touch[1] 后 active 切换", cfg.active_library, libs[0])
-    t.assert_eq("touch[1] 后 recent 数量", len(cfg.recent_libraries), 2)
+    t.assert_eq("touch[1] 后 recent 数量", len(cfg.recent_libraries), 1)
     t.assert_eq("touch[1] 头部即新", cfg.recent_libraries[0].path, libs[0])
 
     cfg.touch(libs[1], label="L2")
     cfg.touch(libs[2], label="L3")
     cfg.touch(libs[3], label="L4")
-    cfg.touch(libs[4], label="L5")  # 加上默认库共 6 条 → 应被截断
+    cfg.touch(libs[4], label="L5")  # 总数 5 = MAX_RECENT
+    cfg.touch(libs[5], label="L6")  # 再加 1 → 应被截断到 MAX_RECENT
     t.assert_eq(
-        "touch 多次后 ≤ MAX_RECENT (默认库强制保留)",
+        "touch 多次后 ≤ MAX_RECENT",
         len(cfg.recent_libraries), MAX_RECENT,
     )
-    # 默认库始终在列表里（即便被截断也会被补回）
+    # 最早的 lib0 应被踢出（因为 touch 顺序：L1 最早，L6 最新；L6 把 L1 挤掉）
     t.assert_true(
-        "默认库始终在最近列表",
-        any(h.path.resolve() == default_root for h in cfg.recent_libraries),
+        "最早被 touch 的库被截断踢出",
+        not any(h.path.resolve() == libs[0].resolve() for h in cfg.recent_libraries),
     )
 
-    # 再 touch lib0 → 提到头部
-    cfg.touch(libs[0])
-    t.assert_eq("再 touch[0] 提到头部", cfg.recent_libraries[0].path, libs[0])
+    # 再 touch lib1 → 提到头部
+    cfg.touch(libs[1])
+    t.assert_eq("再 touch[1] 提到头部", cfg.recent_libraries[0].path, libs[1])
 
     # ----------------------------------------------------------------
-    # 阶段 3：remove / rename / find / 默认库不能 remove
+    # 阶段 3：remove / rename / find（默认库也可以 remove）
     # ----------------------------------------------------------------
     # 重新 touch lib0、lib1 进列表（之前的 touch 顺序可能让它们被 trim 掉），
     # 确保后面 remove / rename 测试有目标
@@ -150,12 +146,21 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
         not any(h.path.resolve() == libs[0].resolve() for h in cfg.recent_libraries),
     )
 
-    # 默认库 remove 应被忽略
-    before = len(cfg.recent_libraries)
+    # 默认库目录也可以 remove（不再特殊处理；前提是它在列表里）
+    cfg.touch(default_root, label="(默认库)")
+    t.assert_true(
+        "默认库可被 touch 进列表",
+        any(h.path.resolve() == default_root for h in cfg.recent_libraries),
+    )
+    before2 = len(cfg.recent_libraries)
     cfg.remove(default_root)
     t.assert_eq(
-        "默认库 remove 被忽略",
-        len(cfg.recent_libraries), before,
+        "默认库 remove 不被忽略（数量 -1）",
+        len(cfg.recent_libraries), before2 - 1,
+    )
+    t.assert_true(
+        "默认库已不在最近列表",
+        not any(h.path.resolve() == default_root for h in cfg.recent_libraries),
     )
 
     cfg.rename(libs[1], "新名字")
@@ -172,13 +177,17 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     t.assert_eq("save/load 后 rename 仍在", h2.label if h2 else None, "新名字")
 
     # ----------------------------------------------------------------
-    # 阶段 4：损坏的 cabinet.json → 备份并重建
+    # 阶段 4：损坏的 cabinet.json → 备份并重建为空配置
     # ----------------------------------------------------------------
     cabinet_json_path.write_text("{not json", encoding="utf-8")
     cfg_recovered = CabinetConfig.load()
     t.assert_eq(
-        "损坏后回退默认：recent 数量",
-        len(cfg_recovered.recent_libraries), 1,
+        "损坏后回退空配置：recent 为空",
+        len(cfg_recovered.recent_libraries), 0,
+    )
+    t.assert_eq(
+        "损坏后回退空配置：active = None",
+        cfg_recovered.active_library, None,
     )
     # 应有 .bak.* 备份文件
     bak_files = list(default_root.glob(f"{CABINET_JSON}.bak.*"))
@@ -327,7 +336,90 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     (cleanroot / "cabinet.db").write_bytes(b"x" * 32)
     scan2 = scan_library_for_deletion(cleanroot)
     t.assert_eq("干净库 scan: foreign 空", scan2.foreign, [])
+    t.assert_eq("干净库 scan: app_global 空", scan2.app_global, [])
     t.assert_eq("干净库 scan: owned 非空", len(scan2.owned) >= 2, True)
+
+    # ----------------------------------------------------------------
+    # 阶段 9：cabinet.json 与 .bak.<ts>.json 作为软件全局文件被保护
+    # （任何模式下都保留 — owned-only / all 都不删）
+    # ----------------------------------------------------------------
+    appglobal_root = tmp / "appdata_lib"
+    appglobal_root.mkdir()
+    (appglobal_root / LIBRARY_MARKER).write_text("")
+    (appglobal_root / "cabinet.db").write_bytes(b"x" * 64)
+    (appglobal_root / CABINET_JSON).write_text("{}", encoding="utf-8")
+    (appglobal_root / f"{CABINET_JSON}.bak.20260101-120000.json").write_text("{}", encoding="utf-8")
+    (appglobal_root / "user_note.txt").write_text("hi")  # 外来文件
+
+    scan3 = scan_library_for_deletion(appglobal_root)
+    app_global_names = {p.name for p in scan3.app_global}
+    t.assert_eq("scan app_global 含 cabinet.json", CABINET_JSON in app_global_names, True)
+    t.assert_eq(
+        "scan app_global 含 cabinet.json.bak.<ts>.json",
+        f"{CABINET_JSON}.bak.20260101-120000.json" in app_global_names, True,
+    )
+    t.assert_eq(
+        "cabinet.json 不应被算作 foreign",
+        CABINET_JSON not in {p.name for p in scan3.foreign}, True,
+    )
+    t.assert_eq(
+        "user_note.txt 算作 foreign",
+        "user_note.txt" in {p.name for p in scan3.foreign}, True,
+    )
+
+    # owned-only 删除：cabinet.json 保留
+    delete_library_owned_only(appglobal_root)
+    t.assert_eq(
+        "owned-only 删除后 cabinet.json 保留",
+        (appglobal_root / CABINET_JSON).is_file(), True,
+    )
+    t.assert_eq(
+        "owned-only 删除后 user_note.txt 保留",
+        (appglobal_root / "user_note.txt").is_file(), True,
+    )
+    t.assert_eq(
+        "owned-only 删除后 cabinet.db 已删",
+        (appglobal_root / "cabinet.db").exists(), False,
+    )
+
+    # ----------------------------------------------------------------
+    # 阶段 10：delete_library_all —— 删 owned + foreign，保留 app_global
+    # ----------------------------------------------------------------
+    allroot = tmp / "delete_all_lib"
+    allroot.mkdir()
+    (allroot / LIBRARY_MARKER).write_text("")
+    (allroot / "cabinet.db").write_bytes(b"x" * 64)
+    (allroot / "user_note.md").write_text("u")
+    (allroot / CABINET_JSON).write_text("{}", encoding="utf-8")  # 软件全局：保留
+
+    failures = delete_library_all(allroot)
+    t.assert_eq("delete_library_all 无失败", failures, [])
+    t.assert_eq("含 app_global 时目录本身保留", allroot.is_dir(), True)
+    t.assert_eq(
+        "含 app_global：cabinet.json 保留",
+        (allroot / CABINET_JSON).is_file(), True,
+    )
+    t.assert_eq(
+        "含 app_global：cabinet.db 已删",
+        (allroot / "cabinet.db").exists(), False,
+    )
+    t.assert_eq(
+        "含 app_global：user_note.md 已删",
+        (allroot / "user_note.md").exists(), False,
+    )
+
+    # 不含 app_global 的库目录 → delete_library_all 等同 rmtree
+    pureroot = tmp / "delete_all_pure"
+    pureroot.mkdir()
+    (pureroot / LIBRARY_MARKER).write_text("")
+    (pureroot / "cabinet.db").write_bytes(b"x" * 32)
+    (pureroot / "extra.md").write_text("e")
+    failures2 = delete_library_all(pureroot)
+    t.assert_eq("delete_library_all (无 app_global) 无失败", failures2, [])
+    t.assert_eq(
+        "无 app_global：目录本身被 rmtree",
+        pureroot.exists(), False,
+    )
 
 
 if __name__ == "__main__":

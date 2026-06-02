@@ -196,7 +196,8 @@ class MainWindow(QMainWindow):
         # task #08 多库切换
         self.cabinet_config = cabinet_config       # CabinetConfig | None
         self.library_root = library_root           # Path | None；当前活动库根目录
-        self._pending_switch_to = None             # 关闭后由 main() 检测的"重启切换"目标
+        self._pending_switch_to = None             # 关闭后由 main() 检测的"重启切换"目标：
+                                                   # Path = 切到该路径；"__welcome__" = 重启进 Welcome；None = 不重启
 
         # 标题栏带上当前库 label，方便用户知道在哪个库
         title = "LLM Cabinet  ·  AI 项目化文件管理器"
@@ -253,6 +254,13 @@ class MainWindow(QMainWindow):
         act_new.setShortcut(QKeySequence("Ctrl+Shift+N"))
         act_new.triggered.connect(lambda _checked=False: self._lib_new())
         m_lib.addAction(act_new)
+
+        act_welcome = QAction("🏠 回到欢迎页...", self)
+        act_welcome.setToolTip(
+            "关闭当前库并回到欢迎页（应用会重启；当前库不会被删除，只是不再打开）"
+        )
+        act_welcome.triggered.connect(lambda _checked=False: self._lib_back_to_welcome())
+        m_lib.addAction(act_welcome)
 
         m_lib.addSeparator()
 
@@ -329,6 +337,26 @@ class MainWindow(QMainWindow):
         # 选到空目录 / 普通目录 → 直接报错让用户改走「新建库」，不在此路径里
         # 走"问是否新建"——新建必须经过 task #15 多页向导（要采集描述/字段/视图等）。
         self._lib_open_recent(_Path(d))
+
+    def _lib_back_to_welcome(self) -> None:
+        """关闭当前库并回到欢迎页（重启）。
+
+        与"删除当前库 → Welcome 兜底"复用同一个机制：写哨兵
+        ``_pending_switch_to = "__welcome__"`` 关主窗口，``main`` 检测到后
+        ``cabinet.active_library = None`` + restart，启动期 Welcome 弹出让
+        用户重新选库。**不**删除任何磁盘数据；当前库仍在最近列表里、可重新打开。
+        """
+        from PySide6.QtWidgets import QMessageBox
+        ans = QMessageBox.question(
+            self, "回到欢迎页",
+            "关闭当前库并回到欢迎页？\n\n"
+            "应用会重启，当前库不会被删除（仍在最近列表里）。\n"
+            "未保存的修改会丢失。",
+        )
+        if ans != QMessageBox.Yes:
+            return
+        self._pending_switch_to = "__welcome__"
+        self.close()
 
     def _lib_new(self) -> None:
         """新建一个空库目录（task #15 T1：多页向导，晚建 + 失败 rmtree 回滚）。"""
@@ -578,6 +606,31 @@ class MainWindow(QMainWindow):
             self.repo.set_setting(k, val)
         QMessageBox.information(self, "完成", f"已导入 {len(imported)} 项。")
 
+    def _release_active_db_resources(self) -> None:
+        """关闭当前库的所有文件句柄，让 sqlite db / WAL 边车 文件可被删除。
+
+        Windows 不允许删占用中的文件；当用户在主界面里"删除整个库"操作的目标恰好
+        是**当前库**时，必须先调用本方法关掉 ``self.repo.conn`` 才能让 rmtree
+        / unlink 成功。
+
+        操作内容：
+        1. 通知 LLM worker 线程退出（带 2 秒 join 等它真正回收）
+        2. 关闭 ``self.repo.conn``；后续任何对 ``self.repo`` 的访问都会抛错
+        3. （可选）把对应字段置 ``None`` 让悬垂访问尽早失败
+
+        本方法**只应在即将关主窗口的删除流程里调用**。一般操作不要碰它。
+        """
+        try:
+            if self.llm_queue is not None:
+                self.llm_queue.stop(join_timeout=2.0)
+        except Exception:
+            pass
+        try:
+            if self.repo is not None and self.repo.conn is not None:
+                self.repo.conn.close()
+        except Exception:
+            pass
+
     def _lib_manage_recent(self) -> None:
         """最近列表管理对话框（切换 / 移除 / 删除 / 改名）。"""
         from PySide6.QtCore import Qt as _Qt
@@ -587,7 +640,6 @@ class MainWindow(QMainWindow):
             QMenu, QMessageBox, QPushButton, QVBoxLayout,
         )
         from pathlib import Path as _Path
-        from ..utils import app_data_dir
 
         dlg = QDialog(self)
         dlg.setWindowTitle("管理最近打开的库")
@@ -606,14 +658,12 @@ class MainWindow(QMainWindow):
         v.addWidget(bb)
 
         cur = _Path(self.library_root).resolve()
-        default_path = app_data_dir().resolve()
 
         def _refresh():
             lst.clear()
             for h in self.cabinet_config.recent_libraries:
                 tag = " ●(当前)" if h.path.resolve() == cur else ""
-                tag2 = " (默认)" if h.path.resolve() == default_path else ""
-                it = QListWidgetItem(f"{h.display_name}{tag}{tag2}\n  {h.path}")
+                it = QListWidgetItem(f"{h.display_name}{tag}\n  {h.path}")
                 it.setData(_Qt.UserRole, str(h.path))
                 lst.addItem(it)
             _refresh_switch_btn()
@@ -661,7 +711,6 @@ class MainWindow(QMainWindow):
                 return
             path = _Path(str(it.data(_Qt.UserRole)))
             is_current = (path.resolve() == cur)
-            is_default = (path.resolve() == default_path)
             menu = QMenu(dlg)
             a_sw = _QA("🔀 切换到此库", dlg)
             a_sw.setEnabled(not is_current)
@@ -669,18 +718,14 @@ class MainWindow(QMainWindow):
             menu.addAction(a_sw)
             menu.addSeparator()
 
+            # 「从列表移除」对当前库也可用 —— 移除 = 关闭后走 Welcome 重选
             a_rm = _QA("从列表移除", dlg)
-            a_rm.setEnabled(not is_current and not is_default)
-            a_rm.triggered.connect(lambda _c=False: (
-                self.cabinet_config.remove(path),
-                self.cabinet_config.save(),
-                _refresh(),
-            ))
+            a_rm.triggered.connect(lambda _c=False: _remove_from_list(path, is_current))
             menu.addAction(a_rm)
 
+            # 「删除整个库」对当前库也可用 —— 删完后关闭主窗口走 Welcome 兜底
             a_del = _QA("删除整个库...", dlg)
-            a_del.setEnabled(not is_current and not is_default)
-            a_del.triggered.connect(lambda _c=False: _delete_lib(path))
+            a_del.triggered.connect(lambda _c=False: _delete_lib(path, is_current))
             menu.addAction(a_del)
 
             menu.addSeparator()
@@ -689,6 +734,27 @@ class MainWindow(QMainWindow):
             a_ren.triggered.connect(lambda _c=False: _rename_lib(path))
             menu.addAction(a_ren)
             menu.exec(lst.viewport().mapToGlobal(pos))
+
+        def _remove_from_list(p, is_current: bool):
+            """从最近列表移除（不动磁盘）。当前库被移除 → 关主窗口走 Welcome。"""
+            if is_current:
+                ans = QMessageBox.question(
+                    dlg, "从列表移除当前库",
+                    "当前正在使用这个库。从列表移除后，应用会**重启并回到欢迎页**\n"
+                    "让你重新选择库（库目录与文件都不会被删除，只是从最近列表移除）。\n\n"
+                    "继续？",
+                )
+                if ans != QMessageBox.Yes:
+                    return
+            self.cabinet_config.remove(p)
+            self.cabinet_config.save()
+            if is_current:
+                # 关闭管理对话框 → 设置兜底标志 → 关主窗口 → main 检测后 restart 走 Welcome
+                dlg.accept()
+                self._pending_switch_to = "__welcome__"
+                self.close()
+                return
+            _refresh()
 
         def _rename_lib(p):
             handle = self.cabinet_config.find(p)
@@ -704,32 +770,43 @@ class MainWindow(QMainWindow):
             if p.resolve() == cur:
                 self.setWindowTitle(f"LLM Cabinet — {new_label.strip()}")
 
-        def _delete_lib(p):
+        def _delete_lib(p, is_current: bool):
             """删除整个库的二次/三次确认流程。
 
-            额外保护：扫描目录顶层条目，区分"库自身"（cabinet.db / library/ /
-            .llm-cabinet / cabinet.v*.bak / db-wal / db-shm）与"用户外来内容"，
-            发现外来内容时强制让用户在「保留这些文件，只删库数据」与「一并删除」
-            之间显式选择，避免误删用户在库目录里放的笔记 / 备份等。
+            额外保护：
+            - 库自身条目（cabinet.db / library/ / .llm-cabinet / cabinet.v*.bak / db-wal/-shm）
+              在"一并删除"模式下被 rmtree
+            - **软件全局文件**（cabinet.json）任何模式下都保留（``delete_library_all``）
+            - 用户外来内容（笔记 / 备份等）发现存在时强制让用户选「保留」/「一并删」
+            - **当前库**也允许删；删完后 ``_pending_switch_to = "__welcome__"`` 关
+              主窗口，由 main 重启进入 Welcome 兜底
             """
             from ..cabinet import (
-                delete_library_owned_only, scan_library_for_deletion,
+                delete_library_all, delete_library_owned_only,
+                scan_library_for_deletion,
             )
             handle = self.cabinet_config.find(p)
             display = handle.display_name if handle else p.name
 
             # 第 1 步：列出代价 + 概览
             scan = scan_library_for_deletion(p)
+            extras = []
+            if scan.foreign:
+                extras.append(
+                    f"⚠ 目录下还有 {len(scan.foreign)} 项非库内容"
+                    f"（{_human_size(scan.foreign_size)}），下一步需要你选择如何处理。"
+                )
+            else:
+                extras.append("（目录下没有非库内容）")
+            if is_current:
+                extras.append(
+                    "⚠ 这是**当前库**——删除完成后应用会重启并回到欢迎页。"
+                )
             ans1 = QMessageBox.warning(
                 dlg, "确认删除（1/2）",
                 f"将删除库『{display}』：\n\n{p}\n\n"
-                f"库数据占用：{_human_size(scan.owned_size)}"
-                + (
-                    f"\n⚠ 目录下还有 {len(scan.foreign)} 项非库内容"
-                    f"（{_human_size(scan.foreign_size)}），下一步需要你选择如何处理。"
-                    if scan.foreign else
-                    "\n（目录下没有非库内容）"
-                )
+                f"库数据占用：{_human_size(scan.owned_size)}\n"
+                + "\n".join(extras)
                 + "\n\n此操作**不可恢复**。继续？",
                 QMessageBox.Yes | QMessageBox.No,
             )
@@ -737,7 +814,7 @@ class MainWindow(QMainWindow):
                 return
 
             # 第 2 步（仅当存在外来内容）：选删除模式
-            mode = "all"  # "owned" = 仅删库数据保留外来；"all" = 一并删除（含目录）
+            mode = "all"  # "owned" = 仅删库数据保留外来；"all" = 一并删除（保留 cabinet.json 等软件全局）
             if scan.foreign:
                 mode = _ask_delete_mode(dlg, p, scan)
                 if mode is None:
@@ -752,9 +829,16 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(dlg, "已取消", "名称不匹配，取消删除。")
                 return
 
+            # 第 4 步（仅当前库）：在动手删之前释放当前库的所有文件句柄。
+            # Windows 下 sqlite db / WAL 边车被占用时无法删除；必须先 stop
+            # LLM worker + close repo.conn，否则 rmtree / unlink 会在
+            # cabinet.db / cabinet.db-wal / cabinet.db-shm 上失败并报
+            # "另一个进程正在使用此文件"。
+            if is_current:
+                self._release_active_db_resources()
+
             # 执行
             if mode == "owned":
-                # 仅删库自身白名单条目，保留目录本身与外来内容
                 failures = delete_library_owned_only(p)
                 if failures:
                     msg = "\n".join(f"• {fp.name}：{err}" for fp, err in failures[:10])
@@ -762,9 +846,13 @@ class MainWindow(QMainWindow):
                         dlg, "部分删除失败",
                         f"以下库内条目未能删除（其余已成功）：\n{msg}",
                     )
-                # 即便有失败，也把它从最近列表移除——目录已不再是有效库（标记被删/db 被删）
                 self.cabinet_config.remove(p)
                 self.cabinet_config.save()
+                if is_current:
+                    dlg.accept()
+                    self._pending_switch_to = "__welcome__"
+                    self.close()
+                    return
                 _refresh()
                 QMessageBox.information(
                     dlg, "完成",
@@ -772,15 +860,22 @@ class MainWindow(QMainWindow):
                 )
                 return
 
-            # mode == "all"：维持原 rmtree(root) 行为
-            try:
-                import shutil as _sh
-                _sh.rmtree(p, ignore_errors=False)
-            except Exception as e:
-                QMessageBox.critical(dlg, "删除失败", str(e))
+            # mode == "all"：删 owned + foreign，保留 app_global（如 cabinet.json）
+            failures = delete_library_all(p)
+            if failures:
+                msg = "\n".join(f"• {fp.name}：{err}" for fp, err in failures[:10])
+                QMessageBox.critical(
+                    dlg, "删除失败",
+                    f"以下条目未能删除：\n{msg}",
+                )
                 return
             self.cabinet_config.remove(p)
             self.cabinet_config.save()
+            if is_current:
+                dlg.accept()
+                self._pending_switch_to = "__welcome__"
+                self.close()
+                return
             _refresh()
 
         lst.customContextMenuRequested.connect(_on_menu)

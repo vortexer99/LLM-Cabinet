@@ -35,7 +35,7 @@ from app.ui.first_run_banner import (
     SETTING_KEY as BANNER_SETTING_KEY, dismiss_banner, should_show_banner,
 )
 from app.ui.welcome_dialog import (
-    RESULT_NEW_CUSTOM, RESULT_NEW_DEFAULT, RESULT_OPEN_EXISTING,
+    RESULT_NEW_CUSTOM, RESULT_OPEN_EXISTING,
 )
 from app.ui.wizards.new_library_wizard import (
     MIGRATE_KEYS_ALL, MIGRATE_KEYS_LLM_ONLY,
@@ -354,11 +354,12 @@ def main() -> int:
 
             # ----------------------------------------------------------
             # 阶段 8：T3 Welcome 对话框 — 结果常量分发值唯一
+            # （task #15 重构后只剩两档：新建 / 打开已有目录；"使用默认位置"已删）
             # ----------------------------------------------------------
-            results = {RESULT_NEW_CUSTOM, RESULT_NEW_DEFAULT, RESULT_OPEN_EXISTING}
+            results = {RESULT_NEW_CUSTOM, RESULT_OPEN_EXISTING}
             t.assert_eq(
-                "Welcome 三档结果常量值唯一",
-                len(results), 3,
+                "Welcome 两档结果常量值唯一",
+                len(results), 2,
             )
             # 与 QDialog 默认 Accepted(1)/Rejected(0) 不冲突
             t.assert_true(

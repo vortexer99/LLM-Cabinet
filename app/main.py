@@ -1,12 +1,14 @@
-"""应用入口（task #08：多库切换）。
+"""应用入口（task #08：多库切换；task #15：欢迎兜底）。
 
 启动序列：
 
-1. 读 ``cabinet.json``（CabinetConfig.load）；缺失/损坏则回退默认。
-2. ``active_library`` 指向的目录就是当前要打开的库根。
-3. 若该目录不可用（不存在 / 不是有效库目录），降级到默认库。
+1. 读 ``cabinet.json``（``CabinetConfig.load``）；缺失/损坏则回退为**空配置**
+   （不再自动登记"默认库"，``%APPDATA%/LLMCabinet`` 仅作为软件全局配置存放点）。
+2. 解析 ``active_library``：
+   - 仍有效 → 直接进主窗口
+   - 失效 / 不存在 / 全部 recent 也失效 / 空配置 → 弹 **Welcome** 让用户重新选
+3. Welcome 返回 ``None`` → 用户退出，应用直接 ``return 0``。
 4. 派生 ``db_path = root/cabinet.db`` 与 ``library_root = root/library``。
-5. 老用户首次启动新版本：``cabinet.json`` 不存在，自动以 ``%APPDATA%/LLMCabinet`` 为默认库登记。
 
 切换库走重启：``QApplication.quit() + os.execv``，简单稳定。
 """
@@ -15,12 +17,14 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from pathlib import Path
+from typing import Optional
 
 from PySide6.QtGui import QFont, QIcon
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from .cabinet import (
-    CabinetConfig, is_library_dir, mark_as_library, resolve_library_paths,
+    CabinetConfig, is_library_dir, resolve_library_paths,
 )
 from .db import connect
 from .library import Library
@@ -29,7 +33,7 @@ from .llm.queue import LLMTaskQueue
 from .repository import Repository
 from .ui.main_window import MainWindow
 from .ui.theme import apply_theme
-from .utils import app_data_dir, app_icon_path
+from .utils import app_icon_path
 
 log = logging.getLogger(__name__)
 
@@ -55,35 +59,31 @@ def main() -> int:
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # ---- 首次启动 Welcome（task #15 T3）：cabinet.json 不存在 ----
-    cabinet_path = CabinetConfig.config_path()
-    is_first_run = not cabinet_path.exists()
-    if is_first_run:
-        # 先用 _default()（默认库登记）作为 Welcome 中"使用默认位置"分支的兜底；
-        # Welcome 关闭后再决定是否覆盖
-        cabinet = CabinetConfig.load()  # 触发 _default() 路径
-        chosen = _run_welcome(cabinet)
-        if chosen is None:
-            # 用户在 Welcome 选择"退出"或关闭对话框 → 不进主窗口
-            return 0
-        # chosen is Path：用户选定的库目录（可能是默认 / 自定义新建 / 已有目录）
-        cabinet.touch(chosen)
-        cabinet.save()
+    # 启动时先应用 light 主题作为兜底——Welcome 对话框可能在还没打开任何库
+    # （没 repo、读不到 settings.theme）时就弹出，没有 stylesheet 会被 Qt 的
+    # fusion 默认灰色背景渲染，与主窗口观感断裂。等下方真正打开库 / 读到
+    # ``settings.theme`` 后会再 apply 一次（dark 主题用户那时会被覆盖）。
+    apply_theme(app, "light")
+
+    # ---- 读 cabinet.json ----
+    cabinet = CabinetConfig.load()
+
+    # 命令行 --welcome：用户在主界面点了「回到欢迎页」并触发 restart；本次启动
+    # 强制走 Welcome 兜底，不要从 recent 自动降级（否则 recent 头部就是用户刚
+    # 离开的那个库，会被 _resolve_active_library_root 选中，"回到欢迎页"就失效了）。
+    force_welcome = "--welcome" in sys.argv[1:]
+
+    # ---- 解析当前要打开的库（含 Welcome 兜底） ----
+    if force_welcome:
+        library_root, stale_active = (None, None)
     else:
-        cabinet = CabinetConfig.load()
-
-    # ---- 解析当前要打开的库 ----
-    library_root = _resolve_active_library_root(cabinet)
-
-    # 默认库目录始终保持"可作为有效库识别"——即便本次活动库是其它库，默认库
-    # 仍然要 mark 一下，否则用户从「最近打开 → (默认库)」点击切换时会被
-    # `is_library_dir` 判定无效（`cabinet.json` 单独存在不构成库）。这是低成本
-    # 兜底：mark_as_library 仅 touch `.llm-cabinet` 标记，不写 db / 不创目录结构。
-    # 同时也覆盖了"当前活动库 == 默认库"的老用户首次升级场景。
-    try:
-        mark_as_library(app_data_dir())
-    except Exception:
-        pass
+        library_root, stale_active = _resolve_active_library_root(cabinet)
+    if library_root is None:
+        # active 不可用 + 没有可降级的有效 recent → 弹 Welcome 让用户重新选
+        chosen = _run_welcome(cabinet, stale_active=stale_active)
+        if chosen is None:
+            return 0  # 用户退出
+        library_root = chosen
 
     db_path, library_subdir = resolve_library_paths(library_root)
 
@@ -100,8 +100,7 @@ def main() -> int:
     saved_lib_root = repo.get_setting("library_root", "")
     use_lib_root = library_subdir
     if saved_lib_root:
-        from pathlib import Path as _Path
-        sp = _Path(saved_lib_root)
+        sp = Path(saved_lib_root)
         if sp.exists():
             use_lib_root = sp
         else:
@@ -126,48 +125,60 @@ def main() -> int:
     )
     win.show()
     rc = app.exec()
-    llm_queue.stop()
+    # 关停 LLM worker 并等它真正退（最多 2 秒）。这对"切换库重启"路径尤为重要：
+    # 否则 main 进程退出前 sqlite 连接可能仍被 worker 持有，下次启动同一目录会
+    # 看到 -wal 文件还在。
+    llm_queue.stop(join_timeout=2.0)
 
     # 切换库的特殊退出码：在 win 关闭后由 MainWindow 设置标志
     pending_switch = getattr(win, "_pending_switch_to", None)
-    if pending_switch:
+    if pending_switch is not None:
         # 不在 GUI 线程里直接 execv（PySide6 偶有怪异行为）；先把 cabinet.json 写好
-        # （MainWindow 已经写过了，这里再保险一次），再 exec 自己
+        # （MainWindow 已经写过了，这里再保险一次），再 exec 自己。
+        # 特殊值 ``"__welcome__"``：用户主动「回到欢迎页」或在主界面里把当前库删了；
+        # 重启时附加 ``--welcome`` 命令行参数，确保 main 强制走 Welcome 兜底而不
+        # 是从 recent 自动降级回原库（删当前库情景下 recent 已无效；但"回到欢迎页"
+        # 不删任何东西，recent 头部就是刚离开的库，必须用命令行参数显式覆盖）。
+        extra_args: list[str] = []
         try:
             cabinet2 = CabinetConfig.load()
-            cabinet2.touch(pending_switch)
+            if pending_switch == "__welcome__":
+                cabinet2.active_library = None
+                extra_args.append("--welcome")
+            else:
+                cabinet2.touch(pending_switch)
             cabinet2.save()
         except Exception:
             pass
-        _restart_self()
+        _restart_self(extra_args=extra_args)
     return rc
 
 
-def _run_welcome(cabinet: CabinetConfig):
-    """task #15 T3：首次启动弹 Welcome 三选一。
+def _run_welcome(
+    cabinet: CabinetConfig,
+    *,
+    stale_active: Optional[Path] = None,
+) -> Optional[Path]:
+    """弹 Welcome 让用户选择新建 / 打开已有库。
 
     返回 ``Path | None``：
     * 用户选定的库目录 → 主流程把它 touch + save 后正常进主窗口
     * ``None`` → 用户选了"退出"或关闭对话框，主流程返回 0 不进主窗口
 
     选项分发：
-    * "新建（自定义位置）" → 直接打开 NewLibraryWizard（task #15 T1）；
+    * "新建库"           → 直接打开 NewLibraryWizard（task #15 T1）；
       向导成功 → 返回新库根；向导取消 → 重新弹 Welcome
-    * "新建（默认位置）"   → 返回 ``app_data_dir()``（D5：完全不弹任何额外对话框）
-    * "打开已有的库目录"  → 返回用户选的目录
+    * "打开最近使用的库"  → 返回选中的 recent 库目录
+    * "打开其它已有目录"  → 返回用户选的目录
     """
     from .ui.welcome_dialog import (
-        RESULT_NEW_CUSTOM, RESULT_NEW_DEFAULT, RESULT_OPEN_EXISTING,
-        WelcomeDialog,
+        RESULT_NEW_CUSTOM, RESULT_OPEN_EXISTING, WelcomeDialog,
     )
     from .ui.wizards.new_library_wizard import NewLibraryWizard
 
     while True:
-        dlg = WelcomeDialog(cabinet)
+        dlg = WelcomeDialog(cabinet, stale_active=stale_active)
         rc = dlg.exec()
-        if rc == RESULT_NEW_DEFAULT:
-            # D5：直接走默认库路径（main 后续会自动 mark_as_library）
-            return app_data_dir()
         if rc == RESULT_OPEN_EXISTING:
             return dlg.opened_path
         if rc == RESULT_NEW_CUSTOM:
@@ -180,38 +191,62 @@ def _run_welcome(cabinet: CabinetConfig):
         return None
 
 
-def _resolve_active_library_root(cabinet: CabinetConfig):
+def _resolve_active_library_root(
+    cabinet: CabinetConfig,
+) -> tuple[Optional[Path], Optional[Path]]:
     """决定本次启动要打开的库目录。
 
-    优先级：cabinet.active_library → 第一个可用的 recent → 默认库（%APPDATA%/LLMCabinet）。
-    可用性判断：目录存在 + (含 cabinet.db 或被允许首次写入)。
-    """
-    candidates: list = []
-    if cabinet.active_library is not None:
-        candidates.append(cabinet.active_library)
-    candidates.extend(h.path for h in cabinet.recent_libraries)
-    # 默认库兜底
-    candidates.append(app_data_dir())
+    返回 ``(library_root, stale_active)``：
+    - ``library_root`` = 解析出的有效库根；为 ``None`` 表示需要走 Welcome 兜底
+    - ``stale_active`` = 上次的 ``active_library`` 但本次不可用（用于 Welcome
+      角标提示"上次打开 X 已失效"）；为 ``None`` 表示没有这种情况
 
-    for root in candidates:
+    解析顺序：
+    1. ``cabinet.active_library`` 可用 → 直接返回它
+    2. ``recent_libraries`` 里第一个可用的 → 返回它（同时把原 active 记为 stale）
+    3. 都不可用 → 返回 ``(None, stale_active)`` 让上层弹 Welcome
+    """
+    stale_active: Optional[Path] = None
+
+    # 1. 试 active
+    if cabinet.active_library is not None:
         try:
-            from pathlib import Path as _Path
-            root = _Path(root)
-            # 目录已存在 + 是合法库 → 直接用
-            if is_library_dir(root):
-                return root
-            # 目录不存在 / 不是库 → 跳过；continue
+            ap = Path(cabinet.active_library)
+            if is_library_dir(ap):
+                return (ap, None)
+            stale_active = ap
+        except Exception:
+            stale_active = None
+
+    # 2. 试 recent（按 last_opened 倒序，已是 cabinet.recent_libraries 的现有顺序）
+    for h in cabinet.recent_libraries:
+        try:
+            rp = Path(h.path)
+            if is_library_dir(rp):
+                return (rp, stale_active)
         except Exception:
             continue
 
-    # 全都不可用 → 默认库（即使不存在也在 connect 时会被建出来）
-    return app_data_dir()
+    # 3. 全都不可用 → 走 Welcome
+    return (None, stale_active)
 
 
-def _restart_self() -> None:
-    """重启当前进程。PyInstaller onefile 下 sys.executable 是 exe 路径，os.execv 正常工作。"""
+def _restart_self(*, extra_args: Optional[list[str]] = None) -> None:
+    """重启当前进程。PyInstaller onefile 下 sys.executable 是 exe 路径，os.execv 正常工作。
+
+    ``extra_args`` 用于追加本次重启需要的额外命令行参数（比如 ``--welcome``
+    强制走 Welcome 兜底）；会在 ``sys.argv`` 之后追加 + 去重。
+
+    会过滤掉 ``--welcome`` —— 该参数仅对**本次**启动有效（一次性"强制 Welcome"
+    意图），重启时若 ``extra_args`` 里没显式带，必须把它去掉，否则用户从 Welcome
+    选了库进主界面后再做切换/重启又会再次被踹回 Welcome。
+    """
     try:
-        os.execv(sys.executable, [sys.executable, *sys.argv])
+        argv = [a for a in sys.argv if a != "--welcome"]
+        for a in (extra_args or []):
+            if a not in argv:
+                argv.append(a)
+        os.execv(sys.executable, [sys.executable, *argv])
     except Exception as e:
         log.error("重启失败：%s", e)
         # 退而求其次：弹窗提示用户手动重启

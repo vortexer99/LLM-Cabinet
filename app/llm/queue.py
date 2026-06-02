@@ -51,9 +51,20 @@ class LLMTaskQueue(QObject):
         )
         self._worker.start()
 
-    def stop(self) -> None:
+    def stop(self, *, join_timeout: float = 0.0) -> None:
+        """通知 worker 退出。
+
+        ``join_timeout > 0`` 时同步等待 worker 退出最多 N 秒；超时不抛错。
+        Windows 下"删除当前库"前需要把 worker 线程上挂着的 sqlite 连接彻底
+        放掉，调用方应传 ``join_timeout=2``（worker 主循环 timeout=0.5，正常
+        会很快退）。
+        """
         self._stop.set()
-        # 不强行 join；daemon 线程会随进程退出
+        if join_timeout > 0 and self._worker is not None and self._worker.is_alive():
+            try:
+                self._worker.join(timeout=join_timeout)
+            except RuntimeError:
+                pass
 
     # ----------------------------------------------------- public api
     def enqueue_meta_suggest(

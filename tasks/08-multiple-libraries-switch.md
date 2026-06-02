@@ -107,6 +107,7 @@
 库
 ├── 切换库...                          Ctrl+Shift+O   → 选已存在的库目录（严格：非库目录拒绝）
 ├── 新建库...                          Ctrl+Shift+N   → task #15 多页向导（选目录 + 描述 + 字段 + API 迁移）
+├── 🏠 回到欢迎页...                                  → 关闭当前库 + 重启 + 弹 Welcome 重选（不删除当前库）
 ├── ─────
 ├── 最近打开
 │   ├── 工作资料  (C:/.../work)         ← 右键：从列表移除 / 删除整个库... / 改名...
@@ -126,10 +127,10 @@
 | 菜单项 | 行为 |
 |---|---|
 | **从列表移除** | 仅从 `cabinet.json.recent_libraries` 移除该条；磁盘数据完全不动；如果是当前活动库，禁用此项 |
-| **删除整个库...** | 弹**双重 / 三重确认**对话框：先列出"将删除：库数据占用 X MB"；若库目录下检测到**用户外来内容**（除 `cabinet.db` / `library/` / `.llm-cabinet` / `cabinet.v*.bak` / `cabinet.db-wal/-shm` 之外的任何文件 / 子目录），插入第二段专门对话框列出外来内容并强制选择「🟢 保留这些文件，只删除库数据（推荐）」/「🔴 一并删除（含目录）」；最后让用户输入库 label 作为最终确认；执行删除 + 从列表移除。如果是当前活动库或默认库，菜单项 disabled。新 API：`scan_library_for_deletion()` / `delete_library_owned_only()` |
+| **删除整个库...** | 弹**双重 / 三重确认**对话框：先列出"将删除：库数据占用 X MB"；若库目录下检测到**用户外来内容**（除 `cabinet.db` / `library/` / `.llm-cabinet` / `cabinet.v*.bak` / `cabinet.db-wal/-shm` 之外的任何文件 / 子目录，**且不含 `cabinet.json` 等软件全局文件**），插入第二段专门对话框列出外来内容并强制选择「🟢 保留这些文件，只删除库数据（推荐）」/「🔴 一并删除（含目录）」；最后让用户输入库 label 作为最终确认；执行删除 + 从列表移除。**当前库也可删** —— 删完后通过 `_pending_switch_to = "__welcome__"` 关主窗口 → main 重启走 Welcome 兜底。**`cabinet.json` 在任一模式下永远保留**（库根恰好等于 appdata 时不会因 rmtree 误伤）。新 API：`scan_library_for_deletion()`（含 `app_global` 字段）/ `delete_library_owned_only()` / `delete_library_all()` |
 | **改名...** | 改 label，仅显示用，不动磁盘；写回 `cabinet.json` |
 
-> 默认库（`%APPDATA%/LLMCabinet`）的「删除整个库」菜单项**永远禁用**——避免误删兜底的默认库。
+> **默认库不再有任何特权**：可以从列表移除、可以删除、可以被截断挤出最近列表。`%APPDATA%/LLMCabinet/` 仅作为软件全局配置（`cabinet.json` 及其备份）存放点。当 active / recent 全部失效时，启动期由 Welcome 对话框兜底让用户重新选择库（不再静默降级到默认库）。
 
 #### 当前库信息对话框
 
@@ -200,11 +201,12 @@ label 编辑后写回 `cabinet.json` 中对应条目，立即在主菜单"最近
 
 | 异常情况 | 降级策略 |
 |---|---|
-| `cabinet.json` 不存在 | 视作首次启动：用默认库（`%APPDATA%/LLMCabinet/`）创建一个 entry，正常启动 |
-| `cabinet.json` 损坏 / JSON parse 失败 | 备份为 `cabinet.json.bak.<时间戳>` → 重建为默认；不阻塞启动 |
-| `active_library` 路径不存在（用户删了/移动了目录） | 启动时弹对话框：「上次的库 X 不可用，请选择库」→ 默认按钮"打开默认库"，备选"选择其它目录" |
+| `cabinet.json` 不存在 | 视作首次启动：空配置 → 主程序 `_resolve_active_library_root` 返回 `(None, None)` → 弹 Welcome 让用户选「新建库 / 打开已有目录 / 退出」 |
+| `cabinet.json` 损坏 / JSON parse 失败 | 备份为 `cabinet.json.bak.<时间戳>.json` → 重建为**空配置** → 同上走 Welcome；不阻塞启动 |
+| `active_library` 路径不存在 / 不是有效库 | 主程序 `_resolve_active_library_root` 试 active → 失败记入 `stale_active`；试 recent 第一个可用的；都不行 → 弹 Welcome，顶部用红字角标提示 ⚠ 上次打开的库已不可用：&lt;path&gt; |
 | `active_library` 的 db 是更高 `user_version`（用户用新版客户端建库后又退回旧版） | 拒绝打开，弹对话框引导用户升级客户端 / 选其它库 |
 | 用户在不同机器上路径不同（OneDrive 同步场景） | 文档中说明：`cabinet.json` 是机器本地的；同一个库目录在新机器上要手动"切换库 → 选目录"一次 |
+| 用户在主界面把当前库"删除整个库" / "从列表移除" | 写 `_pending_switch_to = "__welcome__"` + 关主窗口 → main 检测后 `cabinet.active_library = None` + restart → 启动后走 Welcome 让用户重新选 |
 
 ## 数据迁移（对老用户）
 
@@ -226,14 +228,16 @@ label 编辑后写回 `cabinet.json` 中对应条目，立即在主菜单"最近
 - [ ] 「库 → 最近打开」中看到 X、默认库两项
 - [ ] 切换回默认库 → 看到旧项目，X 库的数据不可见
 - [ ] 在 X 库菜单「从其它库导入 API 配置」→ 选默认库 db → API Key 复用
-- [ ] 把 X 的目录手动删掉，再启动应用 → 弹"X 不可用"对话框，能优雅降级
-- [ ] `cabinet.json` 被手动破坏成乱码 → 启动备份后重建，不崩溃
-- [ ] 默认库目录 `%APPDATA%/LLMCabinet` 不能从最近列表里"删除"（或允许删但会被自动补回，避免找不到根）
+- [ ] 把 X 的目录手动删掉，再启动应用 → 弹 Welcome 顶部红字提示「上次打开的库 X 已不可用」，列出剩余 recent 让用户选
+- [ ] `cabinet.json` 被手动破坏成乱码 → 启动后备份为 `cabinet.json.bak.<ts>.json` → 重建为空配置 → 弹 Welcome；不崩溃
+- [ ] 默认库目录 `%APPDATA%/LLMCabinet` 可以从最近列表里"删除整个库"，删除时 `cabinet.json` 因属于软件全局文件被保留
 - [ ] 最近列表条目右键 → 「从列表移除」：仅 cabinet.json 变化，磁盘不动
 - [ ] 最近列表条目右键 → 「删除整个库...」：双重确认（输入 label 才能确认）；目录被删除、列表条目移除
 - [ ] 「删除整个库...」对外来文件保护：库目录下放过用户笔记 / 备份 zip 等，删除流程会列出并让用户选「保留外来 / 一并删」；选「保留外来」时只删库数据，目录与外来文件保留
-- [ ] 当前活动库的「从列表移除」「删除整个库」菜单项 disabled
-- [ ] 默认库的「删除整个库」永远 disabled
+- [ ] 当前库的「从列表移除」「删除整个库」**也允许操作**：会先弹二次确认，确认后关主窗口走 Welcome 重选；不强制 disable
+- [ ] 删除当前库前会先 `llm_queue.stop(join_timeout=2.0)` + `repo.conn.close()`，避免 Windows 下 sqlite db / -wal / -shm 占用导致删除失败
+- [ ] 主菜单「库 → 🏠 回到欢迎页...」：弹二次确认 → 重启进 Welcome；当前库**不**被删，仍在最近列表里
+- [ ] 把所有库都"删除整个库"或"从列表移除" → 下次启动 recent 为空 → 弹 Welcome（首次安装一致路径）
 - [ ] 最近列表条目右键 → 「改名...」：label 改完后菜单立即更新；磁盘不动
 - [ ] 「当前库信息」对话框可编辑 label，保存后菜单/标题栏同步
 

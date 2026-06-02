@@ -135,14 +135,14 @@ class CabinetConfig:
 
     @classmethod
     def _default(cls) -> "CabinetConfig":
-        """全新 / 损坏后的默认状态：把 ``%APPDATA%/LLMCabinet`` 当作默认库登记。"""
-        default_root = app_data_dir()
-        h = LibraryHandle(
-            path=default_root,
-            label="(默认库)",
-            last_opened=_now_iso(),
-        )
-        return cls(active_library=default_root, recent_libraries=[h])
+        """全新 / 损坏后的默认状态：空配置。
+
+        历史上这里会把 ``%APPDATA%/LLMCabinet`` 自动登记为"默认库"；新方案下
+        ``%APPDATA%/LLMCabinet`` 仅作为 ``cabinet.json`` 等**软件层全局配置**的
+        存放点，**不再**自动当作库。空配置时由启动期 ``main`` 弹 Welcome 让用户
+        显式选择新建 / 打开已有库。
+        """
+        return cls(active_library=None, recent_libraries=[])
 
     def save(self) -> None:
         path = self.config_path()
@@ -185,10 +185,8 @@ class CabinetConfig:
         self.active_library = lib_path
 
     def remove(self, lib_path: Path) -> None:
-        """从最近列表移除（不动磁盘）。默认库永不移除。"""
+        """从最近列表移除（不动磁盘）。"""
         lib_path = Path(lib_path).resolve()
-        if lib_path == app_data_dir().resolve():
-            return  # 默认库不动
         self.recent_libraries = [
             h for h in self.recent_libraries if h.path.resolve() != lib_path
         ]
@@ -208,22 +206,9 @@ class CabinetConfig:
         return None
 
     def _trim_recents(self) -> list[LibraryHandle]:
-        """保留最近 MAX_RECENT 项，但保证默认库始终在列表里。"""
-        default_path = app_data_dir().resolve()
-        default_in_list = any(
-            h.path.resolve() == default_path for h in self.recent_libraries
-        )
-        result = self.recent_libraries[:MAX_RECENT]
-        if default_in_list and not any(
-            h.path.resolve() == default_path for h in result
-        ):
-            # 默认库被截断了：把列表收紧到 MAX_RECENT - 1，再补默认库到末尾
-            result = self.recent_libraries[:MAX_RECENT - 1]
-            for h in self.recent_libraries:
-                if h.path.resolve() == default_path:
-                    result.append(h)
-                    break
-        return result
+        """保留最近 MAX_RECENT 项（按 ``recent_libraries`` 现有顺序，
+        ``touch`` 已经把最新的提到队首，所以这里直接切片即可）。"""
+        return self.recent_libraries[:MAX_RECENT]
 
 
 # =============================================================================
@@ -299,20 +284,37 @@ def _is_library_owned_entry(name: str) -> bool:
     return False
 
 
+# 软件全局文件——这些顶层条目属于"软件"而非任一具体库。当某个库的根目录恰好
+# 也是 ``app_data_dir()``（历史遗留 / 用户故意把库建在 appdata）时，删除该库
+# 不应连带破坏这些跨库的软件配置。无论用户选"仅删库数据"还是"一并删除"，这
+# 类条目都被保留。
+def _is_app_global_entry(name: str) -> bool:
+    """判断顶层条目名是否属于"软件全局配置"（如 ``cabinet.json``）。"""
+    if name == CABINET_JSON:
+        return True
+    # cabinet.json 的损坏备份：cabinet.json.bak.<ts>.json
+    if name.startswith(CABINET_JSON + ".bak.") and name.endswith(".json"):
+        return True
+    return False
+
+
 @dataclass
 class LibraryDeleteScan:
     """``scan_library_for_deletion`` 的结果，用于 UI 二次确认。
 
     - ``owned``：库自身的顶层条目（删除整个库时无条件清掉）
     - ``foreign``：库目录下属于用户自己的额外内容（默认应保留，让 UI 显式询问）
-    - ``total_size``：所有项的递归总大小（粗略，遇 OSError 部分跳过）
-    - ``owned_size`` / ``foreign_size``：分别按归属统计的大小
+    - ``app_global``：软件全局配置（如 ``cabinet.json``）；任何模式下都保留
+    - ``owned_size`` / ``foreign_size`` / ``app_global_size`` / ``total_size``：
+      分别按归属统计的大小（``total_size`` = 三者之和）
     """
     owned: list[Path]
     foreign: list[Path]
+    app_global: list[Path]
     total_size: int
     owned_size: int
     foreign_size: int
+    app_global_size: int
 
 
 def _entry_size(p: Path) -> int:
@@ -330,22 +332,28 @@ def _entry_size(p: Path) -> int:
 
 
 def scan_library_for_deletion(root: Path) -> LibraryDeleteScan:
-    """扫描库目录，把顶层条目分成"库自身"和"用户外来内容"两组。
+    """扫描库目录，把顶层条目分成"库自身"/"软件全局"/"用户外来内容"三组。
 
-    供"删除整个库"的二次确认 UI 使用：当 ``foreign`` 非空时，应该让用户在
-    「保留外来文件、只删库数据」与「一并删除」之间显式选择。
+    - 库自身（``owned``）：删除整个库时无条件清掉
+    - 软件全局（``app_global``，如 ``cabinet.json``）：任何模式下都保留
+    - 用户外来内容（``foreign``）：当非空时，UI 应让用户显式选择保留 / 一并删除
     """
     root = Path(root)
     owned: list[Path] = []
     foreign: list[Path] = []
+    app_global: list[Path] = []
     owned_size = 0
     foreign_size = 0
+    app_global_size = 0
     try:
         for p in sorted(root.iterdir(), key=lambda x: x.name.lower()):
             sz = _entry_size(p)
             if _is_library_owned_entry(p.name):
                 owned.append(p)
                 owned_size += sz
+            elif _is_app_global_entry(p.name):
+                app_global.append(p)
+                app_global_size += sz
             else:
                 foreign.append(p)
                 foreign_size += sz
@@ -354,14 +362,16 @@ def scan_library_for_deletion(root: Path) -> LibraryDeleteScan:
     return LibraryDeleteScan(
         owned=owned,
         foreign=foreign,
-        total_size=owned_size + foreign_size,
+        app_global=app_global,
+        total_size=owned_size + foreign_size + app_global_size,
         owned_size=owned_size,
         foreign_size=foreign_size,
+        app_global_size=app_global_size,
     )
 
 
 def delete_library_owned_only(root: Path) -> list[tuple[Path, str]]:
-    """只删除库内白名单条目，保留 ``root`` 目录本体与所有外来内容。
+    """只删除库内白名单条目，保留 ``root`` 目录本体与所有外来 / 软件全局内容。
 
     返回失败列表 ``[(path, error_message), ...]``。成功项不返回。
     """
@@ -377,6 +387,39 @@ def delete_library_owned_only(root: Path) -> list[tuple[Path, str]]:
         except OSError as e:
             failures.append((p, str(e)))
     return failures
+
+
+def delete_library_all(root: Path) -> list[tuple[Path, str]]:
+    """删除整个库目录（含 owned + foreign），但**保留软件全局文件**。
+
+    - 若目录里没有 ``cabinet.json`` 等软件全局文件 → 等同 ``shutil.rmtree(root)``
+    - 若有 → 逐项删除 ``owned + foreign``，并保留目录本体（避免连带 app_global
+      一起被 rmtree 掉）
+
+    返回失败列表 ``[(path, error_message), ...]``。
+    """
+    import shutil as _sh
+    root = Path(root)
+    failures: list[tuple[Path, str]] = []
+    scan = scan_library_for_deletion(root)
+    if not scan.app_global:
+        # 干净删除：rmtree 整个目录
+        try:
+            _sh.rmtree(root, ignore_errors=False)
+        except OSError as e:
+            failures.append((root, str(e)))
+        return failures
+    # 含 app_global：逐项删除 owned + foreign，目录本体保留
+    for p in scan.owned + scan.foreign:
+        try:
+            if p.is_dir() and not p.is_symlink():
+                _sh.rmtree(p)
+            else:
+                p.unlink()
+        except OSError as e:
+            failures.append((p, str(e)))
+    return failures
+
 
 
 
@@ -426,5 +469,6 @@ __all__ = [
     "mark_as_library",
     "scan_library_for_deletion",
     "delete_library_owned_only",
+    "delete_library_all",
     "import_settings_from_other_db",
 ]
