@@ -2067,19 +2067,29 @@ class LibraryInitWizard(WizardPlugin):
         it = self.tbl.item(row, 4)
         cur = it.text() if it else ann.prompt_hint
         title = f"编辑 LLM 提示 — {ann.name}"
-        # task #21 阶段 B：现有字段的 hint 编辑窗口附带"LLM 建议前的原 hint"
-        # 作为对照（only when this is an existing-field-touched ann with a
-        # different original hint）
+        # task #21 阶段 B：如果是 LLM 触达过的现有字段（含 hint 未改的），
+        # 都展示"LLM 建议前的原提示"参考区——便于用户理解 LLM 改了什么、
+        # 或显式确认"本次 LLM 没改"
         ref_text = ""
         ref_label = ""
-        if (
-            ann.status in ("same_type", "system_required", "type_conflict",
-                           "llm_suggest_rename", "llm_suggest_delete")
-            and (ann.existing_prompt_hint or "").strip()
-            and (ann.existing_prompt_hint or "") != (ann.prompt_hint or "")
-        ):
-            ref_text = ann.existing_prompt_hint or ""
-            ref_label = "<b>LLM 建议前的原提示（只读，供参考）：</b>"
+        is_existing_touched = ann.status in (
+            "same_type", "system_required", "type_conflict",
+            "llm_suggest_rename", "llm_suggest_delete",
+        )
+        if is_existing_touched:
+            existing_hint = ann.existing_prompt_hint or ""
+            new_hint = ann.prompt_hint or ""
+            if existing_hint != new_hint:
+                # LLM 改了 hint：显示原 hint 作对照
+                ref_text = existing_hint or "（原本为空）"
+                ref_label = "<b>LLM 建议前的原提示（只读，供参考）：</b>"
+            elif existing_hint:
+                # LLM 未改 hint 且原 hint 非空：标签明确"本次没修改"
+                ref_text = existing_hint
+                ref_label = (
+                    "<b>原提示（本次 LLM 未修改此提示，仅供参考）：</b>"
+                )
+            # else: 双方都空 → 没什么可参考的，不显示参考区
         new_text, ok = _ask_text(
             self, title,
             "请输入该字段的 LLM 提示（多行；告诉 LLM 该字段的格式约束、示例等）：",
@@ -3246,13 +3256,16 @@ class LibraryInitWizard(WizardPlugin):
                     if int(n_values) == 0 and int(m_pending) == 0 and not has_hint:
                         d.type = new_type
                         return
-                    # 构造一个临时 Field 让对话框显示"初始类型 → 新类型"
-                    # （而不是 f.type → 新类型；防止用户在 Step 2 连续改类型时
-                    # 对话框基于"上一次结果"显示，违反"原始数据语义"对齐）
+                    # 构造一个临时 Field 让对话框看到的是"草稿当前状态"：
+                    # - type 用 base_type（原始类型，让对话框文案"X → Y"诚实）
+                    # - prompt_hint 用 d.prompt_hint（draft 当前 hint，可能已被
+                    #   用户在 Step 2 编辑过；不是 repo 里的真值）
+                    # 这样复选框是否显示、清空对象都对齐 draft 状态
                     from copy import copy as _shallow_copy
                     f_for_dialog = _shallow_copy(f)
                     f_for_dialog.type = base_type
-                    confirmed, _clear = _FieldTypeChangeConfirmDialog.ask(
+                    f_for_dialog.prompt_hint = d.prompt_hint or ""
+                    confirmed, clear_hint = _FieldTypeChangeConfirmDialog.ask(
                         self, f_for_dialog, new_type,
                         int(n_values), int(m_pending),
                     )
@@ -3265,6 +3278,13 @@ class LibraryInitWizard(WizardPlugin):
                             if idx_old >= 0:
                                 cmb.setCurrentIndex(idx_old)
                             cmb.blockSignals(False)
+                        return
+                    # 用户确认 + 勾选了"同时清空 LLM 提示" → 立即把 draft 的
+                    # prompt_hint 清空，重画 Step 2 表让用户看到这一变化
+                    if clear_hint:
+                        d.prompt_hint = ""
+                        d.type = new_type
+                        self._render_step2_table()
                         return
             except Exception:  # noqa: BLE001
                 pass
@@ -3483,8 +3503,13 @@ class LibraryInitWizard(WizardPlugin):
             )
             return
 
-        # 应用前汇总对话框
-        dlg_summary = _ApplySummaryDialog(plan, parent=self)
+        # 应用前汇总对话框（task #21 阶段 B：传 fid_resolver 让对话框显示
+        # 真名而不是 #fid）
+        dlg_summary = _ApplySummaryDialog(
+            plan,
+            fid_resolver=self._fid_to_name,
+            parent=self,
+        )
         if dlg_summary.exec() != QDialog.Accepted:
             return
 
@@ -3991,18 +4016,31 @@ class _ApplySummaryDialog(QDialog):
     """task #21：Step 2 点应用后的汇总对话框（在二次确认对话框之前）。
 
     职责：
-    * 列出 5 类变更的统计（创建 / 改名 / 改类型 / 删除 / 更新提示）；
+    * 列出 5 类变更的具体字段（创建 / 改名 / 改类型 / 删除 / 更新提示），
+      所有类目都展开字段名（不只是数字）；
     * 主按钮文案随 ``FieldPlan`` 内容动态切换（"应用" / "下一步：确认类型变更"
       / "下一步：确认删除" / "下一步：确认变更"），诚实告知后续还有几道
       二次确认；
     * 点取消 → 回 Step 2；点主按钮 → 关闭后由 ``_on_step2_apply`` 串联调用
       ``_BatchTypeChangeConfirmDialog`` / ``_BatchDeleteConfirmDialog``。
+
+    Args:
+        plan: 待应用的 FieldPlan
+        fid_resolver: ``(fid, prefer_old: bool) -> str`` 回调，用于把
+            ``plan.renames`` / ``plan.type_changes`` / ``plan.deletes`` /
+            ``plan.updates_hint`` 里的 fid 翻译成字段名（``prefer_old=True``
+            时返回原始名，用于改名行的旧名）。如果不提供，fid 退化为 ``#fid``。
     """
 
-    def __init__(self, plan: "FieldPlan", *, parent=None) -> None:
+    def __init__(
+        self, plan: "FieldPlan",
+        *,
+        fid_resolver=None,
+        parent=None,
+    ) -> None:
         super().__init__(parent)
         self.setWindowTitle("即将应用以下变更")
-        self.setMinimumWidth(480)
+        self.setMinimumWidth(520)
 
         v = QVBoxLayout(self)
         v.setSpacing(10)
@@ -4011,7 +4049,15 @@ class _ApplySummaryDialog(QDialog):
         head.setTextFormat(Qt.RichText)
         v.addWidget(head)
 
-        # 5 类变更统计；为 0 的类目整行不显示
+        def _name(fid: int, *, prefer_old: bool = False) -> str:
+            if fid_resolver is not None:
+                try:
+                    return fid_resolver(fid, prefer_old)
+                except Exception:  # noqa: BLE001
+                    pass
+            return f"#{fid}"
+
+        # 5 类变更具体列表；为 0 的类目整行不显示
         lines: list[str] = []
         if plan.creates:
             names = "、".join(name for name, _t, _h in plan.creates)
@@ -4020,27 +4066,39 @@ class _ApplySummaryDialog(QDialog):
                 f"<span style='color:#2e7d32'>{names}</span>"
             )
         if plan.renames:
-            # plan.renames 是 [(fid, new_name)]；旧名暂时只能写"#fid"
             renamed_pairs = "、".join(
-                f"#{fid} → {new_name}" for fid, new_name in plan.renames
+                f"{_name(fid, prefer_old=True)} → {new_name}"
+                for fid, new_name in plan.renames
             )
             lines.append(
                 f"✏ 改名 <b>{len(plan.renames)}</b> 个字段："
                 f"<span style='color:#1565c0'>{renamed_pairs}</span>"
             )
         if plan.type_changes:
+            type_change_names = "、".join(
+                _name(fid) for fid, _new_type, _new_hint in plan.type_changes
+            )
             lines.append(
-                f"⚠ 改类型 <b>{len(plan.type_changes)}</b> 个字段"
+                f"⚠ 改类型 <b>{len(plan.type_changes)}</b> 个字段："
+                f"<span style='color:#ef6c00'>{type_change_names}</span>"
                 f"<span style='color:#666'>（需二次确认）</span>"
             )
         if plan.deletes:
+            delete_names = "、".join(
+                _name(fid, prefer_old=True) for fid in plan.deletes
+            )
             lines.append(
-                f"🗑 删除 <b>{len(plan.deletes)}</b> 个字段"
+                f"🗑 删除 <b>{len(plan.deletes)}</b> 个字段："
+                f"<span style='color:#c62828'>{delete_names}</span>"
                 f"<span style='color:#666'>（需二次确认）</span>"
             )
         if plan.updates_hint:
+            update_names = "、".join(
+                _name(fid) for fid, _new_hint in plan.updates_hint
+            )
             lines.append(
-                f"📝 更新提取提示 <b>{len(plan.updates_hint)}</b> 个字段"
+                f"📝 更新提取提示 <b>{len(plan.updates_hint)}</b> 个字段："
+                f"<span style='color:#666'>{update_names}</span>"
             )
         if not lines:
             lines.append("（没有可应用的变更）")
