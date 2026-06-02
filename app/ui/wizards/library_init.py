@@ -105,18 +105,27 @@ class AnnotatedSuggestion:
     #   'existing_user_field'：现有字段（用户字段或系统非必有），LLM 未在本次提及；
     #                          默认 selected=True 表示保留；用户取消勾选 → 删除
     #   'same_type'          ：LLM 输出命中现有用户字段且类型一致；现有 hint 空
-    #                          → update_hint_only；非空 → 跳过不覆盖
+    #                          → update_hint_only；非空 → 跳过不覆盖；
+    #                          用户在预览页"删除" → selected=False → 走 delete
     #   'type_conflict'      ：LLM 输出命中现有但类型不同；默认改名 <原名>_v2
     #   'system_protected'   ：保留以兼容老路径（理论上 6/1 晚迭代后不会再产生）
     #   'llm_suggest_delete' ：LLM 在 fields_to_delete 里显式建议删除该现有字段；
     #                          默认 selected=False（保守"待批准"），用户批准 → 真删，
     #                          驳回 → 退化为普通 existing_user_field 路径（保留）
+    #   'llm_suggest_rename' ：LLM 在 fields_to_rename 里建议改名该现有字段；
+    #                          默认 selected=False（保守"待批准"），用户批准 →
+    #                          应用阶段走 rename 路径（保留 fid，UPDATE name）；
+    #                          驳回 → 退化为普通 existing_user_field 路径（保留原名）
     status: str = "new"
     reason: str = ""
     existing_field_id: Optional[int] = None
     existing_field_type: str = ""
     existing_prompt_hint: str = ""
     rename_to: str = ""
+    # LLM 建议改名的新字段名（仅 status='llm_suggest_rename' 时使用）；
+    # 与 type_conflict 路径的 rename_to 含义不同：那个是"用户改名后创建新字段"，
+    # 这个是"保留原 fid，UPDATE fields.name"
+    llm_rename_new_name: str = ""
     selected: bool = True
 
     # ---- 6/1 二次迭代新增（"LLM 建议"列）----------------------------------
@@ -135,6 +144,7 @@ class AnnotatedSuggestion:
         - ``"create"``           → 新建字段
         - ``"update_hint_only"`` → 仅写入 prompt_hint 到现有字段
         - ``"delete"``           → 删除现有字段（existing_user_field 被取消勾选时）
+        - ``"rename"``           → 用户批准 LLM 改名建议（保留 fid，UPDATE name）
         - ``"keep"``             → 现有字段保留不动
         - ``"skip"``             → 不操作
 
@@ -149,16 +159,17 @@ class AnnotatedSuggestion:
             # LLM 显式建议删除：selected=True 表示用户已批准 → 删；
             # 默认 selected=False 表示 pending/驳回，等价"保留现有字段"
             return "delete" if self.selected else "keep"
-        if not self.selected:
-            return "skip"
-        if self.status == "system_required":
-            # 仅当 hint 与现有不同才需要写库
-            return "update_hint_only" if self._hint_changed() else "skip"
-        if self.status == "system_protected":
-            return "skip"
+        if self.status == "llm_suggest_rename":
+            # LLM 显式建议改名：selected=True 表示用户已批准 →
+            # 走 rename 路径（保留 fid，UPDATE name）；
+            # 默认 selected=False 表示 pending/驳回，等价"保留原名"
+            return "rename" if self.selected else "keep"
         if self.status == "same_type":
-            # 现有 hint 非空 → 跳过不覆盖（保护用户已配置的 hint）
-            # 现有 hint 空 → 仅当 LLM 给了新 hint 才写入
+            # selected=False（用户在预览页点了行操作"删除"）→ 与 existing_user_field
+            # 的"取消保留"一致语义：删该现有字段
+            if not self.selected:
+                return "delete"
+            # selected=True 走原来的路径：现有 hint 非空 → 跳过；空 → 仅写 LLM hint
             if (self.existing_prompt_hint or "").strip():
                 return "skip"
             return (
@@ -166,6 +177,13 @@ class AnnotatedSuggestion:
                 if (self.prompt_hint or "").strip()
                 else "skip"
             )
+        if not self.selected:
+            return "skip"
+        if self.status == "system_required":
+            # 仅当 hint 与现有不同才需要写库
+            return "update_hint_only" if self._hint_changed() else "skip"
+        if self.status == "system_protected":
+            return "skip"
         if self.status == "type_conflict":
             return "create" if self.rename_to.strip() else "skip"
         return "create"  # status == "new"
@@ -214,6 +232,8 @@ class AnnotatedSuggestion:
         if self.status == "type_conflict":
             return True
         if self.status == "llm_suggest_delete":
+            return True
+        if self.status == "llm_suggest_rename":
             return True
         if self.status == "system_required":
             return self._hint_changed()
@@ -345,6 +365,66 @@ def parse_and_validate(text: str) -> tuple[dict, list[str]]:
             cleaned_deletes.append({"name": d_name, "reason": d_reason})
         if cleaned_deletes:
             payload["fields_to_delete"] = cleaned_deletes
+
+    # LLM 显式改名建议（task #16 T4）：
+    # fields_to_rename: list[{"old_name": str, "new_name": str, "reason": str}]
+    # 与 fields_to_delete 设计对称；目的是让 LLM 能"保留 field id（项目历史数据）"
+    # 地修改字段名，而不是 delete + create 等价模拟（会丢历史值）。
+    # 必有字段（标题/描述/标签）的 old_name 或 new_name 命中均忽略并 warning。
+    renames_raw = data.get("fields_to_rename")
+    if isinstance(renames_raw, list):
+        cleaned_renames: list[dict] = []
+        seen_old: set[str] = set()
+        seen_new: set[str] = set()
+        for i, item in enumerate(renames_raw):
+            if not isinstance(item, dict):
+                warnings.append(f"fields_to_rename 第 {i + 1} 条不是对象，已忽略")
+                continue
+            old_name = (item.get("old_name") or "").strip()
+            new_name = (item.get("new_name") or "").strip()
+            if not old_name or not new_name:
+                warnings.append(
+                    f"fields_to_rename 第 {i + 1} 条缺 old_name/new_name，已忽略"
+                )
+                continue
+            if old_name == new_name:
+                warnings.append(
+                    f"fields_to_rename「{old_name}」old/new 相同，已忽略"
+                )
+                continue
+            if old_name in _SYSTEM_REQUIRED_NAMES:
+                warnings.append(
+                    f"fields_to_rename 含必有字段 old_name「{old_name}」，已忽略"
+                )
+                continue
+            if new_name in _SYSTEM_REQUIRED_NAMES:
+                warnings.append(
+                    f"fields_to_rename new_name「{new_name}」与必有字段重名，已忽略"
+                )
+                continue
+            if old_name in seen_old:
+                warnings.append(
+                    f"fields_to_rename 同一 old_name「{old_name}」出现多次，仅保留首条"
+                )
+                continue
+            if new_name in seen_new:
+                warnings.append(
+                    f"fields_to_rename 同一 new_name「{new_name}」出现多次，仅保留首条"
+                )
+                continue
+            r_reason = (item.get("reason") or "").strip()
+            if not r_reason:
+                r_reason = "（LLM 未提供改名理由）"
+                warnings.append(
+                    f"fields_to_rename「{old_name} → {new_name}」缺 reason，使用默认占位"
+                )
+            seen_old.add(old_name)
+            seen_new.add(new_name)
+            cleaned_renames.append({
+                "old_name": old_name, "new_name": new_name, "reason": r_reason,
+            })
+        if cleaned_renames:
+            payload["fields_to_rename"] = cleaned_renames
     return payload, warnings
 
 
@@ -352,29 +432,46 @@ def annotate_conflicts(
     suggestions: list[dict],
     existing_fields: list,
     suggested_deletes: Optional[list[dict]] = None,
+    suggested_renames: Optional[list[dict]] = None,
 ) -> list[AnnotatedSuggestion]:
-    """全量规划：把现有字段全部纳入预览，并叠加 LLM 的修订/新增/删除建议。
+    """全量规划：把现有字段全部纳入预览，并叠加 LLM 的修订/新增/删除/改名建议。
 
     返回顺序：先按现有字段的 ``ord`` 列出（含未被 LLM 提及的），再追加 LLM 给的全新字段。
     每个 ``AnnotatedSuggestion`` 的 ``status`` 决定 UI 行为与应用动作（见类文档）。
 
     系统必有字段（标题/描述/标签）：``system_required`` — 强制 selected。
+    LLM 显式建议改名（``suggested_renames`` 命中现有字段名）：``llm_suggest_rename``，
+    默认 ``selected=False`` 待批准；批准 → 应用阶段走 rename（保留 fid，UPDATE name）；
+    驳回 → 退化为 ``existing_user_field`` 等价路径（保留原名）。
     LLM 显式建议删除（``suggested_deletes`` 命中）：``llm_suggest_delete``，默认
     ``selected=False`` 待批准；用户批准 → ``selected=True`` → 真删；驳回 →
     ann.status 切回 ``existing_user_field`` 等价路径，``selected=True`` 保留。
-    现有用户/系统非必有字段，LLM 未在本次输出里命中且不在删除建议中：
+    现有用户/系统非必有字段，LLM 未在本次输出里命中且不在删除/改名建议中：
     ``existing_user_field`` — 默认 ``selected=True`` 保留；用户取消勾选 → 删除。
     现有字段被 LLM 命中且 type 一致：``same_type`` — 走 update_hint_only。
     现有字段被 LLM 命中但 type 不同：``type_conflict``。
     LLM 全新名字：``new``。
 
+    优先级（同一现有字段名同时出现在多个建议数组里的冲突解决）：
+        在 ``fields`` 里被命中（``same_type`` / ``type_conflict``）   优先级最高
+        在 ``fields_to_rename`` 里                                   次之
+        在 ``fields_to_delete`` 里                                   再次
+        都没出现                                                     ``existing_user_field``
+
     Args:
-        suggested_deletes: LLM 在 ``fields_to_delete`` 数组中给出的"建议删除"项；
+        suggested_deletes: LLM 在 ``fields_to_delete`` 中给出的"建议删除"项；
             每条 ``{"name": str, "reason": str}``。LLM 同时把字段放进 ``fields``
             （应保留）又放进 ``fields_to_delete``（应删除）的矛盾场景，以
             ``fields`` 为准（删除建议被忽略）。
+        suggested_renames: LLM 在 ``fields_to_rename`` 中给出的"建议改名"项；
+            每条 ``{"old_name": str, "new_name": str, "reason": str}``。
+            ``new_name`` 与现有其它字段重名（除 old_name 自身）→ 该改名建议被
+            忽略并加 warning（在 parse 层已经过基本校验，这里只兜底）。
+            ``old_name`` 同时出现在 ``fields`` 中（保留）→ 以 ``fields`` 为准，
+            改名建议被忽略。
     """
     by_name = {f.name: f for f in existing_fields}
+    existing_names = {f.name for f in existing_fields}
     # 同名 LLM 建议保留**第一次**出现的（避免 dict 自动用最后一个覆盖；
     # 最先列出的通常是 LLM 真正想要的版本，重名属于 LLM 误输出）
     sugg_by_name: dict[str, dict] = {}
@@ -393,6 +490,39 @@ def annotate_conflicts(
             # LLM 自相矛盾：同时给出"保留+建议删除"，以保留为准
             continue
         deletes_by_name[d_name] = (d.get("reason") or "").strip()
+
+    # LLM 显式改名建议：old_name → (new_name, reason)
+    # 兜底校验（parse 已做基础校验，这里防御性地再过一遍）：
+    #   - old_name 必须是当前库已存在字段名（否则丢弃）
+    #   - new_name 不得与现有其它字段重名（除 old_name 自身）
+    #   - 同一 old_name 同时出现在 sugg_by_name（fields 数组）→ 以保留为准
+    #   - 同一 old_name 同时出现在 deletes_by_name → 以改名为准（移出 deletes）
+    # 注意：``new_name`` 通常会**同时**出现在 ``fields`` 数组里（因为 prompt 要求
+    # ``fields`` 是改名后的完整方案），第二遍处理 new 时要跳过；如果 LLM 在
+    # fields[<new_name>] 里给了新的 prompt_hint，把它合并到 rename ann 上
+    # （type 不允许通过 rename 路径改动，那是 type_conflict 的职责）。
+    renames_by_old: dict[str, tuple[str, str]] = {}
+    for r in (suggested_renames or []):
+        old_name = (r.get("old_name") or "").strip()
+        new_name = (r.get("new_name") or "").strip()
+        if not old_name or not new_name:
+            continue
+        if old_name not in existing_names:
+            continue  # parse 应该已过滤；防御性兜底
+        if old_name == new_name:
+            continue
+        if new_name in existing_names and new_name != old_name:
+            continue  # 与现有其它字段冲突
+        if old_name in sugg_by_name:
+            # LLM 自相矛盾：同时把字段放进 fields（保留）+ fields_to_rename
+            # 以"保留 + 不改名"为准
+            continue
+        renames_by_old[old_name] = (new_name, (r.get("reason") or "").strip())
+
+    # rename 与 delete 同时命中同一 old_name → 改名优先（保数据更稳）
+    for old_name in list(renames_by_old.keys()):
+        if old_name in deletes_by_name:
+            del deletes_by_name[old_name]
 
     out: list[AnnotatedSuggestion] = []
     handled_existing: set[str] = set()
@@ -455,7 +585,36 @@ def annotate_conflicts(
             out.append(a)
             continue
 
-        # 现有字段，未被 LLM 命中：先看是不是在 LLM 显式删除建议名单里
+        # 现有字段，未被 LLM 命中：先看是不是在 LLM 显式改名建议名单里
+        if ex.name in renames_by_old:
+            new_name, reason = renames_by_old[ex.name]
+            # 如果 LLM 在 fields[] 里同时给了 new_name 那一行（这是预期的，
+            # 因为 prompt 要求 fields 是改名后的完整方案），把它的
+            # prompt_hint 合并到 rename ann，并把那一行从"将被当成 new"中
+            # 摘除（标记为已处理）；type 不允许通过 rename 改动，type 不一致
+            # 时仍以现有 ex.type 为准（视觉提示 + 不构成 type_conflict）
+            new_row_in_fields = sugg_by_name.get(new_name)
+            merged_hint = ex.prompt_hint
+            if new_row_in_fields is not None:
+                handled_suggestion.add(new_name)
+                if (new_row_in_fields.get("prompt_hint") or "").strip():
+                    merged_hint = new_row_in_fields["prompt_hint"]
+            a = AnnotatedSuggestion(
+                name=ex.name, type=ex.type, prompt_hint=merged_hint,
+            )
+            a.status = "llm_suggest_rename"
+            a.existing_field_id = ex.id
+            a.existing_field_type = ex.type
+            a.existing_prompt_hint = ex.prompt_hint
+            # 默认 selected=False（待批准）；批准 → selected=True 走 rename 路径
+            a.selected = False
+            a.llm_touched = True
+            a.llm_rename_new_name = new_name
+            a.reason = reason or "（LLM 未提供改名理由）"
+            out.append(a)
+            continue
+
+        # 现有字段，未被 LLM 命中：再看是不是在 LLM 显式删除建议名单里
         if ex.name in deletes_by_name:
             a = AnnotatedSuggestion(
                 name=ex.name, type=ex.type, prompt_hint=ex.prompt_hint,
@@ -543,6 +702,9 @@ _SYSTEM_PROMPT = (
     "  ],\n"
     '  "fields_to_delete": [\n'
     '    {"name": "已存在但你建议删除的字段名", "reason": "为什么建议删除（一句话，30~80 字）"}\n'
+    "  ],\n"
+    '  "fields_to_rename": [\n'
+    '    {"old_name": "现有字段的旧名", "new_name": "建议的新名", "reason": "为什么建议改名（一句话，30~80 字）"}\n'
     "  ]\n"
     "}\n"
     "4. type 必须是 text / textarea / date / url / rating / number 之一；"
@@ -569,7 +731,16 @@ _SYSTEM_PROMPT = (
     "与场景明显无关、应该被清理的字段时才填；每条必须给出 `name`（必须是当前库已"
     "存在的字段名，不能是新名字）和 `reason`（一句话说明为什么建议删除）。如果没有"
     "想删的字段，**不要**给这个键，或给空数组。**绝对不要**把"
-    "「标题 / 描述 / 标签」放进来——这是必有字段。"
+    "「标题 / 描述 / 标签」放进来——这是必有字段。\n"
+    "10. **fields_to_rename**：可选数组，**仅当你判断现有字段只是名字不够准确**"
+    "（例如「出版社」改「出版商」、「note」改「笔记」），希望**保留该字段已有的"
+    "项目数据**而只换个更恰当的名字时使用。每条 `old_name` 必须是当前库已存在"
+    "的字段名，`new_name` 是建议的新名（不得与现有其它字段重名，也不得是「标题 / "
+    "描述 / 标签」），`reason` 一句话说明。**严禁**用 `fields_to_delete + fields` "
+    "等价模拟改名 — 这会让该字段在所有项目里的历史值丢失。如不需要改名，**不要**"
+    "给这个键，或给空数组。**与 fields 数组的关系**：当你建议把 A 改名为 B 时，"
+    "`fields` 数组里**应该**包含 B（因为 fields 必须是改名后的完整方案），"
+    "**不要**再写 A；系统会自动把 fields 里的 B 与改名建议合并显示。"
 )
 
 
@@ -1266,6 +1437,7 @@ class LibraryInitWizard(WizardPlugin):
             self._llm_round_payload["fields"],
             self._llm_round_existing,
             suggested_deletes=self._llm_round_payload.get("fields_to_delete"),
+            suggested_renames=self._llm_round_payload.get("fields_to_rename"),
         )
 
         # 重名冲突检测：fresh 里 status='new' 的名字 vs 用户手加
@@ -1685,6 +1857,7 @@ class LibraryInitWizard(WizardPlugin):
         self._suggestions = annotate_conflicts(
             payload["fields"], existing,
             suggested_deletes=payload.get("fields_to_delete"),
+            suggested_renames=payload.get("fields_to_rename"),
         )
         # 快照：保存 LLM 这一轮的原始 payload 与"当时的现有字段"
         # 之后用户驳回 / 手改 / 手加字段后，「再次应用 LLM 建议」可据此智能重建
@@ -1711,6 +1884,11 @@ class LibraryInitWizard(WizardPlugin):
         "llm_suggest_delete": (
             "🗑 LLM 建议删除",
             "LLM 显式建议删除该现有字段（hover 看理由）；批准 → 真删，驳回 → 保留",
+        ),
+        "llm_suggest_rename": (
+            "✎ LLM 建议改名",
+            "LLM 显式建议改名该现有字段（hover 看理由 / 新名）；"
+            "批准 → 保留 fid 改名（项目历史值不丢），驳回 → 保留原名",
         ),
     }
 
@@ -1741,6 +1919,15 @@ class LibraryInitWizard(WizardPlugin):
                 if ann.selected:
                     it_status.setText("🗑 将删除（已批准）")
                 it_status.setForeground(QColor("#c62828"))
+            # llm_suggest_rename：蓝字 + 在状态文字里直接附上新名，便于一眼看到
+            elif ann.status == "llm_suggest_rename":
+                from PySide6.QtGui import QColor
+                tail = f" → {ann.llm_rename_new_name}" if ann.llm_rename_new_name else ""
+                if ann.selected:
+                    it_status.setText(f"✎ 将改名{tail}（已批准）")
+                else:
+                    it_status.setText(f"✎ LLM 建议改名{tail}")
+                it_status.setForeground(QColor("#1565c0"))
             self.tbl.setItem(row, 1, it_status)
 
             # 2：字段名（type_conflict 行用 LineEdit 让用户改名；其它只读）
@@ -1762,10 +1949,13 @@ class LibraryInitWizard(WizardPlugin):
             else:
                 it_name = QTableWidgetItem(ann.name)
                 # 系统字段名不可改；same_type / existing_user_field 也不允许改名
-                # （避免与既有数据脱钩）；新建（new）允许双击编辑
+                # （避免与既有数据脱钩）；新建（new）允许双击编辑；
+                # llm_suggest_delete / llm_suggest_rename：原名只读（rename 的新名
+                # 通过批准操作生效，不在这里编辑）
                 if ann.status in (
                     "system_required", "system_protected", "same_type",
                     "existing_user_field", "llm_suggest_delete",
+                    "llm_suggest_rename",
                 ):
                     it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
                 self.tbl.setItem(row, 2, it_name)
@@ -1784,6 +1974,7 @@ class LibraryInitWizard(WizardPlugin):
             if ann.status in (
                 "system_required", "system_protected", "same_type",
                 "existing_user_field", "llm_suggest_delete",
+                "llm_suggest_rename",
             ):
                 cmb.setEnabled(False)
             cmb.currentIndexChanged.connect(
@@ -1926,10 +2117,13 @@ class LibraryInitWizard(WizardPlugin):
             # 批准 llm_suggest_delete：补 selected=True 让 action 进 delete 路径
             elif ann.status == "llm_suggest_delete":
                 ann.selected = True
+            # 批准 llm_suggest_rename：补 selected=True 让 action 进 rename 路径
+            elif ann.status == "llm_suggest_rename":
+                ann.selected = True
             self._refresh_change_cell(idx)
-            # llm_suggest_delete 批准/驳回会改变状态列文字（"将删除（已批准）" / "📝 现有字段"），
-            # 整表重画一次更稳
-            if ann.status == "llm_suggest_delete":
+            # llm_suggest_delete / llm_suggest_rename 批准/驳回会改变状态列文字
+            # （"将删除（已批准）" / "✎ 将改名 → ..."），整表重画一次更稳
+            if ann.status in ("llm_suggest_delete", "llm_suggest_rename"):
                 self._render_preview([])
             return
 
@@ -1950,6 +2144,18 @@ class LibraryInitWizard(WizardPlugin):
             ann.reason = (
                 "LLM 曾建议删除此字段，已被你驳回；保留中。"
                 "如果想删除，可以点行操作的「删除」按钮。"
+            )
+            self._render_preview([])
+            return
+        if ann.status == "llm_suggest_rename":
+            # 驳回 LLM 改名建议 → 退化为普通 existing_user_field（保留原名）
+            ann.status = "existing_user_field"
+            ann.selected = True
+            ann.decision = "rejected"
+            ann.llm_rename_new_name = ""
+            ann.reason = (
+                "LLM 曾建议改名此字段，已被你驳回；保留原名。"
+                "如果想改名，可以用场景页的「✎ 重命名」按钮。"
             )
             self._render_preview([])
             return
@@ -1975,13 +2181,18 @@ class LibraryInitWizard(WizardPlugin):
     def _on_approve_all(self) -> None:
         """一键把所有未决条目标为 approved（仅影响有变化的 LLM 建议）。
 
-        对 ``type_conflict`` / ``llm_suggest_delete`` 同步把 ``selected`` 提到 True。
+        对 ``type_conflict`` / ``llm_suggest_delete`` / ``llm_suggest_rename``
+        同步把 ``selected`` 提到 True。
         库描述如果 LLM 改过且尚未决策，也一并标为 approved。
         """
         for ann in self._suggestions:
             if ann.has_llm_change and ann.decision != "approved":
                 ann.decision = "approved"
-                if ann.status in ("type_conflict", "llm_suggest_delete"):
+                if ann.status in (
+                    "type_conflict",
+                    "llm_suggest_delete",
+                    "llm_suggest_rename",
+                ):
                     ann.selected = True
         if self._desc_has_llm_change() and self._library_desc_decision == "pending":
             self._library_desc_decision = "approved"
@@ -2093,6 +2304,8 @@ class LibraryInitWizard(WizardPlugin):
           直接从 ``_suggestions`` 中移除
         * ``llm_suggest_delete``：等价"批准 LLM 的删除建议"（selected=True + decision=approved），
           状态列变红字"将删除（已批准）"
+        * ``llm_suggest_rename``：用户表态"我连这字段都不想要了" → 退化为
+          ``existing_user_field`` + ``selected=False``（标记删除），llm_rename_new_name 清空
         * ``existing_user_field`` / ``same_type`` / ``system_protected``：
           设 selected=False（标记为"将删除"）
         * ``system_required``：拒绝删除（弹消息）
@@ -2119,6 +2332,18 @@ class LibraryInitWizard(WizardPlugin):
             # 行操作"删除" = 批准 LLM 的删除建议
             ann.selected = True
             ann.decision = "approved"
+            self._render_preview([])
+            return
+        if ann.status == "llm_suggest_rename":
+            # 用户的意思是"这字段我不要了，不用改名"：先转成普通现有字段，
+            # 再走标记删除路径
+            ann.status = "existing_user_field"
+            ann.llm_rename_new_name = ""
+            ann.decision = "pending"
+            ann.reason = (
+                "LLM 曾建议改名此字段，被你转为删除；将在「应用」时删除该字段。"
+            )
+            self._apply_selected_change(r, False)
             self._render_preview([])
             return
         # existing_user_field / same_type / system_protected → 标记将删除
@@ -2177,13 +2402,16 @@ class LibraryInitWizard(WizardPlugin):
             return
         ann = self._suggestions[idx]
         ann.selected = on
-        if ann.status == "existing_user_field":
+        # existing_user_field / same_type 的"取消保留"都意味着应用时真删该字段
+        # （same_type 的 action 属性现在也对 selected=False 走 delete 路径）；
+        # 共享同一套视觉刷新规则
+        if ann.status in ("existing_user_field", "same_type"):
             it = self.tbl.item(idx, 1)  # 状态列在新 5 列布局是第 1 列
             if it is None:
                 return
             from PySide6.QtGui import QColor
             if on:
-                label, _ = self._STATUS_DISPLAY["existing_user_field"]
+                label, _ = self._STATUS_DISPLAY[ann.status]
                 it.setText(label)
                 # 复用默认前景（重置颜色）
                 it.setData(Qt.ForegroundRole, None)
@@ -2243,6 +2471,8 @@ class LibraryInitWizard(WizardPlugin):
         to_create: list[tuple[str, str, str]] = []
         to_update_hint: list[tuple[int, str]] = []
         to_delete: list[int] = []
+        to_rename: list[tuple[int, str]] = []
+        rename_names: list[tuple[str, str]] = []  # (old, new)，仅用于结果消息
         delete_names: list[str] = []  # 用于二次确认对话框
         # 删除来源：'user' = 用户主动取消保留；'llm' = 批准 LLM 删除建议
         delete_sources: list[str] = []
@@ -2269,6 +2499,12 @@ class LibraryInitWizard(WizardPlugin):
                     delete_sources.append(
                         "llm" if ann.status == "llm_suggest_delete" else "user"
                     )
+            elif act == "rename":
+                if ann.existing_field_id is not None and ann.llm_rename_new_name:
+                    to_rename.append(
+                        (ann.existing_field_id, ann.llm_rename_new_name),
+                    )
+                    rename_names.append((ann.name, ann.llm_rename_new_name))
 
         # 同 batch 内可能改名后撞上别的待创建字段，做一次预检
         names = [n for n, _, _ in to_create]
@@ -2301,11 +2537,12 @@ class LibraryInitWizard(WizardPlugin):
                 return
             append_for_fids = dlg.append_for_fids
 
-        # 事务化批量应用：创建 + 更新 hint + 删除
+        # 事务化批量应用：改名 + 创建 + 更新 hint + 删除
         try:
-            new_ids, n_deleted = self.repo.apply_field_plan_batch(
+            new_ids, n_deleted, n_renamed = self.repo.apply_field_plan_batch(
                 to_create, to_update_hint, to_delete,
                 append_for_fids=append_for_fids,
+                renames=to_rename,
             )
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(
@@ -2329,6 +2566,9 @@ class LibraryInitWizard(WizardPlugin):
             f"已新建字段 {n_new} 个",
             f"更新已存在字段的 LLM 提示 {n_upd} 个",
         ]
+        if n_renamed:
+            renamed_pairs = "、".join(f"{o}→{n}" for o, n in rename_names)
+            msg_parts.append(f"改名 {n_renamed} 个（{renamed_pairs}）")
         if n_deleted:
             msg_parts.append(f"删除字段 {n_deleted} 个")
         if n_desc_changed:

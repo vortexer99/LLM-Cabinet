@@ -621,6 +621,234 @@ def _run_all(tmp: Path, t: T) -> None:
             any_llm_delete, False,
         )
 
+        # ----------------------------------------------------------
+        # 5d：fields_to_rename — LLM 显式改名建议（task #16 补充）
+        # ----------------------------------------------------------
+        # 5d-1 parse_and_validate 解析 fields_to_rename
+        payload_r, w_r = parse_and_validate(
+            '{"fields":[{"name":"标题","type":"text","prompt_hint":"30 字"}],'
+            '"fields_to_rename":['
+            ' {"old_name":"出版社","new_name":"出版商","reason":"更准确"},'
+            ' {"old_name":"作者","new_name":"作家"},'
+            ' {"old_name":"","new_name":"x","reason":"空 old"},'
+            ' {"old_name":"y","new_name":"","reason":"空 new"},'
+            ' {"old_name":"z","new_name":"z","reason":"old=new"},'
+            ' {"old_name":"标题","new_name":"题名","reason":"老李"},'
+            ' {"old_name":"q","new_name":"标签","reason":"撞必有"},'
+            ' "字符串行"'
+            ']}'
+        )
+        renames_p = payload_r.get("fields_to_rename", [])
+        t.assert_eq(
+            "fields_to_rename 解析后保留的条数",
+            len(renames_p), 2,
+        )
+        rmap = {r["old_name"]: r for r in renames_p}
+        t.assert_in("rename 含 出版社→出版商", "出版社", rmap)
+        t.assert_in("rename 含 作者→作家", "作者", rmap)
+        t.assert_eq(
+            "rename 出版社 new_name", rmap["出版社"]["new_name"], "出版商",
+        )
+        t.assert_eq(
+            "rename 出版社 reason 取自 LLM",
+            rmap["出版社"]["reason"], "更准确",
+        )
+        t.assert_in(
+            "rename 作者缺 reason → 占位",
+            "未提供", rmap["作者"]["reason"],
+        )
+        # 至少应有 5 条 warning：空 old / 空 new / old=new / 必有 old / 撞必有 new / 非对象
+        t.assert_true(
+            "fields_to_rename 错误条目产生 warning",
+            len(w_r) >= 5,
+        )
+
+        # 5d-2 fields_to_rename 全空 → payload 不含该键
+        payload_re, _ = parse_and_validate(
+            '{"fields":[{"name":"标题","type":"text","prompt_hint":""}],'
+            '"fields_to_rename":[]}'
+        )
+        t.assert_true(
+            "fields_to_rename 空数组 → payload 无该键",
+            "fields_to_rename" not in payload_re,
+        )
+
+        # 5d-3 annotate_conflicts 接受 suggested_renames，对未命中 fields 的现有
+        # 字段产生 llm_suggest_rename 状态
+        existing_for_r = repo.list_fields()
+        # 找一个仍然存在的现有用户字段（"子流派"）
+        zlp_r = next((f for f in existing_for_r if f.name == "子流派"), None)
+        if zlp_r is not None:
+            ann_r = annotate_conflicts(
+                [{"name": "标题", "type": "text", "prompt_hint": ""}],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "更通用"},
+                ],
+            )
+            a_zlp_r = next(a for a in ann_r if a.name == "子流派")
+            t.assert_eq(
+                "rename 命中现有字段 → llm_suggest_rename status",
+                a_zlp_r.status, "llm_suggest_rename",
+            )
+            t.assert_eq(
+                "rename ann.llm_rename_new_name 已填充",
+                a_zlp_r.llm_rename_new_name, "亚类型",
+            )
+            t.assert_eq(
+                "rename ann.selected 默认 False（待批准）",
+                a_zlp_r.selected, False,
+            )
+            t.assert_eq(
+                "rename ann.action（pending）→ keep",
+                a_zlp_r.action, "keep",
+            )
+            # 模拟用户批准
+            a_zlp_r.selected = True
+            t.assert_eq(
+                "rename ann.action（已批准）→ rename",
+                a_zlp_r.action, "rename",
+            )
+
+        # 5d-4 同名出现在 fields 与 fields_to_rename → fields 为准
+        ann_r_conflict = annotate_conflicts(
+            [{"name": "子流派", "type": "text", "prompt_hint": ""}],
+            existing_for_r,
+            suggested_renames=[
+                {"old_name": "子流派", "new_name": "亚类型", "reason": "x"},
+            ],
+        )
+        a_zlp_r_c = next(a for a in ann_r_conflict if a.name == "子流派")
+        t.assert_true(
+            "fields 与 fields_to_rename 冲突 → 以 fields 为准",
+            a_zlp_r_c.status != "llm_suggest_rename",
+        )
+
+        # 5d-5 同时出现在 fields_to_rename 与 fields_to_delete → rename 优先
+        a_zlp_existing = next(
+            (a for a in repo.list_fields() if a.name == "子流派"),
+            None,
+        )
+        if a_zlp_existing is not None:
+            ann_dr_conflict = annotate_conflicts(
+                [{"name": "标题", "type": "text", "prompt_hint": ""}],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "x"},
+                ],
+                suggested_deletes=[{"name": "子流派", "reason": "y"}],
+            )
+            a_dr = next(a for a in ann_dr_conflict if a.name == "子流派")
+            t.assert_eq(
+                "rename + delete 冲突 → rename 优先",
+                a_dr.status, "llm_suggest_rename",
+            )
+
+        # 5d-6 new_name 与现有其它字段重名 → 改名建议被丢弃（防御性）
+        ann_r_dup = annotate_conflicts(
+            [{"name": "标题", "type": "text", "prompt_hint": ""}],
+            existing_for_r,
+            suggested_renames=[
+                # 试图把"子流派"改名为"标题"——和现有必有字段重名
+                {"old_name": "子流派", "new_name": "标题", "reason": "x"},
+            ],
+        )
+        # parse 层已经过滤"标题"，但 annotate 也再防御一道；这里其实 parse 已挡住，
+        # 不会落到 annotate；但若直接构造 dict 走 annotate，应该也安全
+        any_rename = any(a.status == "llm_suggest_rename" for a in ann_r_dup)
+        t.assert_eq(
+            "rename new_name 与现有重名 → 不产生 llm_suggest_rename",
+            any_rename, False,
+        )
+
+        # 5d-7 LLM 同时把改名后的 new_name 写进 fields 数组（这是预期场景：
+        # prompt 要求 fields 是改名后的完整方案）。原 bug：会同时产生
+        # 一行 llm_suggest_rename + 一行 new。修复后：只产生 rename 一行，
+        # 第二遍处理 new 时跳过 new_name；如果 fields[new_name] 给了 hint，
+        # 合并到 rename ann 上。
+        if zlp_r is not None:
+            ann_r_dup_fields = annotate_conflicts(
+                # 注意：现有字段仍叫"子流派"，LLM 在 fields 里给的是改名后的"亚类型"
+                [
+                    {"name": "标题", "type": "text", "prompt_hint": ""},
+                    {"name": "亚类型", "type": "text", "prompt_hint": "更通用 hint"},
+                ],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "更通用"},
+                ],
+            )
+            # 关键：不应同时出现 "子流派"(rename) 与 "亚类型"(new)
+            rename_anns = [
+                a for a in ann_r_dup_fields if a.status == "llm_suggest_rename"
+            ]
+            new_anns = [a for a in ann_r_dup_fields if a.status == "new"]
+            t.assert_eq(
+                "rename 同时在 fields 里 → rename ann 数量",
+                len(rename_anns), 1,
+            )
+            t.assert_eq(
+                "rename 同时在 fields 里 → 不应再产生 new ann",
+                len(new_anns), 0,
+            )
+            # rename ann 的 hint 取自 fields[new_name] 给的
+            t.assert_eq(
+                "rename ann 合并 fields[new_name].prompt_hint",
+                rename_anns[0].prompt_hint, "更通用 hint",
+            )
+            # 名字仍是 old_name（rename ann 显示原名 → 状态列附新名）
+            t.assert_eq(
+                "rename ann 名字仍是 old_name",
+                rename_anns[0].name, "子流派",
+            )
+            t.assert_eq(
+                "rename ann llm_rename_new_name 是 new_name",
+                rename_anns[0].llm_rename_new_name, "亚类型",
+            )
+
+        # 5d-8 LLM 在 fields[new_name] 没给 prompt_hint → 用现有字段的旧 hint
+        if zlp_r is not None:
+            existing_zlp = next(f for f in existing_for_r if f.name == "子流派")
+            ann_r_no_hint = annotate_conflicts(
+                [
+                    {"name": "标题", "type": "text", "prompt_hint": ""},
+                    {"name": "亚类型", "type": "text", "prompt_hint": ""},
+                ],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "x"},
+                ],
+            )
+            r_ann = next(
+                a for a in ann_r_no_hint if a.status == "llm_suggest_rename"
+            )
+            t.assert_eq(
+                "rename ann 无新 hint → 沿用现有字段旧 hint",
+                r_ann.prompt_hint, existing_zlp.prompt_hint,
+            )
+
+        # ----------------------------------------------------------
+        # 5e：same_type 行点删除按钮 → action='delete' 回归测试
+        #     6/1 晚发现的 bug：之前 same_type 行点删除按钮静默无效（视觉无变化、
+        #     应用时也不会真删）。现在 action 属性对 same_type+selected=False 走 delete。
+        # ----------------------------------------------------------
+        # 找一个仍然存在的现有用户字段（"子流派"）模拟 same_type 命中
+        zlp_e = next((f for f in existing_for_r if f.name == "子流派"), None)
+        if zlp_e is not None:
+            ann_st = annotate_conflicts(
+                [{"name": "子流派", "type": "text", "prompt_hint": "硬/软/赛博"}],
+                existing_for_r,
+            )
+            a_zlp_st = next(a for a in ann_st if a.name == "子流派")
+            t.assert_eq("same_type 命中 status", a_zlp_st.status, "same_type")
+            # 默认 selected=True：现有 hint 非空场景 → action skip；
+            # 这里 zlp_e.prompt_hint 可能非空，统一以 selected=False 走 delete 验证
+            a_zlp_st.selected = False
+            t.assert_eq(
+                "same_type + selected=False → action='delete'（bug 回归）",
+                a_zlp_st.action, "delete",
+            )
+
 
 
 
@@ -712,13 +940,14 @@ def _run_all(tmp: Path, t: T) -> None:
         before_n = len(all_now)
 
         # 7d-1 成功路径：建 1 个 + 改 1 个 hint + 删 1 个
-        new_ids2, n_del = repo.apply_field_plan_batch(
+        new_ids2, n_del, n_ren_d1 = repo.apply_field_plan_batch(
             creates=[("出版社", "text", "出版社全名")],
             updates_hint=[(zlp_field.id, "硬/软/赛博朋克")],
             deletes=[old_field.id],
         )
         t.assert_eq("apply_field_plan_batch 创建 1 个", len(new_ids2), 1)
         t.assert_eq("apply_field_plan_batch 删除 1 个", n_del, 1)
+        t.assert_eq("apply_field_plan_batch 7d-1 改名 0 个", n_ren_d1, 0)
         after = repo.list_fields()
         after_ids = {f.id for f in after}
         t.assert_eq("应用后字段数 = before + 1 - 1", len(after), before_n + 1 - 1)
@@ -761,9 +990,10 @@ def _run_all(tmp: Path, t: T) -> None:
         )
 
         # 7d-3 全空入参（应是 noop 但不抛错）
-        new_ids3, n_del3 = repo.apply_field_plan_batch([], [], [])
+        new_ids3, n_del3, n_ren3 = repo.apply_field_plan_batch([], [], [])
         t.assert_eq("空入参 creates=[]", new_ids3, [])
         t.assert_eq("空入参 deletes=0", n_del3, 0)
+        t.assert_eq("空入参 renames=0", n_ren3, 0)
 
         # 7d-4 创建路径中遇空 name → 全部 ROLLBACK
         before_n4 = len(repo.list_fields())
@@ -839,7 +1069,7 @@ def _run_all(tmp: Path, t: T) -> None:
         before_desc_a = repo.get_project(p_a.id).description_md
         before_desc_b = repo.get_project(p_b.id).description_md
 
-        _, n_del_e = repo.apply_field_plan_batch(
+        _, n_del_e, _ = repo.apply_field_plan_batch(
             creates=[],
             updates_hint=[],
             deletes=[translator_fid],
@@ -879,6 +1109,95 @@ def _run_all(tmp: Path, t: T) -> None:
         t.assert_eq(
             "默认参数（append_for_fids=None） → description 不变（旧行为）",
             new_desc_c, before_desc_c,
+        )
+
+        # ----------------------------------------------------------
+        # 阶段 11：apply_field_plan_batch.renames — 保留 fid 改名
+        # ----------------------------------------------------------
+        # 11a 准备：建一个「编辑」字段，写一个项目带值，然后改名为「责任编辑」
+        new_ids_r = repo.add_fields_batch([("编辑", "text", "")])
+        editor_fid = new_ids_r[0]
+        p_r = Project(title="带编辑的项目")
+        p_r.id = repo.save_project(p_r)
+        p_r.field_values = {editor_fid: "王编"}
+        repo.save_project(p_r)
+
+        # 11a-1 改名 + 该 fid 上原值仍然能读到（关键：保留 id）
+        _, _, n_ren_a = repo.apply_field_plan_batch(
+            creates=[],
+            updates_hint=[],
+            deletes=[],
+            renames=[(editor_fid, "责任编辑")],
+        )
+        t.assert_eq("renames 改名 1 个", n_ren_a, 1)
+        f_after = repo.get_field(editor_fid)
+        t.assert_eq("改名后 fid 不变", f_after.id, editor_fid)
+        t.assert_eq("改名后 name=新名", f_after.name, "责任编辑")
+        # 关键断言：项目里该字段的值没丢
+        p_after = repo.get_project(p_r.id)
+        t.assert_eq(
+            "改名后 project_field_values 仍能查到原值",
+            p_after.field_values.get(editor_fid), "王编",
+        )
+
+        # 11b 改名为相同名字 → noop（n_renamed=0）
+        _, _, n_ren_b = repo.apply_field_plan_batch(
+            [], [], [], renames=[(editor_fid, "责任编辑")],
+        )
+        t.assert_eq("renames 同名 → noop", n_ren_b, 0)
+
+        # 11c 改名空字符串 → ValueError + ROLLBACK
+        threw_re = False
+        try:
+            repo.apply_field_plan_batch(
+                [], [], [], renames=[(editor_fid, "")],
+            )
+        except ValueError:
+            threw_re = True
+        t.assert_eq("renames 空 new_name → ValueError", threw_re, True)
+        t.assert_eq(
+            "ROLLBACK 后字段名仍是「责任编辑」",
+            repo.get_field(editor_fid).name, "责任编辑",
+        )
+
+        # 11d 改名撞已有字段名 → ValueError
+        # 先建另一个字段「主编」，再尝试把 editor_fid 改成「主编」
+        new_ids_main = repo.add_fields_batch([("主编", "text", "")])
+        threw_dup = False
+        try:
+            repo.apply_field_plan_batch(
+                [], [], [], renames=[(editor_fid, "主编")],
+            )
+        except ValueError:
+            threw_dup = True
+        t.assert_eq("renames 撞已有字段名 → ValueError", threw_dup, True)
+
+        # 11e 改名受保护字段 → ValueError
+        title_fid = next(f for f in repo.list_fields() if f.name == "标题").id
+        threw_prot = False
+        try:
+            repo.apply_field_plan_batch(
+                [], [], [], renames=[(title_fid, "题目")],
+            )
+        except ValueError:
+            threw_prot = True
+        t.assert_eq("renames 受保护字段 → ValueError", threw_prot, True)
+
+        # 11f 综合：renames + creates + updates_hint + deletes 同事务
+        # 把"责任编辑"改回"主编辑"、新建"校对"、删除"主编"
+        main_fid = new_ids_main[0]
+        new_ids_f, n_del_f, n_ren_f = repo.apply_field_plan_batch(
+            creates=[("校对", "text", "")],
+            updates_hint=[],
+            deletes=[main_fid],
+            renames=[(editor_fid, "主编辑")],
+        )
+        t.assert_eq("混合事务 创建 1", len(new_ids_f), 1)
+        t.assert_eq("混合事务 删除 1", n_del_f, 1)
+        t.assert_eq("混合事务 改名 1", n_ren_f, 1)
+        t.assert_eq(
+            "改名后字段名为「主编辑」",
+            repo.get_field(editor_fid).name, "主编辑",
         )
 
 

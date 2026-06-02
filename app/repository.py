@@ -315,18 +315,31 @@ class Repository:
         deletes: list[int],
         *,
         append_for_fids: Optional[Iterable[int]] = None,
-    ) -> tuple[list[int], int]:
+        renames: Optional[list[tuple[int, str]]] = None,
+    ) -> tuple[list[int], int, int]:
         """库字段设计助手「应用」一次性事务（task #11 T3 全量规划）。
 
-        三类操作放进同一个 BEGIN/COMMIT：
+        四类操作放进同一个 BEGIN/COMMIT：
+          - renames：UPDATE fields SET name=? WHERE id=?（保留 fid，
+            项目历史值通过 ``field_values`` 关联保持不动）
           - creates：新建用户字段（同 ``add_fields_batch``）
           - updates_hint：仅更新 prompt_hint
           - deletes：删除字段（系统字段会清空对应 projects 列；用户字段
             走 ``project_field_values`` 的 CASCADE）
 
+        执行顺序：renames 先于 creates。理由：renames 把 "出版社" 改为 "出版商"
+        后，creates 才能安全地添加另一个名为 "出版社" 的新字段（如果用户想这么做）。
+        实际上 LLM 改名建议下游不会有这种边界场景，但顺序保持稳健。
+
         删除保护：
-          - 受保护字段（``is_required``，即 标题/描述/标签）拒绝删除，整体抛 ValueError
+          - 受保护字段（``is_required``，即 标题/描述/标签）拒绝删除/改名，
+            整体抛 ValueError
           - 不存在的 fid 静默跳过
+
+        改名校验：
+          - new_name 为空 → ValueError
+          - new_name 与改名后的现存字段名冲突 → ValueError
+          - 改名同一 fid 多次 → 以最后一次为准（不抛错）
 
         Args:
             creates: ``[(name, type, prompt_hint), ...]``
@@ -336,14 +349,64 @@ class Repository:
                 description 末尾"的 fid 集合（与 ``Repository.delete_field``
                 的 ``append_to_description=True`` 语义一致）；其它待删字段
                 走"直接丢"路径。默认 None = 全部直接丢。
+            renames: ``[(field_id, new_name), ...]``，UPDATE fields.name 用；
+                默认 None = 不改名。受保护字段 fid（标题/描述/标签）→ ValueError。
 
         Returns:
-            ``(new_ids, n_deleted)``。任一失败 → ROLLBACK 抛原异常。
+            ``(new_ids, n_deleted, n_renamed)``。任一失败 → ROLLBACK 抛原异常。
         """
         append_set: set[int] = set(append_for_fids or ())
+        renames_list: list[tuple[int, str]] = list(renames or [])
         cur = self.conn.cursor()
         try:
             cur.execute("BEGIN")
+
+            # 0) renames（先于 creates，避免"新建字段名"与"待改名旧名"撞上）
+            n_renamed = 0
+            if renames_list:
+                from .models import PROTECTED_FIELD_KEYS
+                # fid → 最终新名（去重，最后一次为准）
+                fid_to_new: dict[int, str] = {}
+                for fid, new_name in renames_list:
+                    new_name = (new_name or "").strip()
+                    if not new_name:
+                        raise ValueError("改名时新字段名不能为空")
+                    fid_to_new[fid] = new_name
+                # 收集"改名后不再占用"的旧名 与 "改名后将占用"的新名
+                # 用于检查冲突
+                fids_being_renamed = set(fid_to_new.keys())
+                # 当前所有字段：除了正在被改名的，其名字仍占位
+                surviving_names: set[str] = set()
+                for r in cur.execute("SELECT id, name, key FROM fields"):
+                    if r["id"] in fids_being_renamed:
+                        continue
+                    surviving_names.add(r["name"])
+                # 新名集合（用于内部去重）
+                new_names: list[str] = []
+                for fid, new_name in fid_to_new.items():
+                    f_row = cur.execute(
+                        "SELECT id, name, key FROM fields WHERE id=?", (fid,),
+                    ).fetchone()
+                    if f_row is None:
+                        # 不存在的 fid 静默跳过
+                        continue
+                    if f_row["key"] in PROTECTED_FIELD_KEYS:
+                        raise ValueError(
+                            f"『{f_row['name']}』是受保护字段，不可改名"
+                        )
+                    if new_name == f_row["name"]:
+                        # 与原名相同 → noop，不计入 n_renamed
+                        continue
+                    if new_name in surviving_names or new_name in new_names:
+                        raise ValueError(
+                            f"改名冲突：新名「{new_name}」与已有字段重复"
+                        )
+                    new_names.append(new_name)
+                    cur.execute(
+                        "UPDATE fields SET name=? WHERE id=?",
+                        (new_name, fid),
+                    )
+                    n_renamed += 1
 
             # 1) creates
             new_ids: list[int] = []
@@ -415,7 +478,7 @@ class Repository:
                 n_deleted += 1
 
             self.conn.commit()
-            return new_ids, n_deleted
+            return new_ids, n_deleted, n_renamed
         except Exception:
             self.conn.rollback()
             raise

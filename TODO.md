@@ -57,7 +57,8 @@
 
 ## 🐛 Bug / 已知问题
 新项目日期类型字段总是默认今天，而且没法置空
-
+设置通用里面LLM助手对话轮次设置放到API里面
+库字段设计助手，进入第一个页面预调整时在合适的地方提示用户此处调整不会立刻生效
 -
 
 ## 💡 长期 / 大改 / 不急
@@ -85,6 +86,44 @@
 
 ---
 
+## 📍 版本主题规划
+
+> 把 `tasks/` 里待做的卡按业务方向打包成"版本"，方便排期；
+> 状态变化时同步这一节，规划本身可灵活调整。
+> 已完成的相关 task 标 ✅ 仅作上下文，不算版本工作量。
+
+### vNext-A：MCP 深化 🤖
+让库通过 MCP 协议暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端。
+
+- [#13](./tasks/13-mcp-server.md) MCP Server（AI 文件中枢接口）— **主线**
+- [#11](./tasks/11-field-prompt-and-library-wizard.md) 字段级 prompt 模板 T1/T2/T4（agent 写值的语义基础；T3 库字段设计助手已 ✅）
+- [#07](./tasks/07-local-embedding-summary.md) 本地嵌入摘要 T1/T2（远期；作为 agent "按需读单文件"的轻量替代）
+
+### vNext-B：文件列表深度优化 📂
+项目内文件管理升级，从扁平表格走向树形 + 多窗口。
+
+- [#17](./tasks/17-subfolder-import-and-tree-view.md) 子文件夹导入修复 + 文件表改树形 — **主线**
+- [#02](./tasks/02-files-table-detach-window.md) 文件列表独立窗口
+- [#04](./tasks/04-project-system-files-folding.md) 项目内系统/配置文件折叠（依赖 #17 树形完成）
+- ✅ [#01](./tasks/01-files-table-customization.md) 文件表列可见性 + 列宽（基础已就绪，#17 改控件后迁移）
+
+### vNext-C：标签 + 搜索深度优化 🏷️🔍
+顶部搜索框 + 标签树深化使用。
+
+- [#03](./tasks/03-search-calibre-like.md) 类 Calibre 搜索（关键词 + 字段 + 布尔）— **主线**
+- ✅ [#06](./tasks/06-tags-hierarchy-folding.md) 标签层级折叠（基础已就绪，#03 可直接做"按标签前缀过滤"）
+
+### 并行小版本（不属于上述主题，但值得收尾）
+- [#15](./tasks/15-new-library-onboarding.md) 新建库 onboarding（多步向导 + 首次进入引导 + Welcome + 模板系统）
+- [#12](./tasks/12-selftest-infrastructure.md) 自检体系 🚧（横切关注点：每个新 task 增量沉淀）
+
+### 跨主题强耦合（排期注意）
+- **#17 必须先于 #04**：#04 的折叠规则依赖 #17 的 QTreeWidget
+- **#11 T1/T2 与 #13 建议同版本**：MCP 的"写"语义需要字段 prompt_hint 才完整
+- **#07 与 #04 微弱耦合**：若 #04 想折叠"AI 摘要文件"则依赖 #07 的 summary 属性
+
+---
+
 ## 📑 任务索引
 
 > 详细任务卡见 [`tasks/`](./tasks/README.md)。表格按当前建议执行顺序排列。
@@ -105,6 +144,9 @@
 | [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
 | [08](./tasks/08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | ✅ 2026-06-01 |
 | [07](./tasks/07-local-embedding-summary.md) | 文件级摘要（手动导入 + 预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
+| [15](./tasks/15-new-library-onboarding.md) | 新建库 onboarding（多步向导 + 首次引导 + Welcome + 模板） | S+S+S+M | P1/P2/P3 | 待做 |
+| [16](./tasks/16-library-field-wizard-polish.md) | 库字段设计助手后续打磨 | XS+S+S | P2/P1 | ✅ 2026-06-01 |
+| [17](./tasks/17-subfolder-import-and-tree-view.md) | 子文件夹导入修复 + 文件表改树形 | S+S+S | P0/P1/P1 | 待做 |
 
 ### 合并理由
 - **01** 内：T1（列可见性框架）做完后 T2（存储列）自动可隐藏
