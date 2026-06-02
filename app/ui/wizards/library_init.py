@@ -524,8 +524,14 @@ class FieldPlan:
     renames: list[tuple[int, str]]
     type_changes: list[tuple[int, str, str]]
 
+    @property
     def is_empty(self) -> bool:
-        """是否完全无操作（用户没做任何变更）。"""
+        """是否完全无操作（用户没做任何变更）。
+
+        ⚠ 是 ``@property`` —— 直接 ``plan.is_empty`` 取布尔值，**不要**写
+        ``plan.is_empty()``（task #21 阶段 B 修过一个 bug：调用处忘加括号、
+        bound method 永远 truthy 导致永远走"无变更"分支）。
+        """
         return not (
             self.creates
             or self.updates_hint
@@ -2518,22 +2524,12 @@ class LibraryInitWizard(WizardPlugin):
                 it_status.setForeground(QColor("#1565c0"))
             self.tbl.setItem(row, 1, it_status)
 
-            # 2：字段名（type_conflict 在 task #19 Phase B 起也是只读 —— 不
-            # 再走"改名 + 新建"路径；接受 = 原地改类型，原名保留不动）
+            # 2：字段名（task #21：Step 1 全只读，所有改动迁移到 Step 2）
             it_name = QTableWidgetItem(ann.name)
-            # 系统字段名不可改；same_type / existing_user_field / type_conflict
-            # 都不允许改名（避免与既有数据脱钩）；新建（new）允许双击编辑；
-            # llm_suggest_delete / llm_suggest_rename：原名只读（rename 的新名
-            # 通过批准操作生效，不在这里编辑）
-            if ann.status in (
-                "system_required", "same_type",
-                "existing_user_field", "type_conflict",
-                "llm_suggest_delete", "llm_suggest_rename",
-            ):
-                it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
+            it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
             self.tbl.setItem(row, 2, it_name)
 
-            # 3：类型
+            # 3：类型（task #21：Step 1 全只读；改类型在 Step 2 进行）
             cmb = QComboBox()
             cmb.setMinimumHeight(28)
             cmb.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
@@ -2543,23 +2539,7 @@ class LibraryInitWizard(WizardPlugin):
                 cmb.addItem(FIELD_TYPE_LABELS.get("tags", "标签（多值）"), "tags")
             idx_t = cmb.findData(ann.type)
             cmb.setCurrentIndex(max(0, idx_t))
-            # 现有字段（被 LLM 命中或未命中、且不打算改类型的）类型不允许变 ——
-            # 避免脱钩历史数据；type_conflict 与 same_type 例外：允许用户改类型。
-            # 当用户在 same_type 行改了类型时，``_on_type_changed`` 会自动把
-            # 该 ann 升级成 type_conflict（走 change_type 路径），用户改回
-            # 原类型则降回 same_type；这样预览页能统一处理"想改现有字段类型"
-            # 的诉求，不必跳到「设置 → 字段」
-            if ann.status in (
-                "system_required",
-                "existing_user_field",
-                "llm_suggest_delete", "llm_suggest_rename",
-            ):
-                cmb.setEnabled(False)
-            cmb.currentIndexChanged.connect(
-                lambda _i, sidx=src_idx, c=cmb: self._on_type_changed(
-                    sidx, c.currentData(),
-                )
-            )
+            cmb.setEnabled(False)
             self.tbl.setCellWidget(row, 3, cmb)
 
             # 4：prompt_hint（双击弹多行对话框；移除 Editable flag 避免 Qt 默认窄编辑器）
@@ -2883,46 +2863,23 @@ class LibraryInitWizard(WizardPlugin):
     def _current_preview_row(self) -> int:
         return self.tbl.currentRow()
 
-    def _on_type_changed(self, idx: int, new_type: str) -> None:
-        """用户在 Step 1 表里改了类型 ComboBox。``idx`` 是 ``self._suggestions``
-        的真实索引（task #21）。
+    def _wrap_cell(self, tbl: QTableWidget, row: int, col: int, widget) -> None:
+        """把 widget 居中包进单元格（场景页字段表的"显示"/"参与建议"列复用）。"""
+        w = QWidget()
+        hl = QHBoxLayout(w)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.addStretch(1)
+        hl.addWidget(widget)
+        hl.addStretch(1)
+        tbl.setCellWidget(row, col, w)
 
-        关键逻辑（task #19 Phase B 收尾）：如果用户把 ``same_type`` 行的类型
-        改成跟现有字段类型不同，自动**升级**该 ann 为 ``type_conflict`` ——
-        下次 apply 时走 change_type 路径（原地改类型 + 写新 hint + supersede
-        pending）。这样用户在 Step 1 就能用统一的"改类型"流程处理"我刚加的字段
-        类型还想改"的需求，无需返回 Step 2 / 设置。
+    def _on_type_changed(self, idx: int, new_type: str) -> None:
+        """task #21 阶段 B 起 Step 1 类型 ComboBox 全只读，本方法不再被信号
+        调用；仅作历史 API 保留，避免外部脚本（如 selftest 直接调）出错。
+
+        新场景：所有改类型动作走 Step 2 ``_on_step2_type_changed``。
         """
-        if not (0 <= idx < len(self._suggestions)):
-            return
-        ann = self._suggestions[idx]
-        ann.type = new_type
-        # same_type → 用户改了类型 → 升级为 type_conflict
-        if (
-            ann.status == "same_type"
-            and ann.existing_field_type
-            and new_type != ann.existing_field_type
-        ):
-            ann.status = "type_conflict"
-            ann.reason = (
-                f"你把「{ann.name}」的类型从 {ann.existing_field_type} 改成了 "
-                f"{new_type}。批准 → 原地改类型；驳回 → 类型回滚为原值。"
-            )
-            # decision 回到 pending（让用户对新 type_conflict 重新决策）
-            ann.decision = "pending"
-            self._render_preview([])
-            return
-        # type_conflict → 用户改回了原类型 → 降回 same_type
-        if (
-            ann.status == "type_conflict"
-            and ann.existing_field_type
-            and new_type == ann.existing_field_type
-        ):
-            ann.status = "same_type"
-            ann.reason = "已存在（类型一致）→ 仅写入 LLM 提示"
-            ann.decision = "pending"
-            self._render_preview([])
-            return
+        return  # no-op
 
     # 历史：``_on_rename_changed`` 槽函数曾用于 type_conflict 行的 LineEdit
     # 改名建新字段路径（写入 ann.rename_to）。task #19 Phase B 起 type_conflict
@@ -2960,25 +2917,18 @@ class LibraryInitWizard(WizardPlugin):
         return drafts_are_dirty(self._drafts, self._drafts_baseline)
 
     def _sync_step1_edits_into_suggestions(self) -> None:
-        """把 Step 1 表里用户的字段名 / hint 微调同步回 ``self._suggestions``。
+        """把 Step 1 表里用户的 hint 微调同步回 ``self._suggestions``。
 
-        注意：type 改动已通过 ``_on_type_changed`` 实时同步；这里只处理
-        name / prompt_hint。仅遍历 Step 1 当前可见的渲染行
-        （existing_user_field 行被过滤掉、不会出现在 Step 1）。同时把库描述
-        编辑框的内容同步到 ``_library_desc_suggested``。
+        task #21 阶段 B 起 Step 1 字段名 / 类型全只读，所以这里只处理 hint。
+        hint 的双击编辑路径已经实时同步 ann.prompt_hint，这里再兜一层防御
+        （把表格 cell 的当前文本写回 ann）。同时把库描述编辑框的内容同步到
+        ``_library_desc_suggested``。
         """
         for row, src_idx in enumerate(self._step1_visible_rows):
             if not (0 <= src_idx < len(self._suggestions)):
                 continue
             ann = self._suggestions[src_idx]
-            # 字段名（仅 new 状态允许从 Step 1 表里改名）
-            if ann.status == "new":
-                it = self.tbl.item(row, 2)
-                if it is not None:
-                    new_name = it.text().strip()
-                    if new_name:
-                        ann.name = new_name
-            # hint（双击编辑路径已经同步 ann.prompt_hint，这里再兜一层防御）
+            # hint：双击编辑路径已同步 ann.prompt_hint，这里再兜一层防御
             it_h = self.tbl.item(row, 4)
             if it_h is not None:
                 ann.prompt_hint = it_h.text()
@@ -3340,16 +3290,37 @@ class LibraryInitWizard(WizardPlugin):
         与旧 ``_collect_user_edited_payload`` 的区别：**只**回灌 Step 1 反馈，
         不含 Step 2 的字段表编辑（增 / 删 / 改名 / 改类型 / 改提示）；这些属于
         "用户对最终落库表的私人处置"，与 LLM 无关（task #21 决策 9）。
+
+        输出结构：
+        - ``fields``：用户当前的字段方案（每条 LLM 建议被批准/驳回后的最终 type
+          / hint）；带上 decision 标记让 LLM 知道用户对每条建议的态度
+        - ``rejected_suggestions``：被驳回的 LLM 建议摘要（new / 改类型 / 改名
+          / 删除 4 类），让 LLM 在新一轮**不要**再提同样的建议
+        - ``library_description``：用户编辑过的库描述
         """
-        # 字段名 / hint 的 Step 1 微调已通过 _sync_step1_edits_into_suggestions
-        # 同步到 ann，这里直接序列化 ann
         out = []
+        rejected: list[str] = []
         for ann in self._suggestions:
+            decision = ann.decision  # approved / rejected / pending
             out.append({
                 "name": ann.name,
                 "type": ann.type,
                 "prompt_hint": ann.prompt_hint,
+                "decision": decision,
             })
+            # 显式记录驳回的建议，方便 LLM 下一轮回避
+            # 注意：被驳回的 llm_suggest_delete / llm_suggest_rename 在
+            # _on_decision_changed 里已经退化成 existing_user_field、
+            # ann.status / reason 都改了，但我们仍能从"用户行为留痕"角度
+            # 提取信息：通过 reason 字段里"已被你驳回"的关键词识别
+            if decision == DECISION_REJECTED:
+                if ann.status == "existing_user_field" and ann.reason:
+                    # 驳回 LLM 删除 / 改名后退化的，reason 里有原因
+                    rejected.append(f"对字段「{ann.name}」：{ann.reason}")
+                else:
+                    rejected.append(
+                        f"驳回了关于「{ann.name}」的 LLM 建议（用户不希望此变更）"
+                    )
         edited_desc = (
             self.ed_preview_library_desc.toPlainText().strip()
             if hasattr(self, "ed_preview_library_desc") else ""
@@ -3357,6 +3328,7 @@ class LibraryInitWizard(WizardPlugin):
         self._library_desc_suggested = edited_desc
         return {
             "fields": out,
+            "rejected_suggestions": rejected,
             "library_description": edited_desc,
         }
 

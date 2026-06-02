@@ -307,7 +307,7 @@ def test_diff_no_change(t: T) -> None:
         ),
     ]
     plan = diff_drafts_to_plan(drafts, existing)
-    t.assert_true("empty plan", plan.is_empty())
+    t.assert_true("empty plan", plan.is_empty)
 
 
 def test_diff_user_new_create(t: T) -> None:
@@ -369,7 +369,7 @@ def test_diff_user_new_deleted_dropped(t: T) -> None:
         ),
     ]
     plan = diff_drafts_to_plan(drafts, existing)
-    t.assert_true("plan empty（标删的新建被丢弃）", plan.is_empty())
+    t.assert_true("plan empty（标删的新建被丢弃）", plan.is_empty)
 
 
 def test_diff_llm_renamed_normal(t: T) -> None:
@@ -421,7 +421,7 @@ def test_diff_llm_typechanged_user_reverted(t: T) -> None:
         ),
     ]
     plan = diff_drafts_to_plan(drafts, existing)
-    t.assert_true("plan empty（用户改回原 type）", plan.is_empty())
+    t.assert_true("plan empty（用户改回原 type）", plan.is_empty)
 
 
 def test_diff_existing_user_changed_type(t: T) -> None:
@@ -764,6 +764,34 @@ def test_step1_visible_indices_empty_input(t: T) -> None:
     t.assert_eq("空输入 → 空列表", step1_visible_indices([]), [])
 
 
+def test_field_plan_is_empty_is_property_not_method(t: T) -> None:
+    """task #21 阶段 B 回归保护：``FieldPlan.is_empty`` 必须是 ``@property``。
+
+    曾经一个 bug：``is_empty`` 是普通方法、调用处 ``if plan.is_empty:`` 漏写
+    括号 → bound method 永远 truthy → 永远走"无变更"分支。改成 ``@property``
+    后无论写 ``plan.is_empty`` 还是 ``plan.is_empty()`` 都不会安静失败。
+    """
+    plan_empty = FieldPlan(
+        creates=[], updates_hint=[], deletes=[], renames=[], type_changes=[],
+    )
+    plan_with_create = FieldPlan(
+        creates=[("X", "text", "")],
+        updates_hint=[], deletes=[], renames=[], type_changes=[],
+    )
+    plan_with_delete = FieldPlan(
+        creates=[], updates_hint=[], deletes=[1], renames=[], type_changes=[],
+    )
+    # property 直接取布尔值：True / False，**不是** bound method
+    t.assert_eq("空 plan.is_empty 是 True", plan_empty.is_empty, True)
+    t.assert_eq("有 creates → is_empty 是 False",
+                plan_with_create.is_empty, False)
+    t.assert_eq("有 deletes → is_empty 是 False",
+                plan_with_delete.is_empty, False)
+    # 类型必须是 bool，不能是 method
+    t.assert_true("is_empty 类型是 bool",
+                  isinstance(plan_empty.is_empty, bool))
+
+
 # =============================================================================
 # 主入口
 # =============================================================================
@@ -820,6 +848,7 @@ def main() -> int:
     test_step1_visible_indices_filters_existing_user_field(t)
     test_step1_visible_indices_all_existing_returns_empty(t)
     test_step1_visible_indices_empty_input(t)
+    test_field_plan_is_empty_is_property_not_method(t)
     return 0 if t.report() else 1
 
 
