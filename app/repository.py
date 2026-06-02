@@ -505,12 +505,50 @@ class Repository:
         self.conn.execute("UPDATE fields SET name=? WHERE id=?", (new_name.strip(), fid))
         self.conn.commit()
 
-    def set_field_type(self, fid: int, ftype: str) -> None:
+    def set_field_type(
+        self,
+        fid: int,
+        ftype: str,
+        *,
+        supersede_pending_suggestions: bool = False,
+        clear_prompt_hint: bool = False,
+    ) -> None:
+        """修改字段类型。task #19 Phase A 起支持两个可选副作用开关。
+
+        - ``supersede_pending_suggestions=True``：把该 fid 所有 ``status='pending'``
+          的 ``project_field_suggestions`` 标记为 ``superseded`` —— 因为旧建议
+          的 ``suggested_value`` 是按旧类型语义生成的字符串，新类型下接受它会
+          污染数据
+        - ``clear_prompt_hint=True``：同时把 ``fields.prompt_hint`` 清空 ——
+          原 hint（如"格式：YYYY-MM-DD"）跟新类型大概率不匹配
+
+        三件事在同一事务，避免中途崩溃留下不一致状态。受保护字段（标题/描述/
+        标签）静默忽略（与历史行为一致）。
+        """
         f = self.get_field(fid)
-        if f is not None and f.is_required:
+        if f is None or f.is_required:
             return  # 保护字段类型固定，静默忽略
-        self.conn.execute("UPDATE fields SET type=? WHERE id=?", (ftype, fid))
-        self.conn.commit()
+        if f.type == ftype:
+            return  # 无变化，跳过；避免无谓事务与 supersede 误伤
+        cur = self.conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            cur.execute("UPDATE fields SET type=? WHERE id=?", (ftype, fid))
+            if clear_prompt_hint:
+                cur.execute(
+                    "UPDATE fields SET prompt_hint='' WHERE id=?", (fid,)
+                )
+            if supersede_pending_suggestions:
+                cur.execute(
+                    "UPDATE project_field_suggestions "
+                    "SET status='superseded', resolved_at=datetime('now') "
+                    "WHERE field_id=? AND status='pending'",
+                    (fid,),
+                )
+            self.conn.commit()
+        except Exception:
+            self.conn.rollback()
+            raise
 
     def set_field_visible(self, fid: int, visible: bool) -> None:
         self.conn.execute(

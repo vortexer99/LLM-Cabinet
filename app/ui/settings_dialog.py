@@ -603,8 +603,66 @@ class SettingsDialog(QDialog):
         self._reload_fields_table()
 
     def _field_change_type(self, fid: int, ftype: str) -> None:
-        self.repo.set_field_type(fid, ftype)
+        """改字段类型（task #19 Phase A）：兼容切静默执行；不兼容走确认弹窗。"""
+        from ..models import is_compatible_type_change
+
+        f = self.repo.get_field(fid)
+        if f is None or f.type == ftype:
+            return
+        if is_compatible_type_change(f.type, ftype):
+            self.repo.set_field_type(fid, ftype)
+            self.fields_changed.emit()
+            return
+
+        n_values, m_pending = self._count_field_impact(fid)
+        # 三条都没东西可保护 → 静默切（即使技术上不兼容）
+        if n_values == 0 and m_pending == 0 and not (f.prompt_hint or "").strip():
+            self.repo.set_field_type(fid, ftype)
+            self.fields_changed.emit()
+            return
+
+        confirmed, clear_hint = _FieldTypeChangeConfirmDialog.ask(
+            self, f, ftype, n_values, m_pending,
+        )
+        if not confirmed:
+            # 用户取消：ComboBox 的 currentIndex 已经被切到新类型；整表重画
+            # 把视觉拽回去
+            self._reload_fields_table()
+            return
+
+        try:
+            self.repo.set_field_type(
+                fid, ftype,
+                supersede_pending_suggestions=(m_pending > 0),
+                clear_prompt_hint=clear_hint,
+            )
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(self, "失败", str(e))
+            self._reload_fields_table()
+            return
         self.fields_changed.emit()
+
+    def _count_field_impact(self, fid: int) -> tuple[int, int]:
+        """统计改类型会影响多少 (非空字段值数, pending 建议数)。
+
+        - 非空值数走 ``repo.count_field_filled``：它会按字段类型分流——系统字段
+          读 ``projects`` 表对应列、用户字段读 ``project_field_values``。绝对
+          不要只查 ``project_field_values``，那样对系统字段（如 author / date /
+          source_url / rating）永远返回 0，会导致"明明有数据却静默切类型不弹窗"。
+        - pending 建议数走 ``project_field_suggestions``（这张表系统字段 / 用户
+          字段都用同一份 schema）。
+        """
+        f = self.repo.get_field(fid)
+        if f is None:
+            return 0, 0
+        n_values = self.repo.count_field_filled(f)
+        m_pending = self.repo.conn.execute(
+            "SELECT COUNT(*) FROM project_field_suggestions "
+            "WHERE field_id=? AND status='pending'",
+            (fid,),
+        ).fetchone()[0]
+        return int(n_values), int(m_pending)
+
 
     def _field_move(self, delta: int) -> None:
         r = self.tbl_fields.currentRow()
@@ -1137,4 +1195,104 @@ class _AddFieldDialog(QDialog):
         self.name = name
         self.type = self.cmb_type.currentData() or "text"
         self.accept()
+
+
+class _FieldTypeChangeConfirmDialog(QDialog):
+    """字段类型变更的确认对话框（task #19 Phase A）。
+
+    类型切换不会动 ``project_field_values.value``（保留原字符串，切回旧类型即可
+    恢复显示），但新控件读不动旧值，更新元数据时可能被空状态覆盖；同时该字段
+    挂着的 LLM pending 建议也都按旧类型生成，应失效；prompt_hint 大概率跟新
+    类型不匹配，提供"是否同时清空"的选项（默认清）。
+    """
+
+    def __init__(
+        self,
+        field,
+        new_type: str,
+        n_values: int,
+        m_pending: int,
+        parent=None,
+    ):
+        super().__init__(parent)
+        from ..models import FIELD_TYPE_LABELS
+
+        self.setWindowTitle("确认更改字段类型")
+        self.setMinimumWidth(480)
+        self.clear_hint = False
+
+        v = QVBoxLayout(self)
+        v.setSpacing(10)
+
+        old_label = FIELD_TYPE_LABELS.get(field.type, field.type)
+        new_label = FIELD_TYPE_LABELS.get(new_type, new_type)
+        head = QLabel(
+            f"将「<b>{field.name}</b>」从 <b>{old_label}</b> 改为 "
+            f"<b>{new_label}</b>？"
+        )
+        head.setTextFormat(Qt.RichText)
+        head.setWordWrap(True)
+        v.addWidget(head)
+
+        # 三条说明（按需显示）
+        bullets: list[str] = []
+        if n_values > 0:
+            bullets.append(
+                f"已有 <b>{n_values}</b> 条非空记录的字段值会保留在数据库里，"
+                "但新类型的控件可能读不出来（切回旧类型即可恢复显示；"
+                "<b>更新项目元数据时</b>若提交空值会被覆盖）"
+            )
+        if m_pending > 0:
+            bullets.append(
+                f"待批准的 LLM 建议 <b>{m_pending}</b> 条会失效"
+            )
+        has_hint = bool((field.prompt_hint or "").strip())
+        if has_hint:
+            hint_preview = (field.prompt_hint or "").strip().replace("\n", " ")
+            if len(hint_preview) > 30:
+                hint_preview = hint_preview[:30] + "…"
+            bullets.append(
+                f"该字段的 LLM 提示「<i>{hint_preview}</i>」可能跟新类型不匹配"
+            )
+
+        if bullets:
+            body = QLabel(
+                "<ul style='margin-left:-20px'>"
+                + "".join(f"<li>{b}</li>" for b in bullets)
+                + "</ul>"
+            )
+            body.setTextFormat(Qt.RichText)
+            body.setWordWrap(True)
+            v.addWidget(body)
+
+        # 清空 hint 的 checkbox（仅当 hint 非空时显示）
+        if has_hint:
+            self.cb_clear_hint = QCheckBox("同时清空该字段的 LLM 提示（推荐）")
+            self.cb_clear_hint.setChecked(True)
+            v.addWidget(self.cb_clear_hint)
+        else:
+            self.cb_clear_hint = None
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("确认更改")
+        bb.button(QDialogButtonBox.Cancel).setText("取消")
+        bb.accepted.connect(self._on_ok)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _on_ok(self) -> None:
+        self.clear_hint = bool(
+            self.cb_clear_hint is not None and self.cb_clear_hint.isChecked()
+        )
+        self.accept()
+
+    @classmethod
+    def ask(
+        cls, parent, field, new_type: str, n_values: int, m_pending: int,
+    ) -> tuple[bool, bool]:
+        """返回 ``(confirmed, clear_hint)``。"""
+        dlg = cls(field, new_type, n_values, m_pending, parent=parent)
+        ok = dlg.exec() == QDialog.Accepted
+        return ok, (dlg.clear_hint if ok else False)
+
 

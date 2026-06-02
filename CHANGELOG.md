@@ -13,6 +13,15 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
 
 ### Changed
+- **字段类型变更加安全护栏（task #19 Phase A，2026-06-02）**：在「设置 → 字段」和「字段助手 → 现有字段表」里改字段类型，从一条无声 SQL 升级为护栏路径。以前用户切类型只动 `fields.type`，`project_field_values.value` 留着旧字符串、新类型的控件读不出来 → 用户更新元数据时控件空状态把原值无声覆盖；`fields.prompt_hint` 跟旧类型绑定（"格式：YYYY-MM-DD" 切到 rating 后照样喂 LLM）；`project_field_suggestions` 里按旧类型生成的 pending 建议照常出现在 LLM 建议汇总，接受 → 把垃圾值写进 `project_field_values`。新方案：
+  - 加 `app.models.is_compatible_type_change(old, new)` 兼容性矩阵函数：同类型 / 任意→text/textarea / rating→number 视为兼容（静默切，不打扰用户）；其它组合视为不兼容（弹确认）。
+  - `Repository.set_field_type` 加两个可选 kwargs：`supersede_pending_suggestions`（把该 fid 所有 pending 建议批量标 `superseded` + `resolved_at`）、`clear_prompt_hint`（清空旧 hint）；三件事进同一事务避免崩溃留下半截状态。默认 kwargs 关闭 → 完全向后兼容老调用点。
+  - 新增 `_FieldTypeChangeConfirmDialog`：列出"N 条非空记录值会保留（但更新项目元数据时可能被空值覆盖）/ M 条 pending 建议会失效 / 旧 LLM 提示「<前 30 字>...」可能不匹配"三条按需显示的说明；hint 非空时挂一个「☑ 同时清空（推荐）」复选框；三条全为空（无值 + 无 pending + 无 hint）→ 即使技术上不兼容也跳过弹窗静默切。
+  - **统计字段填充数必须经 `Repository.count_field_filled`**（首发版 hotfix）：系统字段（author / date / source_url / rating）的值存在 `projects` 表对应列里、**不在** `project_field_values`。`_count_field_impact` 首版直接 `SELECT FROM project_field_values` 会让系统字段永远算 0，误走"三条全空 → 静默切"路径而不弹确认对话框。修正为复用现有的 `repo.count_field_filled(f)`（它已按字段类型分流到正确表）。`library_init.py::_existing_field_change_type` 同步修正。selftest 加一支 `test_count_field_filled_for_system_fields` 防回归。
+  - `project_field_values.value` **始终一字不动**——保留原字符串供"切回旧类型恢复显示"的兜底；这是核心保护，对齐 Notion 的实践。
+  - 字段助手向导第 2 页「现有字段管理」表里的类型 ComboBox（`_existing_field_change_type`）同步走护栏，避免两个等价入口保护程度不一。
+  - **已知限制**（已记入 task #19 风险节）：1) 项目编辑对话框加载脏值后显示为空，用户保存仍可能覆盖原值——彻底修复需要在控件加载时检测不兼容值 + 显示"原值 / 与当前类型不兼容"提示，另开卡。2) 改类型瞬间有 LLM 任务在跑会写入按旧类型语义的新 pending；本卡暂不堵。3) 任务面板「重新应用建议」可把 superseded 建议复活；本卡暂不堵。
+  - 受保护字段（标题/描述/标签）保持现有"静默忽略"语义；`old == new` 时也直接 return（防止 noop 调用误伤 pending）。
 - **TODO 小修小补一锅出（2026-06-02）**：清掉 `TODO.md` 里 5 条 🐛 + 1 条 🧺。
   - **设置 → 通用 的「LLM 助手对话轮数」搬到设置 → API 页**：与默认 provider / 默认语言 / 各平台 base_url+key+model 同页，更聚焦 LLM 配置入口。`wizard_max_rounds` 这个 setting key 不变，老库无需迁移；通用页留一行注释指向新位置。
   - **库字段设计助手第一页加预调整提示**：在「当前库的字段」标签下方追加一行 hint，明确说明"这里增删改只是给 LLM 的输入起点，**点「让 LLM 给出建议」之前不会写入当前库**，想直接编辑库字段请用「设置 → 字段」"。避免新用户误以为已经在编辑现库。

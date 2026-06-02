@@ -21,6 +21,35 @@ FIELD_TYPE_LABELS = {
 PROTECTED_FIELD_KEYS = ("title", "description", "tags")
 
 
+# 类型变更兼容性矩阵（task #19 Phase A）
+#
+# "兼容" = 新类型的控件能正常读出旧值的字符串表示，不会出现"读不动 → 显示空 →
+# 用户保存时把原值无声覆盖"的数据丢失。
+# 不兼容 ≠ 不允许，只是 UI 层会弹确认对话框告知后果。
+#
+# 设计原则：
+# - 所有字段值底层都是 TEXT，切类型本身不动 project_field_values.value
+# - text / textarea 控件能显示任何字符串 → 任意类型切到它俩都兼容
+# - 反向（任意 → date/url/rating/number）控件大概率读不出来 → 不兼容
+# - rating → number：rating 存的是 "1".."5" 这种整数字符串，number 控件能读
+# - number → rating：number 可能 >5 或负数或浮点，rating 控件显示 0 星 → 不兼容
+# - 同类型互换（理论上不该发生，但兜底）= 兼容
+def is_compatible_type_change(old: str, new: str) -> bool:
+    """判断字段类型变更是否"完全兼容"（旧值能被新类型控件正常读出）。
+
+    返回 True 表示 UI 可以静默切换，无需弹确认；False 表示需要弹确认告知用户。
+    """
+    if old == new:
+        return True
+    # 目标类型是 text / textarea：任何字符串都能显示
+    if new in ("text", "textarea"):
+        return True
+    # rating → number：rating 的存储格式 "1".."5" 在 number 控件里能正确解析
+    if old == "rating" and new == "number":
+        return True
+    return False
+
+
 @dataclass
 class Field:
     id: Optional[int] = None

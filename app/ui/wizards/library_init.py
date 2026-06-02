@@ -1670,11 +1670,53 @@ class LibraryInitWizard(WizardPlugin):
         self.repo.set_field_suggest_enabled(fid, enabled)
 
     def _existing_field_change_type(self, fid: int, ftype: str) -> None:
+        """字段助手「现有字段」表里手动改类型 — 复用库设置同款护栏
+        （task #19 Phase A）。"""
+        from ...models import is_compatible_type_change
+        from ..settings_dialog import _FieldTypeChangeConfirmDialog
+
+        f = self.repo.get_field(fid)
+        if f is None or f.type == ftype:
+            return
+
         try:
-            self.repo.set_field_type(fid, ftype)
+            if is_compatible_type_change(f.type, ftype):
+                self.repo.set_field_type(fid, ftype)
+                self._reload_existing_fields_table()
+                return
+
+            # n_values 必须走 repo.count_field_filled（系统字段读 projects 列、
+            # 用户字段读 project_field_values）；只查 project_field_values
+            # 会让系统字段永远算 0、误走静默路径
+            n_values = self.repo.count_field_filled(f)
+            m_pending = self.repo.conn.execute(
+                "SELECT COUNT(*) FROM project_field_suggestions "
+                "WHERE field_id=? AND status='pending'",
+                (fid,),
+            ).fetchone()[0]
+            if (
+                int(n_values) == 0 and int(m_pending) == 0
+                and not (f.prompt_hint or "").strip()
+            ):
+                self.repo.set_field_type(fid, ftype)
+                self._reload_existing_fields_table()
+                return
+
+            confirmed, clear_hint = _FieldTypeChangeConfirmDialog.ask(
+                self, f, ftype, int(n_values), int(m_pending),
+            )
+            if not confirmed:
+                self._reload_existing_fields_table()
+                return
+
+            self.repo.set_field_type(
+                fid, ftype,
+                supersede_pending_suggestions=(int(m_pending) > 0),
+                clear_prompt_hint=clear_hint,
+            )
         except Exception as e:  # noqa: BLE001
             QMessageBox.warning(self, "失败", str(e))
-            self._reload_existing_fields_table()
+        self._reload_existing_fields_table()
 
     def _existing_field_move(self, delta: int) -> None:
         r = self.tbl_existing.currentRow()
