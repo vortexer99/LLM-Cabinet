@@ -107,7 +107,10 @@ class AnnotatedSuggestion:
     #   'same_type'          ：LLM 输出命中现有用户字段且类型一致；现有 hint 空
     #                          → update_hint_only；非空 → 跳过不覆盖；
     #                          用户在预览页"删除" → selected=False → 走 delete
-    #   'type_conflict'      ：LLM 输出命中现有但类型不同；默认改名 <原名>_v2
+    #   'type_conflict'      ：LLM 输出命中现有但类型不同；批准 → 原地改类型
+    #                          + 写入 LLM 新 hint + supersede pending（走
+    #                          change_type 路径，task #19 Phase B）；驳回 →
+    #                          字段彻底不动
     #   'system_protected'   ：保留以兼容老路径（理论上 6/1 晚迭代后不会再产生）
     #   'llm_suggest_delete' ：LLM 在 fields_to_delete 里显式建议删除该现有字段；
     #                          默认 selected=False（保守"待批准"），用户批准 → 真删，
@@ -185,14 +188,21 @@ class AnnotatedSuggestion:
         if self.status == "system_protected":
             return "skip"
         if self.status == "type_conflict":
-            return "create" if self.rename_to.strip() else "skip"
+            # task #19 Phase B：批准（selected=True）→ 原地改类型 +
+            # 用 LLM 给的新 hint 覆盖旧 hint + supersede pending；
+            # 驳回（selected=False）→ skip，字段彻底不动
+            return "change_type" if self.selected else "skip"
         return "create"  # status == "new"
 
     @property
     def effective_name(self) -> str:
-        """实际写入 fields 表时使用的名字（type_conflict 路径走重命名）。"""
-        if self.status == "type_conflict" and self.rename_to.strip():
-            return self.rename_to.strip()
+        """实际写入 fields 表时使用的名字。
+
+        task #19 Phase B 起 type_conflict 路径不再走"改名建新字段"（删掉了
+        ``<原名>_v2`` 逻辑），所以这个 property 仅对常规 ``new`` / ``same_type``
+        等路径有意义。``rename_to`` 字段虽然保留在 dataclass 定义里，但
+        type_conflict 路径下不再被读写。
+        """
         return self.name
 
     # ---- "LLM 建议"列的标签判定 -------------------------------------------
@@ -433,6 +443,7 @@ def annotate_conflicts(
     existing_fields: list,
     suggested_deletes: Optional[list[dict]] = None,
     suggested_renames: Optional[list[dict]] = None,
+    out_warnings: Optional[list[str]] = None,
 ) -> list[AnnotatedSuggestion]:
     """全量规划：把现有字段全部纳入预览，并叠加 LLM 的修订/新增/删除/改名建议。
 
@@ -469,7 +480,10 @@ def annotate_conflicts(
             忽略并加 warning（在 parse 层已经过基本校验，这里只兜底）。
             ``old_name`` 同时出现在 ``fields`` 中（保留）→ 以 ``fields`` 为准，
             改名建议被忽略。
-    """
+        out_warnings: 可选的 list。若传入，函数会把发现的语义级 warning
+            (例如 LLM 在 ``fields[new_name]`` 里同时给了不同 type，"既改名
+            又改类型"会被忽略类型部分) append 进来。``None`` 表示静默丢弃，
+            兼容老调用方。"""
     by_name = {f.name: f for f in existing_fields}
     existing_names = {f.name for f in existing_fields}
     # 同名 LLM 建议保留**第一次**出现的（避免 dict 自动用最后一个覆盖；
@@ -577,11 +591,12 @@ def annotate_conflicts(
             else:
                 a.status = "type_conflict"
                 a.reason = (
-                    f"已存在但类型不同（现：{ex.type} / 建议：{a.type}），"
-                    f"请改名后再创建"
+                    f"LLM 建议把现有字段「{ex.name}」从 {ex.type} 改为 {a.type}，"
+                    f"并配套新的提取提示。批准 → 一并更新；驳回 → 保持不变。"
                 )
-                a.rename_to = f"{a.name}_v2"
-                a.selected = False
+                # task #19 Phase B：批准/驳回二态，默认 selected=True 表示
+                # "未驳回即接受"（跟 same_type / 普通 new 的默认接受行为一致）
+                a.selected = True
             out.append(a)
             continue
 
@@ -599,6 +614,22 @@ def annotate_conflicts(
                 handled_suggestion.add(new_name)
                 if (new_row_in_fields.get("prompt_hint") or "").strip():
                     merged_hint = new_row_in_fields["prompt_hint"]
+                # task #19 收尾：检测 LLM 在 fields[new_name] 里同时给了不同
+                # 类型（"既改名又改类型"）→ 静默忽略类型变更但加 warning，
+                # 让用户在「解析告警」区看到、知道如何后续手动改类型
+                new_row_type = (new_row_in_fields.get("type") or "").strip()
+                if (
+                    new_row_type
+                    and new_row_type != ex.type
+                    and out_warnings is not None
+                ):
+                    out_warnings.append(
+                        f"LLM 同时建议把「{ex.name}」改名为「{new_name}」"
+                        f"并把类型从 {ex.type} 改为 {new_row_type}；"
+                        f"为保留项目历史数据，rename 路径仅改名不动类型——"
+                        f"如需改类型，请在批准本次改名后到「设置 → 字段」"
+                        f"对「{new_name}」单独操作。"
+                    )
             a = AnnotatedSuggestion(
                 name=ex.name, type=ex.type, prompt_hint=merged_hint,
             )
@@ -854,7 +885,7 @@ class LibraryInitWizard(WizardPlugin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("库字段设计助手")
-        self.resize(900, 640)
+        self.resize(900, 704)
         self.repo = None
         self.library = None
         self._max_rounds = DEFAULT_MAX_ROUNDS
@@ -1442,11 +1473,13 @@ class LibraryInitWizard(WizardPlugin):
                 user_deleted_existing.append(ann)
 
         # 重新走一遍 annotate_conflicts（基于 LLM 看到的当时现状）
+        reapply_warnings: list[str] = []
         fresh = annotate_conflicts(
             self._llm_round_payload["fields"],
             self._llm_round_existing,
             suggested_deletes=self._llm_round_payload.get("fields_to_delete"),
             suggested_renames=self._llm_round_payload.get("fields_to_rename"),
+            out_warnings=reapply_warnings,
         )
 
         # 重名冲突检测：fresh 里 status='new' 的名字 vs 用户手加
@@ -1503,7 +1536,7 @@ class LibraryInitWizard(WizardPlugin):
         self._library_desc_decision = "pending"
 
         self._suggestions = merged
-        self._render_preview([])
+        self._render_preview(reapply_warnings)
         if parent_dlg is not None:
             parent_dlg.accept()
 
@@ -1909,6 +1942,7 @@ class LibraryInitWizard(WizardPlugin):
             payload["fields"], existing,
             suggested_deletes=payload.get("fields_to_delete"),
             suggested_renames=payload.get("fields_to_rename"),
+            out_warnings=warnings,
         )
         # 快照：保存 LLM 这一轮的原始 payload 与"当时的现有字段"
         # 之后用户驳回 / 手改 / 手加字段后，「再次应用 LLM 建议」可据此智能重建
@@ -1931,7 +1965,10 @@ class LibraryInitWizard(WizardPlugin):
         "existing_user_field": ("📝 现有字段", "保留；点行操作的「删除」按钮可标记删除"),
         "system_protected": ("🔒 系统字段", "受保护，跳过"),
         "same_type": ("🔁 现有 · 同类型", "现有字段，将更新 LLM 提示"),
-        "type_conflict": ("⚠ 类型冲突", "已存在但类型不同；请改名后再创建"),
+        "type_conflict": (
+            "⚠ 类型冲突 · 改类型",
+            "已存在但类型不同；批准 → 把现有字段类型改成 LLM 建议的；驳回 → 保持不变",
+        ),
         "llm_suggest_delete": (
             "🗑 LLM 建议删除",
             "LLM 显式建议删除该现有字段（hover 看理由）；批准 → 真删，驳回 → 保留",
@@ -1981,35 +2018,20 @@ class LibraryInitWizard(WizardPlugin):
                 it_status.setForeground(QColor("#1565c0"))
             self.tbl.setItem(row, 1, it_status)
 
-            # 2：字段名（type_conflict 行用 LineEdit 让用户改名；其它只读）
-            if ann.status == "type_conflict":
-                w = QWidget()
-                hl = QHBoxLayout(w)
-                hl.setContentsMargins(2, 2, 2, 2)
-                hl.setSpacing(4)
-                lbl_old = QLabel(ann.name + " →")
-                lbl_old.setProperty("muted", True)
-                hl.addWidget(lbl_old)
-                ed = QLineEdit(ann.rename_to)
-                ed.setMinimumWidth(120)
-                ed.textChanged.connect(
-                    lambda t, idx=row: self._on_rename_changed(idx, t)
-                )
-                hl.addWidget(ed, 1)
-                self.tbl.setCellWidget(row, 2, w)
-            else:
-                it_name = QTableWidgetItem(ann.name)
-                # 系统字段名不可改；same_type / existing_user_field 也不允许改名
-                # （避免与既有数据脱钩）；新建（new）允许双击编辑；
-                # llm_suggest_delete / llm_suggest_rename：原名只读（rename 的新名
-                # 通过批准操作生效，不在这里编辑）
-                if ann.status in (
-                    "system_required", "system_protected", "same_type",
-                    "existing_user_field", "llm_suggest_delete",
-                    "llm_suggest_rename",
-                ):
-                    it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
-                self.tbl.setItem(row, 2, it_name)
+            # 2：字段名（type_conflict 在 task #19 Phase B 起也是只读 —— 不
+            # 再走"改名 + 新建"路径；接受 = 原地改类型，原名保留不动）
+            it_name = QTableWidgetItem(ann.name)
+            # 系统字段名不可改；same_type / existing_user_field / type_conflict
+            # 都不允许改名（避免与既有数据脱钩）；新建（new）允许双击编辑；
+            # llm_suggest_delete / llm_suggest_rename：原名只读（rename 的新名
+            # 通过批准操作生效，不在这里编辑）
+            if ann.status in (
+                "system_required", "system_protected", "same_type",
+                "existing_user_field", "type_conflict",
+                "llm_suggest_delete", "llm_suggest_rename",
+            ):
+                it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
+            self.tbl.setItem(row, 2, it_name)
 
             # 3：类型
             cmb = QComboBox()
@@ -2021,11 +2043,16 @@ class LibraryInitWizard(WizardPlugin):
                 cmb.addItem(FIELD_TYPE_LABELS.get("tags", "标签（多值）"), "tags")
             idx_t = cmb.findData(ann.type)
             cmb.setCurrentIndex(max(0, idx_t))
-            # 现有字段（含已被 LLM 命中的）类型不允许变（避免脱钩历史数据）
+            # 现有字段（被 LLM 命中或未命中、且不打算改类型的）类型不允许变 ——
+            # 避免脱钩历史数据；type_conflict 与 same_type 例外：允许用户改类型。
+            # 当用户在 same_type 行改了类型时，``_on_type_changed`` 会自动把
+            # 该 ann 升级成 type_conflict（走 change_type 路径），用户改回
+            # 原类型则降回 same_type；这样预览页能统一处理"想改现有字段类型"
+            # 的诉求，不必跳到「设置 → 字段」
             if ann.status in (
-                "system_required", "system_protected", "same_type",
-                "existing_user_field", "llm_suggest_delete",
-                "llm_suggest_rename",
+                "system_required", "system_protected",
+                "existing_user_field",
+                "llm_suggest_delete", "llm_suggest_rename",
             ):
                 cmb.setEnabled(False)
             cmb.currentIndexChanged.connect(
@@ -2143,7 +2170,8 @@ class LibraryInitWizard(WizardPlugin):
           - ``new``           → 直接从 ``_suggestions`` 移除（库里就当 LLM 没建议过）
           - ``same_type``     → hint 还原为现有字段的旧 hint（type 本来就一致）
           - ``system_required``→ 同上，还原 hint
-          - ``type_conflict`` → ``rename_to`` 清空 + ``selected=False``，等价"按现有字段不动"
+          - ``type_conflict`` → ``selected=False`` + ``type`` / ``prompt_hint``
+            还原到旧值，action 变 skip（等价"字段彻底不动"）
           建议列显示"已驳回"，用户可以基于还原后的状态继续手改
 
         如果用户再次点同一个按钮 → 视为撤回决定，但**不能**自动复原 LLM 内容
@@ -2162,7 +2190,8 @@ class LibraryInitWizard(WizardPlugin):
 
         if decision == "approved":
             ann.decision = "approved"
-            # 批准 type_conflict：补 selected=True 才能进 create 路径
+            # 批准 type_conflict：补 selected=True 让 action 进 change_type 路径
+            # （task #19 Phase B）
             if ann.status == "type_conflict":
                 ann.selected = True
             # 批准 llm_suggest_delete：补 selected=True 让 action 进 delete 路径
@@ -2220,11 +2249,17 @@ class LibraryInitWizard(WizardPlugin):
             if it_h is not None:
                 it_h.setText(ann.prompt_hint)
         elif ann.status == "type_conflict":
-            ann.rename_to = ""
+            # task #19 Phase B：驳回 type_conflict → selected=False（action 变 skip），
+            # type 回滚到现有类型，hint 还原为旧值；ann.status 仍保持
+            # "type_conflict"，但 action 已是 skip → 字段彻底不动
             ann.selected = False
-            # 同步类型列的 ComboBox 回到现有字段类型
             if ann.existing_field_type:
                 ann.type = ann.existing_field_type
+            ann.prompt_hint = ann.existing_prompt_hint or ""
+            ann.reason = (
+                "LLM 曾建议修改此字段的类型，已被你驳回；保持不变。"
+                "如果想另建一个新名字的字段，可以用预览表底部的「＋ 添加字段」按钮。"
+            )
         # system_protected / existing_user_field：本来就不算 LLM 建议（前者跳过，
         # 后者由用户行操作"删除"驱动），到这里只标 decision
         self._render_preview([])
@@ -2351,12 +2386,13 @@ class LibraryInitWizard(WizardPlugin):
     def _on_preview_row_delete(self) -> None:
         """删除当前选中行。
 
-        * ``new`` / ``type_conflict`` / 用户手加（``llm_touched=False`` 的 new）：
+        * ``new`` / 用户手加（``llm_touched=False`` 的 new）：
           直接从 ``_suggestions`` 中移除
         * ``llm_suggest_delete``：等价"批准 LLM 的删除建议"（selected=True + decision=approved），
           状态列变红字"将删除（已批准）"
-        * ``llm_suggest_rename``：用户表态"我连这字段都不想要了" → 退化为
-          ``existing_user_field`` + ``selected=False``（标记删除），llm_rename_new_name 清空
+        * ``llm_suggest_rename`` / ``type_conflict``：用户表态"我连这字段都不想要了"
+          → 退化为 ``existing_user_field`` + ``selected=False``（标记删除），
+          清掉关联的 LLM 改名/改类型痕迹
         * ``existing_user_field`` / ``same_type`` / ``system_protected``：
           设 selected=False（标记为"将删除"）
         * ``system_required``：拒绝删除（弹消息）
@@ -2371,8 +2407,8 @@ class LibraryInitWizard(WizardPlugin):
                 f"「{ann.name}」是系统必有字段，无法删除。",
             )
             return
-        if ann.status in ("new", "type_conflict"):
-            # 直接从列表移除（type_conflict 也只是 LLM 建议未落地，移除即可）
+        if ann.status == "new":
+            # 直接从列表移除
             del self._suggestions[r]
             self._render_preview([])
             new_row = min(r, len(self._suggestions) - 1)
@@ -2385,15 +2421,28 @@ class LibraryInitWizard(WizardPlugin):
             ann.decision = "approved"
             self._render_preview([])
             return
-        if ann.status == "llm_suggest_rename":
-            # 用户的意思是"这字段我不要了，不用改名"：先转成普通现有字段，
-            # 再走标记删除路径
+        if ann.status in ("llm_suggest_rename", "type_conflict"):
+            # 用户的意思是"这字段我不要了"：先转成普通现有字段，再走标记删除路径
+            # task #19 Phase B：type_conflict 的行删除也走这条路径——
+            # 撤掉对类型 / hint 的修改意图，把字段当现有字段标记删除
+            former = ann.status
             ann.status = "existing_user_field"
             ann.llm_rename_new_name = ""
+            # 还原 type / hint 到旧值，避免被当成现有字段时仍带着 LLM 给的
+            # 新 type/hint 数据
+            if ann.existing_field_type:
+                ann.type = ann.existing_field_type
+            ann.prompt_hint = ann.existing_prompt_hint or ""
             ann.decision = "pending"
-            ann.reason = (
-                "LLM 曾建议改名此字段，被你转为删除；将在「应用」时删除该字段。"
-            )
+            if former == "llm_suggest_rename":
+                ann.reason = (
+                    "LLM 曾建议改名此字段，被你转为删除；将在「应用」时删除该字段。"
+                )
+            else:  # type_conflict
+                ann.reason = (
+                    "LLM 曾建议修改此字段类型，被你转为删除；"
+                    "将在「应用」时删除该字段。"
+                )
             self._apply_selected_change(r, False)
             self._render_preview([])
             return
@@ -2473,12 +2522,48 @@ class LibraryInitWizard(WizardPlugin):
         self._refresh_change_cell(idx)
 
     def _on_type_changed(self, idx: int, new_type: str) -> None:
-        if 0 <= idx < len(self._suggestions):
-            self._suggestions[idx].type = new_type
+        """用户在表里改了类型 ComboBox。
 
-    def _on_rename_changed(self, idx: int, new_name: str) -> None:
-        if 0 <= idx < len(self._suggestions):
-            self._suggestions[idx].rename_to = new_name
+        关键逻辑（task #19 Phase B 收尾）：如果用户把 ``same_type`` 行的类型
+        改成跟现有字段类型不同，自动**升级**该 ann 为 ``type_conflict`` ——
+        下次 apply 时走 change_type 路径（原地改类型 + 写新 hint + supersede
+        pending）。这样用户在预览页就能用统一的"改类型"流程处理"我刚加的字段
+        类型还想改"的需求，无需返回「设置 → 字段」。
+        """
+        if not (0 <= idx < len(self._suggestions)):
+            return
+        ann = self._suggestions[idx]
+        ann.type = new_type
+        # same_type → 用户改了类型 → 升级为 type_conflict
+        if (
+            ann.status == "same_type"
+            and ann.existing_field_type
+            and new_type != ann.existing_field_type
+        ):
+            ann.status = "type_conflict"
+            ann.reason = (
+                f"你把「{ann.name}」的类型从 {ann.existing_field_type} 改成了 "
+                f"{new_type}。批准 → 原地改类型；驳回 → 类型回滚为原值。"
+            )
+            # decision 回到 pending（让用户对新 type_conflict 重新决策）
+            ann.decision = "pending"
+            self._render_preview([])
+            return
+        # type_conflict → 用户改回了原类型 → 降回 same_type
+        if (
+            ann.status == "type_conflict"
+            and ann.existing_field_type
+            and new_type == ann.existing_field_type
+        ):
+            ann.status = "same_type"
+            ann.reason = "已存在（类型一致）→ 仅写入 LLM 提示"
+            ann.decision = "pending"
+            self._render_preview([])
+            return
+
+    # 历史：``_on_rename_changed`` 槽函数曾用于 type_conflict 行的 LineEdit
+    # 改名建新字段路径（写入 ann.rename_to）。task #19 Phase B 起 type_conflict
+    # 改为"批准 = 原地改类型 / 驳回 = 不动"二态，LineEdit 已移除，槽函数随之删除。
 
     # ---- 收集 / 应用 -------------------------------------------------------
     def _collect_user_edited_payload(self) -> dict:
@@ -2489,10 +2574,8 @@ class LibraryInitWizard(WizardPlugin):
         """
         out = []
         for row, ann in enumerate(self._suggestions):
-            # name（系统必有字段不允许改名；只在 type_conflict 路径走 rename_to）
-            if ann.status == "type_conflict":
-                name = ann.effective_name
-            elif ann.status == "system_required":
+            # name（系统必有字段、type_conflict 路径都不允许从表格里改名）
+            if ann.status in ("type_conflict", "system_required"):
                 name = ann.name  # 强制不动
             else:
                 it = self.tbl.item(row, 2)  # 字段名列（5 列布局）
@@ -2523,6 +2606,9 @@ class LibraryInitWizard(WizardPlugin):
         to_update_hint: list[tuple[int, str]] = []
         to_delete: list[int] = []
         to_rename: list[tuple[int, str]] = []
+        # task #19 Phase B：type_conflict 批准时收集 (fid, new_type, new_hint)
+        to_change_type: list[tuple[int, str, str]] = []
+        type_change_names: list[str] = []  # 用于结果消息 + 确认对话框
         rename_names: list[tuple[str, str]] = []  # (old, new)，仅用于结果消息
         delete_names: list[str] = []  # 用于二次确认对话框
         # 删除来源：'user' = 用户主动取消保留；'llm' = 批准 LLM 删除建议
@@ -2556,6 +2642,13 @@ class LibraryInitWizard(WizardPlugin):
                         (ann.existing_field_id, ann.llm_rename_new_name),
                     )
                     rename_names.append((ann.name, ann.llm_rename_new_name))
+            elif act == "change_type":
+                # type_conflict 批准 → 原地改类型 + 用 LLM 新 hint 覆盖
+                if ann.existing_field_id is not None:
+                    to_change_type.append(
+                        (ann.existing_field_id, ann.type, ann.prompt_hint),
+                    )
+                    type_change_names.append(ann.name)
 
         # 同 batch 内可能改名后撞上别的待创建字段，做一次预检
         names = [n for n, _, _ in to_create]
@@ -2566,6 +2659,29 @@ class LibraryInitWizard(WizardPlugin):
                 f"以下字段在本次创建中重复：{', '.join(dups)}。请改名后再应用。",
             )
             return
+
+        # task #19 Phase B：类型变更二次确认（仅当有 change_type 时）
+        if to_change_type:
+            type_entries: list[tuple[str, str, str, int, int]] = []
+            for (fid, new_type, _hint), name in zip(to_change_type, type_change_names):
+                f = self.repo.get_field(fid)
+                if f is None:
+                    continue
+                try:
+                    n_values = self.repo.count_field_filled(f)
+                except Exception:
+                    n_values = 0
+                m_pending = self.repo.conn.execute(
+                    "SELECT COUNT(*) FROM project_field_suggestions "
+                    "WHERE field_id=? AND status='pending'",
+                    (fid,),
+                ).fetchone()[0]
+                type_entries.append(
+                    (name, f.type, new_type, int(n_values), int(m_pending)),
+                )
+            dlg_tc = _BatchTypeChangeConfirmDialog(type_entries, parent=self)
+            if dlg_tc.exec() != QDialog.Accepted:
+                return
 
         # 删除二次确认（仅当有删除时）
         append_for_fids: set[int] = set()
@@ -2588,12 +2704,15 @@ class LibraryInitWizard(WizardPlugin):
                 return
             append_for_fids = dlg.append_for_fids
 
-        # 事务化批量应用：改名 + 创建 + 更新 hint + 删除
+        # 事务化批量应用：改类型 + 改名 + 创建 + 更新 hint + 删除
         try:
-            new_ids, n_deleted, n_renamed = self.repo.apply_field_plan_batch(
-                to_create, to_update_hint, to_delete,
-                append_for_fids=append_for_fids,
-                renames=to_rename,
+            new_ids, n_deleted, n_renamed, n_type_changed = (
+                self.repo.apply_field_plan_batch(
+                    to_create, to_update_hint, to_delete,
+                    append_for_fids=append_for_fids,
+                    renames=to_rename,
+                    type_changes=to_change_type,
+                )
             )
         except Exception as e:  # noqa: BLE001
             QMessageBox.critical(
@@ -2617,6 +2736,8 @@ class LibraryInitWizard(WizardPlugin):
             f"已新建字段 {n_new} 个",
             f"更新已存在字段的 LLM 提示 {n_upd} 个",
         ]
+        if n_type_changed:
+            msg_parts.append(f"改类型 {n_type_changed} 个（{'、'.join(type_change_names)}）")
         if n_renamed:
             renamed_pairs = "、".join(f"{o}→{n}" for o, n in rename_names)
             msg_parts.append(f"改名 {n_renamed} 个（{renamed_pairs}）")
@@ -2828,3 +2949,92 @@ class _BatchDeleteConfirmDialog(QDialog):
             fid for fid, (_d, rb_a) in self._radios.items() if rb_a.isChecked()
         }
         self.accept()
+
+
+# =============================================================================
+# 批量字段类型变更二次确认对话框（task #19 Phase B）
+# =============================================================================
+class _BatchTypeChangeConfirmDialog(QDialog):
+    """库字段设计助手「应用」前的批量类型变更确认对话框。
+
+    职责：
+    * 列出所有要"原地改类型"的字段（每个 = 一条批准的 type_conflict）；
+    * 每条说明：旧类型 → 新类型，N 条非空值保留（更新元数据时可能被覆盖），
+      M 条 pending 建议会失效；
+    * **不**含"清空旧 hint"的 checkbox —— LLM 已为新类型配套给了新 hint，
+      apply 时会直接覆盖；
+    * 跟 ``_BatchDeleteConfirmDialog`` 风格一致：滚动区 + 顶部说明 + 确认/取消。
+
+    Args:
+        entries: ``[(name, old_type, new_type, n_values, m_pending), ...]``
+    """
+
+    def __init__(
+        self,
+        entries: list[tuple[str, str, str, int, int]],
+        *,
+        parent=None,
+    ) -> None:
+        super().__init__(parent)
+        from ...models import FIELD_TYPE_LABELS
+
+        self.setWindowTitle("确认字段类型变更")
+        self.setMinimumWidth(540)
+        self.resize(620, 420)
+
+        v = QVBoxLayout(self)
+        v.setSpacing(10)
+
+        n = len(entries)
+        head = QLabel(
+            f"将原地修改 <b>{n}</b> 个字段的类型：<br/>"
+            "<span style='color:#666'>"
+            "&nbsp;&nbsp;• 现有项目的字段值会<b>保留</b>在数据库里，但新类型的"
+            "控件可能读不出来（切回旧类型即可恢复显示；"
+            "<b>更新项目元数据时</b>若提交空值会被覆盖）；<br/>"
+            "&nbsp;&nbsp;• 该字段挂着的待批准 LLM 建议会失效；<br/>"
+            "&nbsp;&nbsp;• LLM 已为新类型配套提供了新的提取提示，将一并写入"
+            "（覆盖旧 hint）。"
+            "</span><br/><br/>"
+            "该操作与字段创建 / 更新 / 删除走同一事务（任一失败整体回滚）。"
+        )
+        head.setTextFormat(Qt.RichText)
+        head.setWordWrap(True)
+        v.addWidget(head)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        from PySide6.QtWidgets import QFrame
+        scroll.setFrameShape(QFrame.NoFrame)
+        inner = QWidget()
+        iv = QVBoxLayout(inner)
+        iv.setContentsMargins(0, 0, 0, 0)
+        iv.setSpacing(6)
+        for name, old_type, new_type, n_values, m_pending in entries:
+            old_label = FIELD_TYPE_LABELS.get(old_type, old_type)
+            new_label = FIELD_TYPE_LABELS.get(new_type, new_type)
+            extras: list[str] = []
+            if n_values > 0:
+                extras.append(f"{n_values} 条非空值保留")
+            if m_pending > 0:
+                extras.append(f"{m_pending} 条 pending 建议失效")
+            extra_txt = (
+                "<span style='color:#666'>（" + "；".join(extras) + "）</span>"
+                if extras else ""
+            )
+            row_lbl = QLabel(
+                f"• <b>{name}</b>：{old_label} → <b>{new_label}</b> {extra_txt}"
+            )
+            row_lbl.setTextFormat(Qt.RichText)
+            row_lbl.setWordWrap(True)
+            iv.addWidget(row_lbl)
+        iv.addStretch(1)
+        scroll.setWidget(inner)
+        v.addWidget(scroll, 1)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("确认改类型")
+        bb.button(QDialogButtonBox.Cancel).setText("取消")
+        bb.accepted.connect(self.accept)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)

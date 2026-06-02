@@ -13,6 +13,18 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
 
 ### Changed
+- **库字段设计助手对话框高度 +10%**（2026-06-02）：`LibraryInitWizardDialog` 默认 resize 从 `900×640` 改为 `900×704`，给预览页字段表多出约一行多的可见空间，减少 LLM 给出较多字段时需要滚动的频率。
+- **字段助手 type_conflict 改为「批准 = 原地改类型 / 驳回 = 不动」二态（task #19 Phase B，2026-06-02）**：基于 Phase A 已经把"安全地改字段类型"做安全，字段助手的 type_conflict 路径不再需要绕路"改名为 `<原名>_v2` 创建新字段"。新行为：
+  - 预览表的 type_conflict 行**字段名只读 + 类型 ComboBox 禁用**（用户改类型的入口在「设置 → 字段」，字段助手里只批准/驳回 LLM 给的建议）；状态列改为 `⚠ 类型冲突 · 改类型`。
+  - **批准**（或未驳回的默认接受）= apply 阶段对 `existing_field_id` 改 type + 用 LLM 配套给的新 hint 覆盖旧 hint + supersede 该 fid 的 pending 建议（三件事同事务）；**驳回** = `selected=False` + type/hint 还原到旧值，action 变 skip，字段彻底不动。
+  - 驳回时 reason 补一句引导：`"已驳回；如果想另建一个新名字的字段，可以用预览表底部的「＋ 添加字段」按钮"`，跟 `llm_suggest_delete` / `llm_suggest_rename` 驳回风格一致。
+  - 行操作「删除」对 type_conflict 行 = 退化成 `existing_user_field` + `selected=False`（跟 `llm_suggest_rename` 的行删除处理对齐），还原 type/hint 到旧值后再标记删除。
+  - apply 入口在事务执行前**弹一次** `_BatchTypeChangeConfirmDialog`，列出所有要改类型的字段（旧→新 + N 条值保留 + M 条 pending 失效 + LLM 已提供配套新 hint 说明）；用户取消 → 回到预览页。
+  - **breaking change**：`Repository.apply_field_plan_batch` 新增 `type_changes: list[tuple[int, str, str]]` 参数，返回值从 3-tuple `(new_ids, n_deleted, n_renamed)` 改成 4-tuple `(new_ids, n_deleted, n_renamed, n_type_changed)`。task11_t3 内 6 处旧调用全部同步改成 4-tuple 解包。
+  - **关键设计区别于 Phase A**：Phase A 弹窗里有「☑ 同时清空旧 LLM 提示」checkbox（因为库设置那边只动 type，hint 跟新类型不匹配），Phase B **没有这个 checkbox**——LLM 的 `fields[i]` 输出本身就是 `{name, type, prompt_hint}` 三元组，给出新类型时已经配套给了适配新类型的新 hint（存在 `ann.prompt_hint`），apply 时直接覆盖即可。
+  - **LLM 同时给改名 + 改类型 的边界处理**：LLM 协议上允许在同一轮里既给 `fields_to_rename: 出版社→出版商` 又在 `fields[出版商]` 里把 type 从 `text` 改成 `date`。rename 路径**不能**改类型（那是 `type_conflict` 的职责），否则会丢失项目历史数据的语义。现行处理：rename ann 保留旧 type，但在「解析告警」区给一条 warning：`"LLM 同时建议把「X」改名为「Y」并把类型从 A 改为 B；为保留项目历史数据，rename 路径仅改名不动类型——如需改类型，请在批准本次改名后到「设置 → 字段」对「Y」单独操作"`。`annotate_conflicts` 新增可选参数 `out_warnings: Optional[list[str]] = None`（默认 None 静默丢弃，向后兼容所有现有 selftest）；`_on_llm_finished` / `_smart_reapply_llm` 把 wizard 的 warning 通道接进去，让 warning 显示在预览页顶部那条 `lbl_warnings`。
+  - 删掉 `AnnotatedSuggestion.effective_name` 里的 type_conflict 改名分支；删 `_on_rename_changed` 槽函数（type_conflict 行已无 LineEdit）；`rename_to` 字段保留在 dataclass 定义里但路径上不再被读写。
+  - task11_t3 selftest 旧 type_conflict 断言（5 条："默认 selected=False / action=skip / 勾选后 create / effective_name 走 rename_to / rename_to 清空退化 skip"）按新语义重写；阶段 12 新增 11 条 Phase B 断言（批准/空 hint 边界/受保护字段静默跳过/不存在 fid 静默跳过）；5d-9/10/11 新增 6 条 rename + 改类型 warning 边界断言（触发/不触发/`out_warnings=None`）。全套 9 个 selftest 共 586 条断言通过。
 - **字段类型变更加安全护栏（task #19 Phase A，2026-06-02）**：在「设置 → 字段」和「字段助手 → 现有字段表」里改字段类型，从一条无声 SQL 升级为护栏路径。以前用户切类型只动 `fields.type`，`project_field_values.value` 留着旧字符串、新类型的控件读不出来 → 用户更新元数据时控件空状态把原值无声覆盖；`fields.prompt_hint` 跟旧类型绑定（"格式：YYYY-MM-DD" 切到 rating 后照样喂 LLM）；`project_field_suggestions` 里按旧类型生成的 pending 建议照常出现在 LLM 建议汇总，接受 → 把垃圾值写进 `project_field_values`。新方案：
   - 加 `app.models.is_compatible_type_change(old, new)` 兼容性矩阵函数：同类型 / 任意→text/textarea / rating→number 视为兼容（静默切，不打扰用户）；其它组合视为不兼容（弹确认）。
   - `Repository.set_field_type` 加两个可选 kwargs：`supersede_pending_suggestions`（把该 fid 所有 pending 建议批量标 `superseded` + `resolved_at`）、`clear_prompt_hint`（清空旧 hint）；三件事进同一事务避免崩溃留下半截状态。默认 kwargs 关闭 → 完全向后兼容老调用点。

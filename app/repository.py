@@ -327,10 +327,14 @@ class Repository:
         *,
         append_for_fids: Optional[Iterable[int]] = None,
         renames: Optional[list[tuple[int, str]]] = None,
-    ) -> tuple[list[int], int, int]:
+        type_changes: Optional[list[tuple[int, str, str]]] = None,
+    ) -> tuple[list[int], int, int, int]:
         """库字段设计助手「应用」一次性事务（task #11 T3 全量规划）。
 
-        四类操作放进同一个 BEGIN/COMMIT：
+        五类操作放进同一个 BEGIN/COMMIT：
+          - type_changes：UPDATE fields SET type=?, prompt_hint=? + supersede
+            该 fid 的 pending suggestions（task #19 Phase B；
+            type_conflict 路径批准时走这里）
           - renames：UPDATE fields SET name=? WHERE id=?（保留 fid，
             项目历史值通过 ``field_values`` 关联保持不动）
           - creates：新建用户字段（同 ``add_fields_batch``）
@@ -338,12 +342,15 @@ class Repository:
           - deletes：删除字段（系统字段会清空对应 projects 列；用户字段
             走 ``project_field_values`` 的 CASCADE）
 
-        执行顺序：renames 先于 creates。理由：renames 把 "出版社" 改为 "出版商"
-        后，creates 才能安全地添加另一个名为 "出版社" 的新字段（如果用户想这么做）。
-        实际上 LLM 改名建议下游不会有这种边界场景，但顺序保持稳健。
+        执行顺序：type_changes → renames → creates → updates_hint → deletes。
+        理由：
+          - type_changes 先做，把 hint / type 一起写完，避免下游 updates_hint
+            重复 UPDATE 同一 fid（调用方应避免把 type_change 的 fid 同时放进
+            updates_hint，否则后者会覆盖前者；事务最终结果以 updates_hint 为准）
+          - renames 在 creates 之前，避免"新建字段名"与"待改名旧名"撞上
 
         删除保护：
-          - 受保护字段（``is_required``，即 标题/描述/标签）拒绝删除/改名，
+          - 受保护字段（``is_required``，即 标题/描述/标签）拒绝删除/改名/改类型，
             整体抛 ValueError
           - 不存在的 fid 静默跳过
 
@@ -362,15 +369,46 @@ class Repository:
                 走"直接丢"路径。默认 None = 全部直接丢。
             renames: ``[(field_id, new_name), ...]``，UPDATE fields.name 用；
                 默认 None = 不改名。受保护字段 fid（标题/描述/标签）→ ValueError。
+            type_changes: ``[(field_id, new_type, new_prompt_hint), ...]``，
+                字段助手 type_conflict 批准时使用。受保护字段静默跳过
+                （不抛错，与 ``set_field_type`` 一致）。
 
         Returns:
-            ``(new_ids, n_deleted, n_renamed)``。任一失败 → ROLLBACK 抛原异常。
+            ``(new_ids, n_deleted, n_renamed, n_type_changed)``。任一失败 →
+            ROLLBACK 抛原异常。
         """
         append_set: set[int] = set(append_for_fids or ())
         renames_list: list[tuple[int, str]] = list(renames or [])
+        type_changes_list: list[tuple[int, str, str]] = list(type_changes or [])
         cur = self.conn.cursor()
         try:
             cur.execute("BEGIN")
+
+            # -1) type_changes（先于其它一切；用 LLM 给的新 type + new hint 覆盖，
+            #     并把该 fid 所有 pending suggestion 标 superseded）
+            n_type_changed = 0
+            if type_changes_list:
+                from .models import PROTECTED_FIELD_KEYS
+                for fid, new_type, new_hint in type_changes_list:
+                    f_row = cur.execute(
+                        "SELECT key FROM fields WHERE id=?", (fid,),
+                    ).fetchone()
+                    if f_row is None:
+                        continue  # 不存在的 fid 静默跳过
+                    if f_row["key"] in PROTECTED_FIELD_KEYS:
+                        # 受保护字段类型固定，静默跳过（与 set_field_type 一致）
+                        continue
+                    cur.execute(
+                        "UPDATE fields SET type=?, prompt_hint=? WHERE id=?",
+                        (new_type, new_hint or "", fid),
+                    )
+                    cur.execute(
+                        "UPDATE project_field_suggestions "
+                        "SET status='superseded', resolved_at=datetime('now') "
+                        "WHERE field_id=? AND status='pending'",
+                        (fid,),
+                    )
+                    n_type_changed += 1
 
             # 0) renames（先于 creates，避免"新建字段名"与"待改名旧名"撞上）
             n_renamed = 0
@@ -489,7 +527,7 @@ class Repository:
                 n_deleted += 1
 
             self.conn.commit()
-            return new_ids, n_deleted, n_renamed
+            return new_ids, n_deleted, n_renamed, n_type_changed
         except Exception:
             self.conn.rollback()
             raise

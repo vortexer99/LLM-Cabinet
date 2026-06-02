@@ -363,21 +363,24 @@ def _run_all(tmp: Path, t: T) -> None:
         # 现有 + 0 新 = 仍然 6 个（"子流派" 被 LLM 命中 → 进入 type_conflict 而非 existing_user_field）
         a_zlp2 = next(a for a in ann2 if a.name == "子流派")
         t.assert_eq("type_conflict status", a_zlp2.status, "type_conflict")
-        t.assert_eq("type_conflict 默认 selected=False", a_zlp2.selected, False)
-        t.assert_eq("type_conflict 默认 action=skip", a_zlp2.action, "skip")
+        # task #19 Phase B：默认 selected=True 表示"未驳回 = 接受"
+        t.assert_eq("type_conflict 默认 selected=True", a_zlp2.selected, True)
+        # task #19 Phase B：未决策（默认接受）→ action=change_type
+        t.assert_eq(
+            "type_conflict 默认 action=change_type",
+            a_zlp2.action, "change_type",
+        )
+        # 驳回（selected=False）→ action=skip
+        a_zlp2.selected = False
+        t.assert_eq(
+            "type_conflict 驳回后 action=skip",
+            a_zlp2.action, "skip",
+        )
+        # effective_name 不再有 _v2 改名逻辑，永远 = 原名
         a_zlp2.selected = True
         t.assert_eq(
-            "type_conflict 勾选后 action=create",
-            a_zlp2.action, "create",
-        )
-        t.assert_eq(
-            "type_conflict effective_name 走 rename_to",
-            a_zlp2.effective_name, "子流派_v2",
-        )
-        a_zlp2.rename_to = "   "
-        t.assert_eq(
-            "type_conflict rename_to 清空 → action 退化 skip",
-            a_zlp2.action, "skip",
+            "type_conflict effective_name = 原名（不再走 _v2 改名）",
+            a_zlp2.effective_name, "子流派",
         )
 
         # 重复同名 LLM 建议 dedup（保留第一次）
@@ -827,6 +830,83 @@ def _run_all(tmp: Path, t: T) -> None:
                 r_ann.prompt_hint, existing_zlp.prompt_hint,
             )
 
+        # 5d-9 LLM "既改名又改类型" → 类型变更被静默忽略，但加 warning
+        # （task #19 收尾；rename 路径只能改名，不能改类型，那是 type_conflict 的职责）
+        if zlp_r is not None:
+            # 子流派 现状是 text；LLM 在 fields[亚类型] 里给了 type=rating
+            warnings_rt: list[str] = []
+            ann_rt = annotate_conflicts(
+                [
+                    {"name": "标题", "type": "text", "prompt_hint": ""},
+                    {"name": "亚类型", "type": "rating", "prompt_hint": "1-5"},
+                ],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "x"},
+                ],
+                out_warnings=warnings_rt,
+            )
+            r_ann_rt = next(
+                a for a in ann_rt if a.status == "llm_suggest_rename"
+            )
+            t.assert_eq(
+                "rename + 改类型：ann.type 仍是旧类型 text（rename 不改类型）",
+                r_ann_rt.type, "text",
+            )
+            t.assert_eq(
+                "rename + 改类型：llm_rename_new_name 仍正确",
+                r_ann_rt.llm_rename_new_name, "亚类型",
+            )
+            t.assert_eq(
+                "rename + 改类型：合并新 hint",
+                r_ann_rt.prompt_hint, "1-5",
+            )
+            t.assert_true(
+                "rename + 改类型：触发了类型变更被忽略的 warning",
+                any("rename 路径仅改名不动类型" in w for w in warnings_rt),
+            )
+
+        # 5d-10 LLM "纯改名（type 一致）" → 不触发 warning
+        if zlp_r is not None:
+            warnings_pure: list[str] = []
+            annotate_conflicts(
+                [
+                    {"name": "标题", "type": "text", "prompt_hint": ""},
+                    {"name": "亚类型", "type": "text", "prompt_hint": ""},
+                ],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "x"},
+                ],
+                out_warnings=warnings_pure,
+            )
+            t.assert_eq(
+                "纯改名（type 一致）：不触发类型变更 warning",
+                [w for w in warnings_pure if "rename 路径" in w], [],
+            )
+
+        # 5d-11 out_warnings=None（默认）：不抛错也不污染调用方
+        if zlp_r is not None:
+            ann_silent = annotate_conflicts(
+                [
+                    {"name": "标题", "type": "text", "prompt_hint": ""},
+                    {"name": "亚类型", "type": "rating", "prompt_hint": ""},
+                ],
+                existing_for_r,
+                suggested_renames=[
+                    {"old_name": "子流派", "new_name": "亚类型", "reason": "x"},
+                ],
+                # 不传 out_warnings → 默认 None，warning 静默丢弃
+            )
+            r_ann_silent = next(
+                a for a in ann_silent if a.status == "llm_suggest_rename"
+            )
+            t.assert_eq(
+                "out_warnings=None：rename ann 行为不变",
+                r_ann_silent.type, "text",
+            )
+
+
         # ----------------------------------------------------------
         # 5e：same_type 行点删除按钮 → action='delete' 回归测试
         #     6/1 晚发现的 bug：之前 same_type 行点删除按钮静默无效（视觉无变化、
@@ -940,7 +1020,7 @@ def _run_all(tmp: Path, t: T) -> None:
         before_n = len(all_now)
 
         # 7d-1 成功路径：建 1 个 + 改 1 个 hint + 删 1 个
-        new_ids2, n_del, n_ren_d1 = repo.apply_field_plan_batch(
+        new_ids2, n_del, n_ren_d1, _n_tc = repo.apply_field_plan_batch(
             creates=[("出版社", "text", "出版社全名")],
             updates_hint=[(zlp_field.id, "硬/软/赛博朋克")],
             deletes=[old_field.id],
@@ -990,7 +1070,7 @@ def _run_all(tmp: Path, t: T) -> None:
         )
 
         # 7d-3 全空入参（应是 noop 但不抛错）
-        new_ids3, n_del3, n_ren3 = repo.apply_field_plan_batch([], [], [])
+        new_ids3, n_del3, n_ren3, _n_tc3 = repo.apply_field_plan_batch([], [], [])
         t.assert_eq("空入参 creates=[]", new_ids3, [])
         t.assert_eq("空入参 deletes=0", n_del3, 0)
         t.assert_eq("空入参 renames=0", n_ren3, 0)
@@ -1069,7 +1149,7 @@ def _run_all(tmp: Path, t: T) -> None:
         before_desc_a = repo.get_project(p_a.id).description_md
         before_desc_b = repo.get_project(p_b.id).description_md
 
-        _, n_del_e, _ = repo.apply_field_plan_batch(
+        _, n_del_e, _, _ = repo.apply_field_plan_batch(
             creates=[],
             updates_hint=[],
             deletes=[translator_fid],
@@ -1123,7 +1203,7 @@ def _run_all(tmp: Path, t: T) -> None:
         repo.save_project(p_r)
 
         # 11a-1 改名 + 该 fid 上原值仍然能读到（关键：保留 id）
-        _, _, n_ren_a = repo.apply_field_plan_batch(
+        _, _, n_ren_a, _ = repo.apply_field_plan_batch(
             creates=[],
             updates_hint=[],
             deletes=[],
@@ -1141,7 +1221,7 @@ def _run_all(tmp: Path, t: T) -> None:
         )
 
         # 11b 改名为相同名字 → noop（n_renamed=0）
-        _, _, n_ren_b = repo.apply_field_plan_batch(
+        _, _, n_ren_b, _ = repo.apply_field_plan_batch(
             [], [], [], renames=[(editor_fid, "责任编辑")],
         )
         t.assert_eq("renames 同名 → noop", n_ren_b, 0)
@@ -1186,7 +1266,7 @@ def _run_all(tmp: Path, t: T) -> None:
         # 11f 综合：renames + creates + updates_hint + deletes 同事务
         # 把"责任编辑"改回"主编辑"、新建"校对"、删除"主编"
         main_fid = new_ids_main[0]
-        new_ids_f, n_del_f, n_ren_f = repo.apply_field_plan_batch(
+        new_ids_f, n_del_f, n_ren_f, _n_tc_f = repo.apply_field_plan_batch(
             creates=[("校对", "text", "")],
             updates_hint=[],
             deletes=[main_fid],
@@ -1199,6 +1279,102 @@ def _run_all(tmp: Path, t: T) -> None:
             "改名后字段名为「主编辑」",
             repo.get_field(editor_fid).name, "主编辑",
         )
+
+        # ----------------------------------------------------------
+        # 阶段 12：apply_field_plan_batch 的 type_changes 参数（task #19 Phase B）
+        # ----------------------------------------------------------
+        # 12a 批准 type_conflict 路径：原地改 type + 用 LLM 新 hint 覆盖 +
+        #     supersede 该 fid 的 pending suggestions
+        cur = repo.conn.cursor()
+        cur.execute(
+            "INSERT INTO fields(name, type, ord, visible, key, prompt_hint) "
+            "VALUES('页数', 'text', 99, 1, NULL, '原 hint：随便填')"
+        )
+        page_fid = cur.lastrowid
+        repo.conn.commit()
+        # 插一条 pending suggestion
+        p_pages = Project(title="带页数的项目")
+        repo.save_project(p_pages)
+        cur.execute(
+            "INSERT INTO project_field_suggestions"
+            "(project_id, field_id, suggested_value, source_task_id, status) "
+            "VALUES(?, ?, '约 300 页', NULL, 'pending')",
+            (p_pages.id, page_fid),
+        )
+        repo.conn.commit()
+
+        new_ids12, n_del12, n_ren12, n_tc12 = repo.apply_field_plan_batch(
+            creates=[],
+            updates_hint=[],
+            deletes=[],
+            type_changes=[(page_fid, "number", "整数；不要带单位")],
+        )
+        t.assert_eq("type_changes 改类型数=1", n_tc12, 1)
+        t.assert_eq("type_changes 其它操作=0", (len(new_ids12), n_del12, n_ren12), (0, 0, 0))
+        f_after = repo.get_field(page_fid)
+        t.assert_eq("type_changes 改后 type", f_after.type, "number")
+        t.assert_eq(
+            "type_changes 用 LLM 新 hint 覆盖旧 hint",
+            f_after.prompt_hint, "整数；不要带单位",
+        )
+        # pending supersede 校验
+        n_pending_after = repo.conn.execute(
+            "SELECT COUNT(*) FROM project_field_suggestions "
+            "WHERE field_id=? AND status='pending'",
+            (page_fid,),
+        ).fetchone()[0]
+        t.assert_eq("type_changes 后 pending=0", int(n_pending_after), 0)
+        n_super_after = repo.conn.execute(
+            "SELECT COUNT(*) FROM project_field_suggestions "
+            "WHERE field_id=? AND status='superseded' AND resolved_at IS NOT NULL",
+            (page_fid,),
+        ).fetchone()[0]
+        t.assert_eq("type_changes 后 superseded=1", int(n_super_after), 1)
+
+        # 12b LLM 给空 hint 的边界 → hint 写空覆盖
+        cur.execute(
+            "INSERT INTO fields(name, type, ord, visible, key, prompt_hint) "
+            "VALUES('字数', 'text', 100, 1, NULL, '保留的旧 hint')"
+        )
+        word_fid = cur.lastrowid
+        repo.conn.commit()
+        repo.apply_field_plan_batch(
+            [], [], [],
+            type_changes=[(word_fid, "number", "")],
+        )
+        t.assert_eq(
+            "空 hint：覆盖后 hint 为空",
+            repo.get_field(word_fid).prompt_hint, "",
+        )
+        t.assert_eq(
+            "空 hint：type 仍正确改了",
+            repo.get_field(word_fid).type, "number",
+        )
+
+        # 12c 受保护字段（title）静默跳过
+        title_fid_t = None
+        for f in repo.list_fields():
+            if f.key == "title":
+                title_fid_t = f.id
+                break
+        t.assert_true("找到 title fid", title_fid_t is not None)
+        before_type = repo.get_field(title_fid_t).type
+        _, _, _, n_tc_p = repo.apply_field_plan_batch(
+            [], [], [],
+            type_changes=[(title_fid_t, "number", "新 hint")],
+        )
+        t.assert_eq("受保护字段 type_changes 跳过", n_tc_p, 0)
+        t.assert_eq(
+            "受保护字段 type 不变",
+            repo.get_field(title_fid_t).type, before_type,
+        )
+
+        # 12d 不存在的 fid 静默跳过
+        _, _, _, n_tc_n = repo.apply_field_plan_batch(
+            [], [], [],
+            type_changes=[(99999, "number", "")],
+        )
+        t.assert_eq("不存在 fid 静默跳过", n_tc_n, 0)
 
 
 if __name__ == "__main__":

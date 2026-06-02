@@ -1,8 +1,9 @@
 # 19 · 字段类型变更的安全护栏（库设置 + 字段助手 type_conflict）
 
 > **Phase A 完成（2026-06-02）**：库设置 + 字段助手现有字段表都已走护栏。
-> repo 层 + UI 层全部落地，58 条 selftest 通过。Phase B（type_conflict 改为
-> 批准/驳回二态）待开工。
+> repo 层 + UI 层全部落地，58 条 selftest 通过。
+>
+> **Phase B 完成（2026-06-02）**：字段助手 `type_conflict` 行改为「批准 = 原地改类型 / 驳回 = 不动」二态语义。删掉 `<原名>_v2` 改名路径；apply 时弹批量类型变更确认对话框；`apply_field_plan_batch` 加 `type_changes` 参数（4-tuple 返回 breaking change）；全套 9 个 selftest 共 580 条断言通过。
 
 ## 背景
 

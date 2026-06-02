@@ -26,7 +26,7 @@
 
 ## 🏷️ 字段 / 标签 / 元数据
 [#06 · ✅ 2026-06-01] 标签分类折叠管理
-[#19 · 🚧] 字段类型变更的安全护栏：Phase A 库设置改类型弹窗确认 + supersede pending（✅ 2026-06-02）；Phase B 字段助手 type_conflict 改为"批准=原地改 / 驳回=不动"（⚪ 待开工）
+[#19 · ✅ 2026-06-02] 字段类型变更的安全护栏：Phase A 库设置改类型弹窗确认 + supersede pending；Phase B 字段助手 type_conflict 改为"批准=原地改 / 驳回=不动"
 [#20 · ⚪] 废弃系统字段的 projects 列分流，所有非保护字段值统一存 `project_field_values`（📦 schema v3 → v4，大改动；建议 #19 Phase B 后再动）
 -
 
