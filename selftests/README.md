@@ -75,6 +75,7 @@ with closing_repos(repo_a, repo_b):
 | [task11_field_prompt.py](./task11_field_prompt.py) | 字段级 prompt_hint 数据层与 prompt 拼装；`add_fields_batch` 事务；导出 @2 / 导入兼容 | [tasks/11](../tasks/11-field-prompt-and-library-wizard.md) T1/T2/T4 |
 | [task11_t3_library_init_wizard.py](./task11_t3_library_init_wizard.py) | LLM 助手框架（WIZARDS 注册 / `is_available`）+ `parse_and_validate` 边界（含废弃 tag_axes 兼容兜底 + LLM 显式删除建议 `fields_to_delete` + LLM 显式改名建议 `fields_to_rename`）+ `annotate_conflicts` 全量规划状态（含 `llm_suggest_delete` / `llm_suggest_rename` + rename/delete/fields 冲突优先级）+ `llm_change_label` / `decision` 退化路径 + `wizard_max_rounds` 持久化 + `apply_field_plan_batch` 事务化（成功/失败/空入参三路 + renames 保 fid 改名 + same_type 行删除回归）+ `append_for_fids` 删除前追加到 description | [tasks/11](../tasks/11-field-prompt-and-library-wizard.md) T3 + [tasks/16](../tasks/16-library-field-wizard-polish.md) |
 | [task14_library_management.py](./task14_library_management.py) | 库一致性检查（仓储 + 链接两类失效）+ 三档处理（noop/mark/delete）+ 备份/恢复 zip 往返 + 错误兜底 | [tasks/14](../tasks/14-library-management-enhancements.md) |
+| [task15_new_library_onboarding.py](./task15_new_library_onboarding.py) | 新建库向导数据契约：`OPTIONAL_DEFAULT_FIELDS` / `MIGRATE_KEYS_LLM_ONLY` / `MIGRATE_KEYS_ALL` 常量；D2 默认列可见性（描述/标签 visible=0）；`count_user_added_fields` helper；7 步建库底层路径（mark + 加可选字段 + 写描述 + 两档 API 迁移）；T2 横幅显示条件 + D4 一次性标志；T3 Welcome 结果常量分发 | [tasks/15](../tasks/15-new-library-onboarding.md) T1/T2/T3 |
 
 ## 不接入 CI 的原因
 

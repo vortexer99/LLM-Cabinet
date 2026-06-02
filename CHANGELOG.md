@@ -13,6 +13,14 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 打开旧库会自动生成 `cabinet.vN.<时间戳>.bak` 备份后再迁移。
 
 ### Added
+- **新建库 onboarding（task #15 T1/T2/T3）**：把"新建库"从一次性技术操作（选目录→起名→重启）升级为带入门引导的多步流程。
+  - **T1 多页向导**（`app/ui/wizards/new_library_wizard.py`）：第 1 页选目录 + 名称、第 2 页库描述、第 3 页默认字段（必有字段标题/描述/标签都列出，描述/标签的「列表显示」可在向导里直接勾选；可选默认字段作者 / 日期 / 评分 / 来源每个独立配「列表显示」复选框）、第 4 页（仅当已有其它库时）「从其它库迁移 API 配置」（**不迁移 / 仅 LLM 配置 / 全部迁移** 三档单选放在源库选择器上方；源库选择器为近期库下拉 + 末项「📂 浏览其它库目录...」，浏览要求目录含 `.llm-cabinet` 标记，选中的非已知库目录会插入到下拉里）。每页底部不再有「跳过」按钮（「下一步」对空内容已直通，语义重复）；描述页提示从底部合并到顶部，明确写出"用于备忘 + 发给 LLM 参考，也可暂时留空"。**晚建语义**（D1）：1~4 页只收集表单数据，最后一步「创建库」按钮才一次性原子化建库（mark + connect + seed + 应用必有字段可见性 + 加可选字段 + 写描述 + **写 `default_view_mode="list"`**（新建库默认列表视图，与「列表显示」复选框心智一致；既有库全局 fallback 仍 `"grid"`）+ 迁移 API），任意页取消零副作用；中途出错自动 `rmtree(root)` 回滚。
+  - **「库 → 从其它库导入 API 配置...」菜单同步统一**：原本是 `getOpenFileName(*.db)` 裸选 db 文件，现改为与新建库向导第 4 页一致的"近期库下拉 + 「📂 浏览其它库目录...」末项"对话框，浏览选目录而非 db 文件，识别同样依赖 `.llm-cabinet` 标记。两处入口"心智模型 = 选库目录"统一。
+  - **T2 首次进入引导横幅**（`app/ui/first_run_banner.py`）：主窗口中央顶部显示一条 dismissible 横幅，引导用户跑库字段设计助手 / 加字段 / 拖资料；显示条件 = 没跑过助手 + 库里没项目 + 用户没加过非系统字段 + D4 一次性标志未置位。**D4 一次性标志** `library_first_run_dismissed`：用户做过任何"成长性动作"（跑过助手 / 加过用户字段 / 创建过第一个项目 / 主动点"不再显示"）→ 永久不再显示，避免"删光项目时横幅复活"的诡异体验。
+  - **T3 首次启动 Welcome**（`app/ui/welcome_dialog.py`）：`cabinet.json` 不存在（=首次安装）时弹三档欢迎对话框 — 「在自定义位置新建库」（→ T1 向导）/「使用默认位置」（D5：完全不弹任何额外对话框，最快上手语义）/「打开已有的库目录」（必须含 `.llm-cabinet` 标记）；用户选「退出」直接 `return 0` 不进主窗口。
+  - **D2 默认列可见性**（仅影响新建库）：`_seed_fields` 把描述 / 标签字段默认 `visible=0`（理由：多行文本占主列表空间；标签筛选已由左侧标签树承担）；标题强制 `visible=1`。既有库不变（`_seed_fields` 仅在 `fields` 表为空时插入）。
+  - **D3 API 迁移两档**：`MIGRATE_KEYS_LLM_ONLY = ["llm_config"]` / `MIGRATE_KEYS_ALL = ["llm_config", "llm_default_provider", "llm_default_language", "wizard_max_rounds"]`；复用 task #08 的 `import_settings_from_other_db`。
+  - 配套：`Repository.count_user_added_fields()`（用于 T2 横幅显示条件）；`SettingsDialog.set_active_category("字段")`（横幅"📋 设置 → 字段"按钮直接跳到字段页）；`MainWindow._on_user_action_dismiss_banner` 在三处生命周期点 hook D4 标志（助手成功应用 / 在设置页改字段 / `refresh_projects` 项目数 ≥ 1）。`app/db.py` 暴露 `OPTIONAL_DEFAULT_FIELDS` 常量（4 个可选默认字段，结构 `(name, type, key, default_visible)`）；`DEFAULT_FIELDS` 元组形状对齐为同结构（兼容性：外部无解构 `DEFAULT_FIELDS` 的代码，只在 `app/db.py` 内部使用）。
 - **更多文档格式现场提取（task #07 T0 短期补丁）**：在 LLM 元数据建议中"参考文件"被勾选时，直接从结构化文档抽出可读正文，而不是只塞文件名给 LLM。**全部纯标准库实现，零新依赖**：
   - **Office 三件套现代格式**：`.docx`（已有）/ `.xlsx`+`.xlsm`（已有）/ **新增** `.pptx`+`.pptm`（按幻灯片号排序，自动附该幻灯片的备注）
   - **OpenDocument 三件套**：**新增** `.odt` / `.odp`（共享 `content.xml` + `<text:p>` 路径）/ `.ods`（按 `<table:table-row>` 拼成 `a | b | c` 行）
@@ -26,7 +34,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - **📥 从备份恢复库...**：从 zip 解到空目录，确认后自动切换到新库
 - **多项目库并存与切换（task #08）**：每个"库"是一个完整的目录（含 `cabinet.db` + `library/` + `.llm-cabinet` 标记）。新增主菜单 **「库」**：
   - 切换库... (Ctrl+Shift+O) / 新建库... (Ctrl+Shift+N) / 当前库信息... / 从其它库导入 API 配置...
-  - 「最近打开」子菜单（默认 5 个，默认库永驻），含「管理列表...」对话框：右键支持「从列表移除 / 删除整个库... / 改名...」
+  - 「最近打开」子菜单（默认 5 个，默认库永驻），含「管理列表...」对话框：列表底部「🔀 切换到选中库」按钮（仅对非当前库 enable）+ 双击列表项 = 切换；右键菜单顶端也加「🔀 切换到此库」，原本的「从列表移除 / 删除整个库... / 改名...」保留
   - 切换走应用重启（`os.execv`），稳定且简单
   - 跨库全局配置存于 `%APPDATA%/LLMCabinet/cabinet.json`；损坏自动备份重建
   - 当前库 label 显示在标题栏；当前活动库与默认库的"删除/移除"菜单项强制 disabled

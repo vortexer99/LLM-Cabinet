@@ -159,6 +159,17 @@ class Repository:
     def count_projects_total(self) -> int:
         return self.conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"]
 
+    def count_user_added_fields(self) -> int:
+        """统计用户额外添加的字段数（task #15 T2 横幅显示条件用）。
+
+        定义："用户额外添加" = `fields` 表里 `key` 为空（无系统字段绑定）的字段
+        数量。系统种子字段（标题 / 描述 / 标签 + 可选默认 4 个）都有 key，所以
+        刚建好的库该计数应为 0；用户在「设置 → 字段」加过一个就会 ≥ 1。
+        """
+        return self.conn.execute(
+            "SELECT COUNT(*) AS c FROM fields WHERE key IS NULL OR key = ''"
+        ).fetchone()["c"]
+
     def count_projects_untagged(self) -> int:
         return self.conn.execute(
             """SELECT COUNT(*) AS c FROM projects p

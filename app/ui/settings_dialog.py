@@ -68,7 +68,8 @@ class SettingsDialog(QDialog):
         self.cat_list.setObjectName("SettingsCategories")
         self.cat_list.setFixedWidth(160)
         self.cat_list.setSpacing(2)
-        for name in ("通用", "项目库", "视图", "字段", "API", "关于"):
+        self._categories: list[str] = ["通用", "项目库", "视图", "字段", "API", "关于"]
+        for name in self._categories:
             QListWidgetItem(name, self.cat_list)
         self.cat_list.setCurrentRow(0)
 
@@ -109,6 +110,17 @@ class SettingsDialog(QDialog):
         bb_wrap.addStretch(1)
         bb_wrap.addWidget(bb)
         root.addLayout(bb_wrap)
+
+    def set_active_category(self, name: str) -> None:
+        """切到指定类目页（task #15 T2 横幅"📋 设置 → 字段"按钮用）。
+
+        ``name`` 不在已知类目里时静默忽略（保持当前页）。
+        """
+        try:
+            idx = self._categories.index(name)
+        except ValueError:
+            return
+        self.cat_list.setCurrentRow(idx)
 
     # =================================================================
     # 通用

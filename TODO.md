@@ -59,6 +59,7 @@
 新项目日期类型字段总是默认今天，而且没法置空
 设置通用里面LLM助手对话轮次设置放到API里面
 库字段设计助手，进入第一个页面预调整时在合适的地方提示用户此处调整不会立刻生效
+部分ui没有适配深色模式：新建库的横幅，设置API页的密钥配置部分
 -
 
 ## 💡 长期 / 大改 / 不急
@@ -114,7 +115,7 @@
 - ✅ [#06](./tasks/06-tags-hierarchy-folding.md) 标签层级折叠（基础已就绪，#03 可直接做"按标签前缀过滤"）
 
 ### 并行小版本（不属于上述主题，但值得收尾）
-- [#15](./tasks/15-new-library-onboarding.md) 新建库 onboarding（多步向导 + 首次进入引导 + Welcome + 模板系统）
+- [#15](./tasks/15-new-library-onboarding.md) 新建库 onboarding：T1/T2/T3 ✅ 2026-06-02；T4（库模板系统）远期
 - [#12](./tasks/12-selftest-infrastructure.md) 自检体系 🚧（横切关注点：每个新 task 增量沉淀）
 
 ### 跨主题强耦合（排期注意）
@@ -144,7 +145,7 @@
 | [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
 | [08](./tasks/08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | ✅ 2026-06-01 |
 | [07](./tasks/07-local-embedding-summary.md) | 文件级摘要（手动导入 + 预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
-| [15](./tasks/15-new-library-onboarding.md) | 新建库 onboarding（多步向导 + 首次引导 + Welcome + 模板） | S+S+S+M | P1/P2/P3 | 待做 |
+| [15](./tasks/15-new-library-onboarding.md) | 新建库 onboarding（多步向导 + 首次引导 + Welcome + 模板） | S+S+S+M | P1/P1/P2/P3 | T1/T2/T3 ✅ 2026-06-02 · T4 远期 |
 | [16](./tasks/16-library-field-wizard-polish.md) | 库字段设计助手后续打磨 | XS+S+S | P2/P1 | ✅ 2026-06-01 |
 | [17](./tasks/17-subfolder-import-and-tree-view.md) | 子文件夹导入修复 + 文件表改树形 | S+S+S | P0/P1/P1 | 待做 |
 

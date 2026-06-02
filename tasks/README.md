@@ -18,7 +18,7 @@
 | [12-selftest-infrastructure.md](./12-selftest-infrastructure.md) | 端到端自检体系（基础设施，与功能并行增量） | M | P1 | 🚧 进行中 |
 | [13-mcp-server.md](./13-mcp-server.md) | MCP Server（AI 文件中枢接口；A 独立进程 + B GUI 内嵌） | M+M | P1/P2 | 待做 |
 | [14-library-management-enhancements.md](./14-library-management-enhancements.md) | 库管理增强（一致性检查 + 备份恢复 + 搬家指引） | S+S+XS | P1/P2 | ✅ 2026-06-01 |
-| [15-new-library-onboarding.md](./15-new-library-onboarding.md) | 新建库的用户指引完善（多步向导 含库描述/默认字段勾选/默认列可见性/从其它库迁移 API + 首次进入横幅 + Welcome 对话框 + 模板系统） | S+S+S+M | P1/P2/P3 | 待做 |
+| [15-new-library-onboarding.md](./15-new-library-onboarding.md) | 新建库的用户指引完善（多步向导 含库描述/默认字段勾选/默认列可见性/从其它库迁移 API + 首次进入横幅 + Welcome 对话框 + 模板系统） | S+S+S+M | P1/P1/P2/P3 | T1/T2/T3 ✅ 2026-06-02 · T4 远期 |
 | [16-library-field-wizard-polish.md](./16-library-field-wizard-polish.md) | 库字段设计助手后续打磨（描述追加修改意见提示 + 库描述批准驳回 + LLM 显式删除建议） | XS+S+S | P2/P1 | ✅ 2026-06-01 |
 | [17-subfolder-import-and-tree-view.md](./17-subfolder-import-and-tree-view.md) | 子文件夹导入修复（递归收集 + 仓储保留子路径）+ 文件表改树形展示 | S+S+S | P0/P1/P1 | 待做 |
 

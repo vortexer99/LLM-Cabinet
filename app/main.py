@@ -55,8 +55,24 @@ def main() -> int:
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
+    # ---- 首次启动 Welcome（task #15 T3）：cabinet.json 不存在 ----
+    cabinet_path = CabinetConfig.config_path()
+    is_first_run = not cabinet_path.exists()
+    if is_first_run:
+        # 先用 _default()（默认库登记）作为 Welcome 中"使用默认位置"分支的兜底；
+        # Welcome 关闭后再决定是否覆盖
+        cabinet = CabinetConfig.load()  # 触发 _default() 路径
+        chosen = _run_welcome(cabinet)
+        if chosen is None:
+            # 用户在 Welcome 选择"退出"或关闭对话框 → 不进主窗口
+            return 0
+        # chosen is Path：用户选定的库目录（可能是默认 / 自定义新建 / 已有目录）
+        cabinet.touch(chosen)
+        cabinet.save()
+    else:
+        cabinet = CabinetConfig.load()
+
     # ---- 解析当前要打开的库 ----
-    cabinet = CabinetConfig.load()
     library_root = _resolve_active_library_root(cabinet)
 
     # 默认库目录如果还没标记，补一下（兼容老用户）
@@ -122,6 +138,43 @@ def main() -> int:
             pass
         _restart_self()
     return rc
+
+
+def _run_welcome(cabinet: CabinetConfig):
+    """task #15 T3：首次启动弹 Welcome 三选一。
+
+    返回 ``Path | None``：
+    * 用户选定的库目录 → 主流程把它 touch + save 后正常进主窗口
+    * ``None`` → 用户选了"退出"或关闭对话框，主流程返回 0 不进主窗口
+
+    选项分发：
+    * "新建（自定义位置）" → 直接打开 NewLibraryWizard（task #15 T1）；
+      向导成功 → 返回新库根；向导取消 → 重新弹 Welcome
+    * "新建（默认位置）"   → 返回 ``app_data_dir()``（D5：完全不弹任何额外对话框）
+    * "打开已有的库目录"  → 返回用户选的目录
+    """
+    from .ui.welcome_dialog import (
+        RESULT_NEW_CUSTOM, RESULT_NEW_DEFAULT, RESULT_OPEN_EXISTING,
+        WelcomeDialog,
+    )
+    from .ui.wizards.new_library_wizard import NewLibraryWizard
+
+    while True:
+        dlg = WelcomeDialog(cabinet)
+        rc = dlg.exec()
+        if rc == RESULT_NEW_DEFAULT:
+            # D5：直接走默认库路径（main 后续会自动 mark_as_library）
+            return app_data_dir()
+        if rc == RESULT_OPEN_EXISTING:
+            return dlg.opened_path
+        if rc == RESULT_NEW_CUSTOM:
+            wiz = NewLibraryWizard(cabinet)
+            if wiz.exec() == NewLibraryWizard.Accepted and wiz.created_root is not None:
+                return wiz.created_root
+            # 向导取消 → 回 Welcome 重选
+            continue
+        # rc == QDialog.Rejected（退出）
+        return None
 
 
 def _resolve_active_library_root(cabinet: CabinetConfig):

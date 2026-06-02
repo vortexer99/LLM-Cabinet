@@ -143,21 +143,31 @@ CREATE TABLE IF NOT EXISTS project_settings (
 # 默认字段，按显示顺序
 # (name, type, key)
 #
-# TODO（设计决策待落地）：当前注释掉了 作者/日期/评分/来源 四项作为可选默认字段。
-#   新库默认只创建 标题 / 标签 / 描述 三个保护字段（标题、描述、标签是 _ensure_protected_fields
-#   兜底自愈的；其它都不再自动塞）。
-#   将来在「新建库」流程里弹对话框，让用户选择是否一并创建这 4 个常见字段。
-#   注意：projects 表里 author/date/source_url/rating 这四列仍然存在（系统字段值的存放后端），
-#   只是 fields 表里没有对应的暴露记录。用户可以通过「设置 → 字段」用相同名字重新加，
-#   或运行「LLM 助手 → 库字段设计助手」来按场景规划。
+# task #15 T1（D2 默认列可见性）：新库默认只 seed 标题 / 标签 / 描述 三个保护字段；
+# 其中：
+#   - 标题：visible=1（强制，且 UI 层 is_title 也强制可见）
+#   - 描述：visible=0（多行文本在主列表里太占空间，仅在项目编辑对话框显示）
+#   - 标签：visible=0（标签筛选已经有左侧标签树，列表里再列一遍冗余）
+# 既有库不动（fields 表非空时 _seed_fields 直接 return，不会改 visible）。
+#
+# 「作者 / 日期 / 评分 / 来源」是**可选默认字段**：新建库向导（task #15 T1）让用户
+# 在第 3 页勾选是否一并创建；这些字段在 projects 表里已经预留了存储列
+# （author / date / source_url / rating），所以即便不在 fields 表里 seed 也不影响 schema。
+# DEFAULT_FIELDS 仅含强制 seed 的 3 个；OPTIONAL_DEFAULT_FIELDS 是可选的 4 个，
+# 数据结构 = (name, type, key, default_visible)。
 DEFAULT_FIELDS = [
-    ("标题",   "text",     "title"),
-    # ("作者",   "text",     "author"),
-    # ("日期",   "date",     "date"),
-    # ("评分",   "rating",   "rating"),
-    # ("来源",   "url",      "source_url"),
-    ("标签",   "tags",     "tags"),
-    ("描述",   "textarea", "description"),
+    # (name, type, key, default_visible)
+    ("标题",   "text",     "title",       1),
+    ("标签",   "tags",     "tags",        0),
+    ("描述",   "textarea", "description", 0),
+]
+
+OPTIONAL_DEFAULT_FIELDS = [
+    # (name, type, key, default_visible)
+    ("作者",   "text",     "author",     1),
+    ("日期",   "date",     "date",       1),
+    ("评分",   "rating",   "rating",     1),
+    ("来源",   "url",      "source_url", 1),
 ]
 
 
@@ -165,15 +175,18 @@ def _seed_fields(conn: sqlite3.Connection) -> None:
     """若 fields 表为空，插入默认字段；并把 projects 表里现有的列值迁到合适位置。
 
     系统字段的值仍存在 projects 列里（不动），只是 fields 表加一条记录把它"暴露"出来。
+
+    可见性默认（D2）：标题 visible=1、描述/标签 visible=0；可选默认字段不在
+    本函数 seed 范围内（由 task #15 新建库向导按用户勾选决定）。
     """
     cur = conn.cursor()
     n = cur.execute("SELECT COUNT(*) AS c FROM fields").fetchone()["c"]
     if n > 0:
         return
-    for i, (name, ftype, key) in enumerate(DEFAULT_FIELDS):
+    for i, (name, ftype, key, vis) in enumerate(DEFAULT_FIELDS):
         cur.execute(
             "INSERT INTO fields(name, type, ord, visible, key) VALUES(?,?,?,?,?)",
-            (name, ftype, i, 1, key),
+            (name, ftype, i, vis, key),
         )
     conn.commit()
 
@@ -199,7 +212,7 @@ def _ensure_protected_fields(conn: sqlite3.Connection) -> None:
         )
 
     # 兜底：description / tags 也必须存在
-    for name, ftype, key in DEFAULT_FIELDS:
+    for name, ftype, key, _vis in DEFAULT_FIELDS:
         if key not in ("description", "tags"):
             continue
         exists = cur.execute(
@@ -210,6 +223,9 @@ def _ensure_protected_fields(conn: sqlite3.Connection) -> None:
         max_ord = cur.execute(
             "SELECT COALESCE(MAX(ord), -1) AS m FROM fields"
         ).fetchone()["m"]
+        # 自愈插入用 visible=1（保守）：用户运行时被自愈触发说明字段是被误删了；
+        # 此时按"看得见"恢复更稳，免得用户以为没补回来。
+        # 与首次 seed 的 D2（描述/标签 visible=0）有意区别。
         cur.execute(
             "INSERT INTO fields(name, type, ord, visible, key) VALUES(?, ?, ?, 1, ?)",
             (name, ftype, (max_ord or -1) + 1, key),

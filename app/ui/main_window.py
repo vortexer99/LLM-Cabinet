@@ -256,47 +256,20 @@ class MainWindow(QMainWindow):
         self._lib_open_recent(_Path(d), allow_init=True)
 
     def _lib_new(self) -> None:
-        """新建一个空库目录。"""
-        from PySide6.QtWidgets import (
-            QFileDialog, QInputDialog, QMessageBox,
-        )
-        from ..cabinet import (
-            is_empty_or_safe_for_library, mark_as_library, resolve_library_paths,
-        )
-        from ..db import connect as _connect
-        from pathlib import Path as _Path
+        """新建一个空库目录（task #15 T1：多页向导，晚建 + 失败 rmtree 回滚）。"""
+        from .wizards.new_library_wizard import NewLibraryWizard
 
-        d = QFileDialog.getExistingDirectory(self, "选择新库的位置（建议选空目录）")
-        if not d:
-            return
-        root = _Path(d)
-        if not is_empty_or_safe_for_library(root):
-            QMessageBox.warning(
-                self, "目录不可用",
-                f"目录 {root} 已含其它文件，不适合作为新库目录。\n请选一个空目录。",
-            )
-            return
-        label, ok = QInputDialog.getText(
-            self, "新库名称", "为新库取个名字（仅显示用）：", text=root.name,
+        wiz = NewLibraryWizard(self.cabinet_config, parent=self)
+        if wiz.exec() != QDialog.Accepted:
+            return  # 用户取消（D1 零副作用）
+        if wiz.created_root is None:
+            return  # 防御
+        # 向导内部已经 touch + save 过 cabinet_config；这里只需走重启确认
+        label = self.cabinet_config.find(wiz.created_root)
+        self._confirm_and_restart_to(
+            wiz.created_root,
+            label=label.label if label else None,
         )
-        if not ok:
-            return
-        label = label.strip() or root.name
-
-        try:
-            mark_as_library(root)
-            db_path, lib_subdir = resolve_library_paths(root)
-            lib_subdir.mkdir(parents=True, exist_ok=True)
-            # 创建空 db（自动种子字段、打 user_version）
-            conn = _connect(db_path)
-            conn.close()
-        except Exception as e:
-            QMessageBox.critical(self, "新建失败", f"无法初始化新库：{e}")
-            return
-
-        self.cabinet_config.touch(root, label=label)
-        self.cabinet_config.save()
-        self._confirm_and_restart_to(root, label)
 
     def _lib_open_recent(self, path, allow_init: bool = False) -> None:
         """打开指定路径的库（来自最近列表 / 切换对话框）。"""
@@ -439,25 +412,100 @@ class MainWindow(QMainWindow):
             self.repo.set_setting("library_description", new_desc)
 
     def _lib_import_api(self) -> None:
-        """从其它库的 db 中读 llm_config 等设置写入当前库。"""
-        from PySide6.QtWidgets import QFileDialog, QMessageBox
-        from ..cabinet import import_settings_from_other_db
+        """从其它库读 llm_config 等设置写入当前库。
+
+        提供两种入口（与新建库向导第 4 页保持一致）：
+        - 「最近的库」下拉，按 last_opened 倒序，排除当前活动库自身
+        - 「浏览其它库目录...」末项 → 弹 ``QFileDialog.getExistingDirectory``，
+          要求目录含 ``.llm-cabinet`` 标记
+        """
+        from PySide6.QtWidgets import (
+            QComboBox, QDialog, QDialogButtonBox, QFileDialog, QLabel,
+            QMessageBox, QVBoxLayout,
+        )
+        from ..cabinet import (
+            import_settings_from_other_db, is_library_dir, resolve_library_paths,
+        )
         from pathlib import Path as _Path
 
-        f, _ = QFileDialog.getOpenFileName(
-            self, "选择另一个库的 cabinet.db", "",
-            "SQLite (*.db);;所有文件 (*)",
-        )
-        if not f:
+        cur_root = _Path(self.library_root).resolve()
+
+        dlg = QDialog(self)
+        dlg.setWindowTitle("从其它库导入 API 配置")
+        dlg.setMinimumWidth(520)
+        v = QVBoxLayout(dlg)
+        v.addWidget(QLabel(
+            "选择要从中导入 LLM 配置 / API Key / 默认 provider / 默认语言的源库："
+        ))
+        cmb = QComboBox()
+        # 近期库（排除当前活动库）
+        for h in self.cabinet_config.recent_libraries:
+            if h.path.resolve() == cur_root:
+                continue
+            cmb.addItem(f"{h.display_name}  —  {h.path}", userData=str(h.path))
+        cmb.addItem("📂 浏览其它库目录...", userData="__browse__")
+        v.addWidget(cmb)
+
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(dlg.accept)
+        bb.rejected.connect(dlg.reject)
+        v.addWidget(bb)
+
+        def _on_activated(index: int) -> None:
+            if cmb.itemData(index) != "__browse__":
+                return
+            d = QFileDialog.getExistingDirectory(
+                dlg, "选择要导入配置的库目录（必须含 .llm-cabinet 标记）",
+            )
+            prev_idx = max(0, index - 1) if cmb.count() > 1 else 0
+            if not d:
+                cmb.setCurrentIndex(prev_idx)
+                return
+            path = _Path(d)
+            if path.resolve() == cur_root:
+                QMessageBox.information(
+                    dlg, "提示", "请选择**其它**库的目录（不能是当前库）。",
+                )
+                cmb.setCurrentIndex(prev_idx)
+                return
+            if not is_library_dir(path):
+                QMessageBox.warning(
+                    dlg, "不是有效的库目录",
+                    f"目录 {path} 缺少 .llm-cabinet 标记，无法识别为 LLM Cabinet 库。",
+                )
+                cmb.setCurrentIndex(prev_idx)
+                return
+            target_str = str(path)
+            for i in range(cmb.count()):
+                if cmb.itemData(i) == target_str:
+                    cmb.setCurrentIndex(i)
+                    return
+            browse_idx = cmb.count() - 1  # "浏览..." 是末项
+            cmb.insertItem(
+                browse_idx, f"{path.name}  —  {path}", userData=target_str,
+            )
+            cmb.setCurrentIndex(browse_idx)
+
+        cmb.activated.connect(_on_activated)
+
+        if dlg.exec() != QDialog.Accepted:
             return
-        other = _Path(f)
-        if other.resolve() == _Path(self.db_path).resolve():
-            QMessageBox.information(self, "提示", "请选择**其它**库的 db。")
+        data = cmb.currentData()
+        if not isinstance(data, str) or not data or data == "__browse__":
+            return  # 没选有效目标，静默退出
+        src_root = _Path(data)
+        try:
+            src_db, _ = resolve_library_paths(src_root)
+        except Exception:  # noqa: BLE001
+            QMessageBox.warning(self, "无法解析库", f"无法从 {src_root} 解析出 db 路径。")
+            return
+        if src_db.resolve() == _Path(self.db_path).resolve():
+            QMessageBox.information(self, "提示", "请选择**其它**库（不能是当前库）。")
             return
 
         # 读出 llm_config + 默认 provider / 默认语言
         keys = ["llm_config", "llm_default_provider", "llm_default_language"]
-        imported = import_settings_from_other_db(other, keys)
+        imported = import_settings_from_other_db(src_db, keys)
         if not imported:
             QMessageBox.warning(
                 self, "未读到配置",
@@ -473,17 +521,17 @@ class MainWindow(QMainWindow):
         )
         if ans != QMessageBox.Yes:
             return
-        for k, v in imported.items():
-            self.repo.set_setting(k, v)
+        for k, val in imported.items():
+            self.repo.set_setting(k, val)
         QMessageBox.information(self, "完成", f"已导入 {len(imported)} 项。")
 
     def _lib_manage_recent(self) -> None:
-        """最近列表管理对话框（移除 / 删除 / 改名）。"""
+        """最近列表管理对话框（切换 / 移除 / 删除 / 改名）。"""
         from PySide6.QtCore import Qt as _Qt
         from PySide6.QtGui import QAction as _QA
         from PySide6.QtWidgets import (
             QDialog, QDialogButtonBox, QInputDialog, QListWidget, QListWidgetItem,
-            QMenu, QMessageBox, QVBoxLayout,
+            QMenu, QMessageBox, QPushButton, QVBoxLayout,
         )
         from pathlib import Path as _Path
         from ..utils import app_data_dir
@@ -496,6 +544,10 @@ class MainWindow(QMainWindow):
         lst.setContextMenuPolicy(_Qt.CustomContextMenu)
         v.addWidget(lst)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
+        # 左侧附加"切换到选中库"按钮（仅对非当前库可用）
+        btn_switch = QPushButton("🔀 切换到选中库")
+        btn_switch.setEnabled(False)
+        bb.addButton(btn_switch, QDialogButtonBox.ActionRole)
         bb.rejected.connect(dlg.reject)
         bb.accepted.connect(dlg.accept)
         v.addWidget(bb)
@@ -511,6 +563,39 @@ class MainWindow(QMainWindow):
                 it = QListWidgetItem(f"{h.display_name}{tag}{tag2}\n  {h.path}")
                 it.setData(_Qt.UserRole, str(h.path))
                 lst.addItem(it)
+            _refresh_switch_btn()
+
+        def _refresh_switch_btn():
+            it = lst.currentItem()
+            if it is None:
+                btn_switch.setEnabled(False)
+                return
+            path = _Path(str(it.data(_Qt.UserRole)))
+            btn_switch.setEnabled(path.resolve() != cur)
+
+        def _do_switch(p):
+            """关闭本对话框，再走标准的"确认 + 重启"流程切到目标库。"""
+            handle = self.cabinet_config.find(p)
+            label = handle.display_name if handle else None
+            dlg.accept()
+            self._confirm_and_restart_to(p, label)
+
+        def _on_switch_clicked():
+            it = lst.currentItem()
+            if it is None:
+                return
+            path = _Path(str(it.data(_Qt.UserRole)))
+            if path.resolve() == cur:
+                return
+            _do_switch(path)
+
+        btn_switch.clicked.connect(_on_switch_clicked)
+        lst.currentItemChanged.connect(lambda *_a: _refresh_switch_btn())
+        # 双击列表项 = 切换（与按钮等效）
+        lst.itemDoubleClicked.connect(lambda it: (
+            _do_switch(_Path(str(it.data(_Qt.UserRole))))
+            if _Path(str(it.data(_Qt.UserRole))).resolve() != cur else None
+        ))
         _refresh()
 
         def _on_menu(pos):
@@ -521,6 +606,12 @@ class MainWindow(QMainWindow):
             is_current = (path.resolve() == cur)
             is_default = (path.resolve() == default_path)
             menu = QMenu(dlg)
+            a_sw = _QA("🔀 切换到此库", dlg)
+            a_sw.setEnabled(not is_current)
+            a_sw.triggered.connect(lambda _c=False: _do_switch(path))
+            menu.addAction(a_sw)
+            menu.addSeparator()
+
             a_rm = _QA("从列表移除", dlg)
             a_rm.setEnabled(not is_current and not is_default)
             a_rm.triggered.connect(lambda _c=False: (
@@ -606,6 +697,8 @@ class MainWindow(QMainWindow):
         # 任一助手实际写过库 → 刷新主界面（字段列变化会影响列表）
         if dlg.any_applied():
             self.refresh_projects()
+            # task #15 T2 D4：跑过助手 → 永久隐藏首次引导横幅
+            self._on_user_action_dismiss_banner()
 
     def _tools_check_consistency(self) -> None:
         """库一致性检查（task #14 T1）。"""
@@ -986,6 +1079,15 @@ class MainWindow(QMainWindow):
         cl.setSpacing(8)
         cl.addLayout(top_row)
         cl.addLayout(info_row)
+
+        # 首次进入引导横幅（task #15 T2）
+        from .first_run_banner import FirstRunBanner
+        self.first_run_banner = FirstRunBanner.install(
+            cl, self.repo,
+            on_run_wizard=self._tools_open_wizards,
+            on_open_settings_fields=self.action_open_settings_fields,
+        )
+
         cl.addWidget(self.view_stack, 1)
         cl.addWidget(self.drop_zone)
 
@@ -1327,6 +1429,8 @@ class MainWindow(QMainWindow):
 
         if projects:
             self.proj_view.setCurrentIndex(self.proj_model.index(0, 0))
+            # task #15 T2 D4：库里有项目 → 永久隐藏首次引导横幅
+            self._on_user_action_dismiss_banner()
         else:
             self._current_project_id = None
             self._show_project(None)
@@ -1456,7 +1560,37 @@ class MainWindow(QMainWindow):
         dlg.default_storage_changed.connect(lambda _v: None)  # 仅持久化
         # 字段定义变化后刷新项目列表（描述可能被追加；字段值/列会变）
         dlg.fields_changed.connect(self.refresh_projects)
+        # task #15 T2 D4 一次性标志：在设置页加过非系统字段 → 触发；
+        # 同步把横幅隐藏掉（避免再次出现）
+        dlg.fields_changed.connect(self._on_user_action_dismiss_banner)
         dlg.exec()
+
+    def action_open_settings_fields(self) -> None:
+        """直接跳到设置 → 字段（task #15 T2 横幅按钮入口）。"""
+        dlg = SettingsDialog(
+            self.repo,
+            library_root=self.library.root,
+            db_path=self.db_path,
+            parent=self,
+        )
+        dlg.theme_changed.connect(self._apply_theme_now)
+        dlg.default_view_changed.connect(self._set_view_mode)
+        dlg.default_storage_changed.connect(lambda _v: None)
+        dlg.fields_changed.connect(self.refresh_projects)
+        dlg.fields_changed.connect(self._on_user_action_dismiss_banner)
+        dlg.set_active_category("字段")
+        dlg.exec()
+
+    def _on_user_action_dismiss_banner(self) -> None:
+        """task #15 T2 D4：用户做过任何"成长性动作"后永久隐藏首次引导横幅。
+
+        触发点：跑过库字段设计助手 / 在设置加过非系统字段 / 创建过第一个项目 /
+        主动点了横幅的"不再显示"。本方法幂等。
+        """
+        from .first_run_banner import dismiss_banner
+        dismiss_banner(self.repo)
+        if hasattr(self, "first_run_banner") and self.first_run_banner is not None:
+            self.first_run_banner.hide()
 
     def _apply_theme_now(self, name: str) -> None:
         app = QApplication.instance()
