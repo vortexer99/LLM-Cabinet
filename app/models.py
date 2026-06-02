@@ -63,6 +63,17 @@ class Field:
 
     @property
     def is_system(self) -> bool:
+        """字段是否带 ``key``（"种入时的稳定标识"）。
+
+        task #20 schema v4 起：``key`` 非空仅表示"该字段在新建库向导有种子记录"
+        / "导入器宽松匹配可识别"，**不再决定值的存储位置**。所有非保护字段值
+        都存 ``project_field_values``。
+
+        实际语义判断推荐：
+        - 判定"受保护"（不可删/不可改类型/类型固定）：用 ``is_required``
+        - 判定"在导入导出 README 已展示"等具体行为：直接判 ``key in {...}`` 集合
+        - 仅判定"是否种入时带 key"（极少用）：仍可用 ``is_system``
+        """
         return self.key is not None
 
     @property

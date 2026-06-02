@@ -101,7 +101,8 @@ class AnnotatedSuggestion:
     prompt_hint: str
     # 状态分类（task #11 T3 全量规划）：
     #   'new'                ：LLM 给出的全新字段，正常 INSERT
-    #   'system_required'    ：系统必有字段（标题/描述/标签）— 强制选中、只能更新 prompt_hint
+    #   'system_required'    ：系统必有字段（标题/描述/标签）— 强制选中、只能更新 prompt_hint；
+    #                          v4 起也兼任"受保护字段类型冲突跳过"的兜底
     #   'existing_user_field'：现有字段（用户字段或系统非必有），LLM 未在本次提及；
     #                          默认 selected=True 表示保留；用户取消勾选 → 删除
     #   'same_type'          ：LLM 输出命中现有用户字段且类型一致；现有 hint 空
@@ -111,7 +112,10 @@ class AnnotatedSuggestion:
     #                          + 写入 LLM 新 hint + supersede pending（走
     #                          change_type 路径，task #19 Phase B）；驳回 →
     #                          字段彻底不动
-    #   'system_protected'   ：保留以兼容老路径（理论上 6/1 晚迭代后不会再产生）
+    #   ('system_protected'  ：v3 时代用于"is_system 但类型与建议不符"的特殊跳过；
+    #                          task #20 schema v4 起废弃。author/date/source_url/
+    #                          rating 等"带 key 但非 protected"字段现在跟用户
+    #                          字段同构，改类型走 type_conflict 路径。)
     #   'llm_suggest_delete' ：LLM 在 fields_to_delete 里显式建议删除该现有字段；
     #                          默认 selected=False（保守"待批准"），用户批准 → 真删，
     #                          驳回 → 退化为普通 existing_user_field 路径（保留）
@@ -185,8 +189,6 @@ class AnnotatedSuggestion:
         if self.status == "system_required":
             # 仅当 hint 与现有不同才需要写库
             return "update_hint_only" if self._hint_changed() else "skip"
-        if self.status == "system_protected":
-            return "skip"
         if self.status == "type_conflict":
             # task #19 Phase B：批准（selected=True）→ 原地改类型 +
             # 用 LLM 给的新 hint 覆盖旧 hint + supersede pending；
@@ -257,8 +259,9 @@ class AnnotatedSuggestion:
 
 
 # 系统必有字段（is_required = True 的中文名）
-# 注意：这 3 个名字与 db.DEFAULT_FIELDS 中保护字段一一对应；
-# "作者/日期/评分/来源" 是 is_system 但 is_required = False
+# 注意：这 3 个名字与 db.DEFAULT_FIELDS 中保护字段一一对应。
+# task #20 schema v4 起："作者/日期/评分/来源" 虽然仍是 is_system（key 非空），
+# 但其值与用户字段同构存在 project_field_values，可被改类型 / 删除 / 改名。
 _SYSTEM_REQUIRED_NAMES = {"标题", "描述", "标签"}
 
 
@@ -576,12 +579,13 @@ def annotate_conflicts(
             a.existing_field_type = ex.type
             a.existing_prompt_hint = ex.prompt_hint
             a.llm_touched = True
-            if (ex.is_system or ex.key in PROTECTED_FIELD_KEYS) and ex.type != a.type:
-                # 系统字段类型与建议不符 → 跳过（罕见兜底）
-                a.status = "system_protected"
-                a.reason = "已存在的系统字段，类型与建议不符；跳过"
-                a.selected = False
-            elif ex.type == a.type:
+            # task #20 schema v4 起：放宽"is_system 但类型不符 → 跳过"规则
+            # （原 system_protected 状态废弃）。
+            # author/date/source_url/rating 等"带 key 但非 protected"字段
+            # 改类型走 type_conflict 路径（task #19 Phase B 接管）。
+            # 受保护字段（标题/描述/标签）已在上方 _SYSTEM_REQUIRED_NAMES
+            # 分支被吃掉、类型强制保持原值，不会到这里。
+            if ex.type == a.type:
                 a.status = "same_type"
                 if ex.prompt_hint:
                     a.reason = "已存在（类型一致），现有 LLM 提示非空 → 跳过不覆盖"
@@ -1963,7 +1967,6 @@ class LibraryInitWizard(WizardPlugin):
         "new": ("✅ 新字段", "将创建该字段"),
         "system_required": ("⭐ 系统必有", "保护字段，将更新 LLM 提示"),
         "existing_user_field": ("📝 现有字段", "保留；点行操作的「删除」按钮可标记删除"),
-        "system_protected": ("🔒 系统字段", "受保护，跳过"),
         "same_type": ("🔁 现有 · 同类型", "现有字段，将更新 LLM 提示"),
         "type_conflict": (
             "⚠ 类型冲突 · 改类型",
@@ -2026,7 +2029,7 @@ class LibraryInitWizard(WizardPlugin):
             # llm_suggest_delete / llm_suggest_rename：原名只读（rename 的新名
             # 通过批准操作生效，不在这里编辑）
             if ann.status in (
-                "system_required", "system_protected", "same_type",
+                "system_required", "same_type",
                 "existing_user_field", "type_conflict",
                 "llm_suggest_delete", "llm_suggest_rename",
             ):
@@ -2050,7 +2053,7 @@ class LibraryInitWizard(WizardPlugin):
             # 原类型则降回 same_type；这样预览页能统一处理"想改现有字段类型"
             # 的诉求，不必跳到「设置 → 字段」
             if ann.status in (
-                "system_required", "system_protected",
+                "system_required",
                 "existing_user_field",
                 "llm_suggest_delete", "llm_suggest_rename",
             ):
@@ -2260,8 +2263,8 @@ class LibraryInitWizard(WizardPlugin):
                 "LLM 曾建议修改此字段的类型，已被你驳回；保持不变。"
                 "如果想另建一个新名字的字段，可以用预览表底部的「＋ 添加字段」按钮。"
             )
-        # system_protected / existing_user_field：本来就不算 LLM 建议（前者跳过，
-        # 后者由用户行操作"删除"驱动），到这里只标 decision
+        # existing_user_field：本来就不算 LLM 建议（由用户行操作"删除"驱动），
+        # 到这里只标 decision
         self._render_preview([])
 
     def _on_approve_all(self) -> None:
@@ -2393,7 +2396,7 @@ class LibraryInitWizard(WizardPlugin):
         * ``llm_suggest_rename`` / ``type_conflict``：用户表态"我连这字段都不想要了"
           → 退化为 ``existing_user_field`` + ``selected=False``（标记删除），
           清掉关联的 LLM 改名/改类型痕迹
-        * ``existing_user_field`` / ``same_type`` / ``system_protected``：
+        * ``existing_user_field`` / ``same_type``：
           设 selected=False（标记为"将删除"）
         * ``system_required``：拒绝删除（弹消息）
         """
@@ -2446,7 +2449,7 @@ class LibraryInitWizard(WizardPlugin):
             self._apply_selected_change(r, False)
             self._render_preview([])
             return
-        # existing_user_field / same_type / system_protected → 标记将删除
+        # existing_user_field / same_type → 标记将删除
         self._apply_selected_change(r, False)
 
     def _on_preview_row_move(self, delta: int) -> None:

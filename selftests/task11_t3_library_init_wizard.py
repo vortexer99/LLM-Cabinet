@@ -5,7 +5,7 @@
   - WizardPlugin.is_available（require_empty_lib / 库非空 时）
   - parse_and_validate 多种边界（合法 / markdown 包裹 / 含前后噪声 / 类型 fallback /
     顶层非对象 / 缺 fields / 空字段名 / 全空）
-  - annotate_conflicts 4 种状态（new / system_protected / same_type / type_conflict）
+  - annotate_conflicts 4 种状态（new / system_required / same_type / type_conflict）
     + same_type 已有 hint vs 空 hint 的 update 行为分流
   - get/set_max_rounds 边界（默认值 / 越界值 fallback / 持久化）
   - LLMProvider.supports_json_mode 默认 True 且四家 provider 全部 True
@@ -382,6 +382,55 @@ def _run_all(tmp: Path, t: T) -> None:
             "type_conflict effective_name = 原名（不再走 _v2 改名）",
             a_zlp2.effective_name, "子流派",
         )
+
+        # task #20 schema v4：author/date/source_url/rating 等"带 key 但非
+        # protected"的老系统字段，LLM 建议改类型时应走 type_conflict 路径
+        # （v3 时代会被 system_protected 状态拦截跳过；v4 起放宽，等同于
+        # 用户字段被改类型）
+        cur_v4 = repo.conn.cursor()
+        cur_v4.execute(
+            "INSERT INTO fields(name, type, ord, visible, key) "
+            "VALUES('作者', 'text', 100, 1, 'author')"
+        )
+        repo.conn.commit()
+        existing_v4 = repo.list_fields()
+        v4_sugg = [
+            {"name": "作者", "type": "date", "prompt_hint": "出生日期"},
+        ]
+        ann_v4 = annotate_conflicts(v4_sugg, existing_v4)
+        a_author = next(a for a in ann_v4 if a.name == "作者")
+        t.assert_eq(
+            "v4: 老系统字段 author 改类型走 type_conflict 而非 system_protected",
+            a_author.status, "type_conflict",
+        )
+        t.assert_eq(
+            "v4: 老系统字段 type_conflict 默认 selected=True",
+            a_author.selected, True,
+        )
+        t.assert_eq(
+            "v4: 老系统字段 type_conflict action=change_type",
+            a_author.action, "change_type",
+        )
+        # 受保护字段（标题）即使被 LLM 建议改类型仍走 system_required 路径
+        # 注意：保护字段（标题/描述/标签）会先被 _SYSTEM_REQUIRED_NAMES 分支
+        # 吃掉，类型强制保持原样、selected=True、走 update_hint_only。
+        # LLM 建议的新类型会被丢弃，不会触发 type_conflict 路径。
+        protected_sugg = [
+            {"name": "标题", "type": "date", "prompt_hint": "应被忽略"},
+        ]
+        ann_prot = annotate_conflicts(protected_sugg, existing_v4)
+        a_title = next(a for a in ann_prot if a.name == "标题")
+        t.assert_eq(
+            "v4: 受保护字段 title 走 system_required 路径",
+            a_title.status, "system_required",
+        )
+        t.assert_eq(
+            "v4: 受保护字段 type 强制保持原值（LLM 改类型建议被丢弃）",
+            a_title.type, "text",
+        )
+        # 清理：把刚加的 author 字段删掉，不影响后续测试
+        cur_v4.execute("DELETE FROM fields WHERE key='author'")
+        repo.conn.commit()
 
         # 重复同名 LLM 建议 dedup（保留第一次）
         dup_sugg = [

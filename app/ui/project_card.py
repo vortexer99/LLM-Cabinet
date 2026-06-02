@@ -72,7 +72,7 @@ class ProjectModel(QAbstractTableModel):
 
     def column_key(self, col: int) -> str:
         """返回列的稳定 key，用于持久化可见列。
-        - field: 系统字段返回 f.key（如 'title'/'tags'），用户字段返回 'user:<id>'
+        - field: 带 key 的字段返回 f.key（如 'title'/'tags'/'author'），其余返回 'user:<id>'
         - extra: 返回 __files__ / __updated__
         """
         ck = self.column_kind(col)
@@ -82,7 +82,9 @@ class ProjectModel(QAbstractTableModel):
         if kind == "extra":
             return str(payload)
         f: Field = payload  # type: ignore
-        if f.is_system and f.key:
+        # 带 key 的字段（标题 / 描述 / 标签 / 作者 / 日期 / 评分 / 来源等）
+        # 用 key 作为稳定标识符（用户字段 fid 跨库迁移会变，不稳定）
+        if f.key:
             return f.key
         return f"user:{f.id}"
 

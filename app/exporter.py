@@ -361,11 +361,15 @@ def _build_readme(project: Project, fields: list, result: ExportResult, files: l
         lines.append("")
 
     # 自定义字段值
+    # task #20 schema v4 起：跳过已在「基本信息」段展示的 4 个老系统字段
+    # （这些字段值已通过 _legacy 反查在上面渲染过；不能用 is_system 判断，
+    # 因为 v4 后 is_system 仅表示"种入时带 key"，与"是否已展示"无关）
+    LEGACY_INFO_KEYS = {"author", "date", "source_url", "rating"}
     custom = []
     field_by_id = {f.id: f for f in fields if f.id is not None}
     for fid, value in project.field_values.items():
         f = field_by_id.get(fid)
-        if f is None or f.is_system:
+        if f is None or f.key in LEGACY_INFO_KEYS:
             continue
         if value:
             custom.append((f.name, value))
