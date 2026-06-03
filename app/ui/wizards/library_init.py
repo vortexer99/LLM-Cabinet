@@ -2545,18 +2545,33 @@ class LibraryInitWizard(WizardPlugin):
             # （此时表示"将真删"），更明确的标签由用户决策状态体现
             if ann.status == "llm_suggest_delete":
                 from PySide6.QtGui import QColor
-                if ann.selected:
-                    it_status.setText("🗑 将删除（已批准）")
-                it_status.setForeground(QColor("#c62828"))
+                if ann.decision == "rejected":
+                    # task #21 round 4：驳回后保留原字段；改灰字 + 不同文案
+                    it_status.setText("🗑 LLM 建议删除（已驳回，保留中）")
+                    it_status.setForeground(QColor("#757575"))
+                else:
+                    if ann.selected:
+                        it_status.setText("🗑 将删除（已批准）")
+                    it_status.setForeground(QColor("#c62828"))
             # llm_suggest_rename：蓝字 + 在状态文字里直接附上新名，便于一眼看到
             elif ann.status == "llm_suggest_rename":
                 from PySide6.QtGui import QColor
                 tail = f" → {ann.llm_rename_new_name}" if ann.llm_rename_new_name else ""
-                if ann.selected:
+                if ann.decision == "rejected":
+                    # task #21 round 4：驳回后保留原名；灰字 + 不同文案
+                    it_status.setText(f"✎ LLM 建议改名{tail}（已驳回，保留原名）")
+                    it_status.setForeground(QColor("#757575"))
+                elif ann.selected:
                     it_status.setText(f"✎ 将改名{tail}（已批准）")
+                    it_status.setForeground(QColor("#1565c0"))
                 else:
                     it_status.setText(f"✎ LLM 建议改名{tail}")
-                it_status.setForeground(QColor("#1565c0"))
+                    it_status.setForeground(QColor("#1565c0"))
+            # new：驳回后保留行（不再 del），状态列灰字提示"不创建"
+            elif ann.status == "new" and ann.decision == "rejected":
+                from PySide6.QtGui import QColor
+                it_status.setText("✅ LLM 建议新增（已驳回，不创建）")
+                it_status.setForeground(QColor("#757575"))
             self.tbl.setItem(row, 1, it_status)
 
             # 2：字段名（task #21：Step 1 全只读，所有改动迁移到 Step 2）
@@ -2757,15 +2772,21 @@ class LibraryInitWizard(WizardPlugin):
 
         # decision == "rejected"
         if ann.status == "new":
-            # 直接从列表移除
-            del self._suggestions[idx]
+            # 驳回 LLM 新建建议 → 保留 ann 但标 decision='rejected'，让 Step 1
+            # 仍显示该行（标签"已驳回"），与其它类型驳回行为一致；merge 第二
+            # 遍处理 status='new' 时按 decision==rejected 跳过 → 不会进 drafts
+            # （task #21 round 4 修复：原先 `del self._suggestions[idx]` 让行
+            # 整个消失，用户失去"刚驳回了什么"的视觉反馈）
+            ann.decision = "rejected"
             self._render_preview([])
             return
         if ann.status == "llm_suggest_delete":
-            # 驳回 LLM 删除建议 → 退化为普通 existing_user_field（保留）
-            # task #21：existing_user_field 不在 Step 1 显示；驳回后该行直接消失
-            ann.status = "existing_user_field"
-            ann.selected = True
+            # 驳回 LLM 删除建议 → 保留原字段（selected=False → action 进 keep）。
+            # task #21 round 4：**不**退化 ann.status 为 existing_user_field——
+            # 那样会让该行从 Step 1 消失，用户失去"我刚驳回了什么"的视觉反馈。
+            # 保持 status='llm_suggest_delete' + decision='rejected'，Step 1
+            # 仍显示该行（标签为"已驳回"），状态列文案给出"驳回保留"提示。
+            ann.selected = False
             ann.decision = "rejected"
             ann.reason = (
                 "LLM 曾建议删除此字段，已被你驳回；保留中。"
@@ -2774,12 +2795,10 @@ class LibraryInitWizard(WizardPlugin):
             self._render_preview([])
             return
         if ann.status == "llm_suggest_rename":
-            # 驳回 LLM 改名建议 → 退化为普通 existing_user_field（保留原名）
-            # task #21：existing_user_field 不在 Step 1 显示；驳回后该行直接消失
-            ann.status = "existing_user_field"
-            ann.selected = True
+            # 驳回 LLM 改名建议 → 保留原名（selected=False → action 进 keep）。
+            # 同 llm_suggest_delete：不退化 status，保留 Step 1 显示与决策反馈。
+            ann.selected = False
             ann.decision = "rejected"
-            ann.llm_rename_new_name = ""
             ann.reason = (
                 "LLM 曾建议改名此字段，已被你驳回；保留原名。"
                 "下一步进入字段表后，可以在那里改名。"
@@ -3416,6 +3435,12 @@ class LibraryInitWizard(WizardPlugin):
         # 丢弃 drafts，回 Step 1
         self._drafts = []
         self._drafts_baseline = []
+        # task #21 round 4：Back 时必须重画 Step 1 表，让 _on_step1_next 里
+        # _promote_pending_to_approved 物化的"已批准"视觉状态显示出来；否则
+        # 用户看到的还是上次进 Step 2 之前的按钮态，与底层 ann.decision 脱节
+        # （会导致：用户点驳回 → 该行真改 rejected，其它行因为早已 approved
+        # 但按钮还在 → 误以为"驳回会自动批准其它行"）
+        self._render_preview([])
         self.stack.setCurrentIndex(PAGE_STEP1)
 
     # ---- task #21：Step 2 应用 -------------------------------------------
@@ -4026,10 +4051,12 @@ class _ApplySummaryDialog(QDialog):
 
     Args:
         plan: 待应用的 FieldPlan
-        fid_resolver: ``(fid, prefer_old: bool) -> str`` 回调，用于把
-            ``plan.renames`` / ``plan.type_changes`` / ``plan.deletes`` /
+        fid_resolver: ``(fid, *, prefer_old: bool = False) -> str`` 回调，用于
+            把 ``plan.renames`` / ``plan.type_changes`` / ``plan.deletes`` /
             ``plan.updates_hint`` 里的 fid 翻译成字段名（``prefer_old=True``
-            时返回原始名，用于改名行的旧名）。如果不提供，fid 退化为 ``#fid``。
+            时返回原始名，用于改名行的旧名）。``prefer_old`` 必须用 keyword
+            传——wizard 的 `_fid_to_name` 把它声明为 keyword-only。如果不提供
+            resolver，fid 退化为 ``#fid``。
     """
 
     def __init__(
@@ -4052,7 +4079,10 @@ class _ApplySummaryDialog(QDialog):
         def _name(fid: int, *, prefer_old: bool = False) -> str:
             if fid_resolver is not None:
                 try:
-                    return fid_resolver(fid, prefer_old)
+                    # 用 keyword 传 prefer_old：wizard._fid_to_name 把
+                    # prefer_old 声明为 keyword-only，位置传参会抛 TypeError
+                    # → 被吞掉后所有名字都退化成 #fid（task #21 round 4 修复）
+                    return fid_resolver(fid, prefer_old=prefer_old)
                 except Exception:  # noqa: BLE001
                     pass
             return f"#{fid}"

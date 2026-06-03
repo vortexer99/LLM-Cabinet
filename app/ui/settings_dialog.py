@@ -1203,7 +1203,8 @@ class _FieldTypeChangeConfirmDialog(QDialog):
     类型切换不会动 ``project_field_values.value``（保留原字符串，切回旧类型即可
     恢复显示），但新控件读不动旧值，更新元数据时可能被空状态覆盖；同时该字段
     挂着的 LLM pending 建议也都按旧类型生成，应失效；prompt_hint 大概率跟新
-    类型不匹配，提供"是否同时清空"的选项（默认清）。
+    类型不匹配，提供"是否同时清空"的选项（默认不勾，避免误删用户写的 hint，
+    文案上仍标注"（推荐）"提示用户多数场景下该清空）。
     """
 
     def __init__(
@@ -1266,9 +1267,11 @@ class _FieldTypeChangeConfirmDialog(QDialog):
             v.addWidget(body)
 
         # 清空 hint 的 checkbox（仅当 hint 非空时显示）
+        # 默认不勾选以避免误删用户精心写的 hint；文字保留"（推荐）"
+        # 提示用户大多数情况下应该清空（旧 hint 通常和新类型不匹配）。
         if has_hint:
             self.cb_clear_hint = QCheckBox("同时清空该字段的 LLM 提示（推荐）")
-            self.cb_clear_hint.setChecked(True)
+            self.cb_clear_hint.setChecked(False)
             v.addWidget(self.cb_clear_hint)
         else:
             self.cb_clear_hint = None
