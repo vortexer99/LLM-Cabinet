@@ -24,6 +24,7 @@
 | [19-field-type-change-safety.md](./19-field-type-change-safety.md) | 字段类型变更的安全护栏：库设置弹窗确认 + supersede pending + 字段助手 type_conflict 改为「批准=原地改 / 驳回=不动」 | S+S | P1 | ✅ 2026-06-02 |
 | [20-unify-field-storage.md](./20-unify-field-storage.md) | 废弃系统字段的 projects 列分流，所有非保护字段值统一存 `project_field_values`（📦 schema v3 → v4）；顺带砍掉字段助手里残留的「🔒 系统字段」状态 | M | P2 | ✅ 2026-06-03 |
 | [21-wizard-two-step-redesign.md](./21-wizard-two-step-redesign.md) | 字段助手两段式重构（Step 1 审阅 LLM 建议 / Step 2 编辑字段表），消除"一张表两种语义"的矩阵规则与隐式状态迁移 | M | P1 | ✅ 2026-06-03 |
+| [22-wizard-status-column-redesign.md](./22-wizard-status-column-redesign.md) | 字段助手 Step 1/Step 2 列语义重组（"LLM 建议"列改成普通用户能读懂的"新增/删除/修改 (字段名,类型,提示)"动作描述；新增 `llm_pending_type_change` 让"改名+改类型"被吞场景可见；Step 2 删冗余状态列） | S+S | P2 | ✅ 2026-06-03 |
 
 ## 约定
 

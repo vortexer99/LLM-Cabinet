@@ -371,10 +371,10 @@ class SettingsDialog(QDialog):
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
-        # 字段表（5 列：字段名 / 类型 / 显示 / LLM 建议 / LLM 提示）
+        # 字段表（5 列：字段名 / 类型 / 显示 / 元数据建议 / LLM 提示）
         self.tbl_fields = QTableWidget(0, 5)
         self.tbl_fields.setHorizontalHeaderLabels(
-            ["字段名", "类型", "显示", "LLM 建议", "LLM 提示"]
+            ["字段名", "类型", "显示", "元数据建议", "LLM 提示"]
         )
         self.tbl_fields.verticalHeader().setVisible(False)
         self.tbl_fields.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -425,12 +425,10 @@ class SettingsDialog(QDialog):
         self.tbl_fields.blockSignals(True)
         self.tbl_fields.setRowCount(len(fields))
         for r, f in enumerate(fields):
-            # 字段名
-            tag_suffix = ""
-            if f.is_title:
-                tag_suffix = "  (标题)"
-            elif f.is_required:
-                tag_suffix = "  (必有)"
+            # 字段名 — 受保护字段标"必有"（不可删除 / 类型固定）。
+            # 不区分 is_title vs is_required：用户已经能从字段名看出它是
+            # "标题"，括号里再写一遍"标题"是冗余的；只需要告知"必有"。
+            tag_suffix = "  (必有)" if f.is_required else ""
             display_name = f.name + tag_suffix
             it_name = QTableWidgetItem(display_name)
             it_name.setData(Qt.UserRole, f.id)

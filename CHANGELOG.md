@@ -59,6 +59,253 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
     `drafts_are_dirty` / `step1_visible_indices` 的边界。`apply_field_plan_batch`
     4-tuple 契约不变，task11_t3 的 222 条 repo 层断言无回归。全套 11 个
     selftest 共 725 条断言全绿。
+- **task #22 字段助手"LLM 建议"列文案重组（2026-06-03）**：把库字段设计助手两段表
+  里给开发者看的技术分类（"系统必有 / 现有 · 同类型 / 类型冲突 / LLM 建议改名 /
+  LLM 建议删除"）抹平成普通用户能直接读懂的动作描述。详见
+  `tasks/22-wizard-status-column-redesign.md`：
+  - **Step 1 列名互换**：第 0 列 → "操作"（原叫"LLM 建议"，实际承载批准/驳回
+    按钮）；第 1 列 → "LLM 建议"（原叫"状态"，实际承载建议内容）
+  - **第 1 列文案重写**：动词永远是 `修改`，紧跟所有改了的维度（字段名 / 类型 /
+    提示），逗号分隔；rejected 主文案后只接`（已驳回）`，不再赘述退化原因。
+    例：`✏ 修改字段名、提示 → 出版商`、`✏ 修改类型 单行文本→日期`、
+    `🗑 删除字段（已驳回）`
+  - **改名+改类型组合可见**：原现行 `annotate_conflicts` 在 LLM 同时建议改名 +
+    改类型时会吞掉类型变更（保留数据），只在 `out_warnings` 留警告——用户从
+    Step 1 表上根本看不到。新增 `AnnotatedSuggestion.llm_pending_type_change`
+    字段记录被吞类型，`step1_action_label` 在主行下加副标题
+    `<small>⚠ LLM 还想改类型为 X，需批准本次改名后单独操作</small>`
+  - **`step1_visible_indices` 收紧**：除了原过滤 `existing_user_field`，再加
+    `has_llm_change` —— `system_required` / `same_type` 在 LLM 没改 hint 时
+    不出现在 Step 1（避免空动作行）
+  - **Step 2 简化**：删第 5 列（状态列）—— 划删线视觉 + 字段名前 🗑 前缀 +
+    操作列的"撤销删除"按钮已经够指示删除态；操作列"（受保护）" → "（系统保留）"
+  - **selftest**：新增 `task22_wizard_status_redesign.py` 44 条断言（覆盖
+    `step1_changed_dimensions` 的 10 类组合 / `step1_action_label` × 决策态 /
+    `annotate_conflicts` 填 `llm_pending_type_change` / 强化的
+    `step1_visible_indices` / 边界）。task21 91 条 / task11_t3 222 条无回归。
+  - **round 2 文案微调（2026-06-03）**：Step 1 底部按钮"✓ 全部批准" → "✓ 全部
+    批准未决策项"，行为同步收紧：只对 `decision == "pending"` 的 LLM 建议条目
+    一键标 approved，已驳回（rejected）的不再被覆盖回 approved，避免误改用户
+    明确选择；"✏ 在当前基础上调整..." 的 tooltip 改成用户友好版本（"保留你
+    已经做过的批准/驳回和编辑过的提示语，再补充一段说明，让 LLM 在此基础上
+    重新给一版建议。"），不再暴露 "Step 1 反馈 / hint / 库描述" 等内部术语。
+  - **round 3 渲染 bug 修复（2026-06-03）**：批准 `same_type` /
+    `system_required` / `type_conflict` / `new`（"修改提示" / "修改类型" /
+    "新增字段"）后，第 1 列「LLM 建议」的"（已批准）"后缀不会立即显示，要
+    等下次整表重画（例如再点其他行的批准/驳回按钮）才出现，给用户错觉
+    "点了批准没反应"。根因：`_on_decision_changed` 只对 `llm_suggest_delete`
+    / `llm_suggest_rename` 走 `_render_preview([])` 全表重画，其余分支只
+    `_refresh_change_cell` 刷第 0 列单元格——而 task #22 已经把"已批准 /
+    已驳回"信息从第 0 列大标签迁移到第 1 列文案后缀（由 `step1_action_label`
+    输出）。修法：批准 / toggle / hint 编辑后的决策变更全部统一走整表重画；
+    死掉的 `_refresh_change_cell` / `_src_idx_to_render_row` 两个 helper
+    一并清理。task22 46 / task21 91 全过，lint 零错误。
+  - **round 3 续：Step 2 视觉微调（2026-06-03）**：Step 2 表格行高 34 → 48
+    （+40%，与 Step 1 节奏对齐）；字段名列宽 180 → 120（×2/3），把空间
+    留给 LLM 提示列（Stretch）。
+  - **round 4 LLM 文案术语统一回 "LLM"（2026-06-03）**：上一轮"UI 文案
+    用户友好化"尝试把面向用户的 "LLM" 全部替换成 "AI"（按钮"让 AI 给出
+    建议"、列名 "AI 提示"、状态栏 "AI 任务"、tooltip 等），用户反馈后回滚——
+    在产品上下文里 "LLM" 已是稳定术语，用户群体能理解；改成 "AI" 反而
+    显得泛化、降低精确度。本轮把所有面向用户字符串中的 "AI" 回滚为 "LLM"
+    （`app/ui/wizards/library_init.py` / `app/ui/llm_tasks_panel.py`
+    / `app/ui/main_window.py`，共 ~90 处），同时保留：
+    * 按钮文案改造（"全部批准未决策项"、行为只动 pending）
+    * "在当前基础上调整..." tooltip 的用户友好版（去掉 "Step 1 反馈 /
+      hint / 库描述" 等内部术语，但保留 "LLM" 一词）
+    * `_friendly_llm_error()` 把异常翻成可读中文消息的新函数
+    * 等待页去除 "JSON 原生 / Prompt 强约束模式" 等内部路由模式名
+    * out_warnings 文案 "rename 路径仅改名不动类型" → "改名时不动类型"
+    * "（受保护）" → "（系统保留）"、`token` → `用量` 等其它非 LLM 的
+      口语化润色
+    selftest：`task22` 副标题断言、`task11_t3` "改名时不动类型" 断言相应
+    更新；task22 46 / task21 91 / task11_t3 222 全过。
+    长期约定已写入 `MEMORY.md`："UI 文案保留 LLM 不要改成 AI"。
+  - **round 5 列宽 / 列名 / 取消排序限制（2026-06-03）**：
+    * 库字段助手「场景页 → 当前库的字段」表：字段名列从 Stretch 改为
+      Interactive 90px（缩到原来约一半），LLM 提示列从 Fixed 96 → Stretch
+      接管腾出来的剩余空间；"参与建议" 列名 → "参与元数据建议"，宽度
+      84 → 130px 容下加长后的中文标题。
+    * 「设置 → 字段」对话框：列名 "LLM 建议" → "元数据建议"，与库字段助手
+      新列名口径一致（都指 metadata_suggest 流程的开关）。
+    * Step 1 表：LLM 建议列宽 360 → 180（减半）；类型列显式设为 150px
+      （原靠 Qt 默认约 100px，+50%），让类型 ComboBox 显示更宽松；省下来
+      的宽度由 LLM 提示列（Stretch）自动接管。
+    * Step 1 底部按钮 "下一步 → 编辑字段表" → "下一步（自动批准未决策）"
+      ——把按钮的实际语义（pending 视作 approved）写在标题里，避免用户
+      点完后再去 Step 2 才发现"咦怎么没决策的也算批准了"。
+    * Step 2 上下移：移除"受保护字段（标题/描述/标签）必须排在最前 +
+      其他字段不能越过它们"两条限制，与「设置 → 字段」面板和现有字段
+      编辑面板对齐（那两个面板对受保护字段从无排序限制）。`_on_step2_move`
+      的 `_draft_is_protected` 两段拦截 + 配套 QMessageBox 一并删除。
+      受保护字段仍然不可改名 / 不可改类型 / 不可删除（这些是 schema
+      约束），只是允许任意排序。
+    * 主界面项目列表（list 视图）：移除"标题永远第一列"的硬约束，
+      `_rebuild_columns` 的排序键 `(0 if f.is_title else 1, f.ord, f.id)`
+      → `(f.ord, f.id)`，列顺序完全跟随 `fields.ord`。这样用户在「设置 →
+      字段」 / 库字段助手里调字段顺序时，标题字段也能跟着移到任意位置。
+      卡片视图（grid）独立画标题，不受此影响。
+    * Step 1 显示"LLM 看了但没改"的字段（task #22 round 6）：用户反馈
+      "LLM 完全没改字段的似乎没显示"。原因是 task #22 阶段 A 的
+      `step1_visible_indices` 把 `has_llm_change=False` 的条目过滤掉了
+      （`system_required` / `same_type` 在 LLM 没改 hint 时悄悄消失）。
+      改为只过滤 `existing_user_field`（LLM 完全没在响应里提的现有字段，
+      由 Step 2 编辑表承担），保留所有 `llm_touched=True` 的 ann。
+      `step1_action_label` 新增分支：`system_required` / `same_type` /
+      `type_conflict` + dims 为空时输出 `"✓ 保持原样"` + tooltip
+      （pending 时 "LLM 已审阅这个字段，没有修改建议"；rejected 时
+      "已驳回 LLM 的修改建议，字段恢复原状"）。
+    * 驳回 LLM 修改提示后还原原 hint（task #22 round 6 同步）：用户反馈
+      "LLM 给出修改提示建议时点驳回应该直接显示之前的 LLM 提示"以及
+      "驳回后在 Step 2 看到的还是新提示"。修法：`_on_decision_changed`
+      处理 `same_type` / `system_required` / `type_conflict` 的 rejected
+      时还原 `ann.prompt_hint = ann.existing_prompt_hint`，type_conflict
+      还同步还原 `ann.type = ann.existing_field_type`——把 round 1 撤销的
+      "驳回=完全恢复原状"语义重新加回（round 1 当时撤销是因为还原后行
+      会消失，round 6 已经把 visible 改成不依赖 has_llm_change，可以
+      安全还原）。`step1_changed_dimensions` 同步：type_conflict 仅在
+      `ann.type != existing_field_type` 时才计 type，避免 X→X 显示。
+      Step 2 那侧 `merge_decisions_into_drafts` 的 rejected 分支本来就
+      用 `f.prompt_hint`（库里原 hint），现在和 ann.prompt_hint 一致，
+      没有"新提示泄漏"。新增 selftest 3 条覆盖还原后语义。
+      task22 50 / task21 91 / task11_t3 222 / task19 61 全过。
+    * 新增字段排序保留性说明：用户在场景页调字段顺序后调 LLM，LLM 看到
+      的 `current_fields` 是按 `repo.list_fields()` 的 ord 顺序展开（用户
+      reorder 后已 UPDATE fields.ord）；返回内容也按 existing_fields 顺序
+      回填到 annotate / merge，**不会被 LLM 弄乱**，新增字段追加到末尾。
+  - **round 7 task #19 收尾清理（2026-06-03）**：删掉"rename 路径不顺手
+    改类型"的安全约束。该约束是 task #19 立项时的临时策略——当时 `set_field_type`
+    没有护栏，把"既改名又改类型"组合在 rename 路径里吞掉，让用户去字段表
+    单独再改一次。Phase A/B 完成后，安全改类型的能力（兼容矩阵 + 影响面
+    弹窗 + supersede pending + `type_changes` 三元组在同事务里执行）已经
+    具备 → 约束失去意义。具体改动：
+    * 删掉 `AnnotatedSuggestion.llm_pending_type_change` 字段
+    * `annotate_conflicts` rename 分支把 LLM 在 `fields[new_name]` 里给的
+      `type` 直接合并到 `ann.type`（与 `prompt_hint` 一起），`existing_field_type`
+      仍记录改前旧值
+    * `merge_decisions_into_drafts` rename 分支用 `ann.type`（合并值）写
+      draft，`diff_drafts_to_plan` 自然把它产出 `type_changes` → apply 时
+      跟 `type_conflict` 走同一套类型变更确认对话框
+    * `step1_changed_dimensions` 把 rename 也纳入"`ann.type != existing_field_type`
+      → 含 type 维度"判据，与 type_conflict 同构
+    * `step1_action_label` rename 主行在改类型时显示
+      `✏ 修改字段名、类型 → <新名> (<旧>→<新>)`，不再有"⚠ LLM 还想改类型"
+      副标题
+    * `_on_decision_changed` 驳回 rename 时把 `ann.type` / `ann.prompt_hint`
+      还原为 existing 值（与 type_conflict 驳回对称）
+    * selftest：task22 加 3 条（`test_label_rename_with_type` 等）共 53 条；
+      task11_t3 5d-9 / 5d-10 / 5d-11 改成断言 ann.type 已合并 LLM 新值，
+      共 224 条；task21 / task19 / task20 无回归（92 / 61 / 48）。
+  - **round 8 Step 1 字段名列与 LLM 建议 label 文案精简（2026-06-03）**：
+    * **字段名列改成"目标名"**：用户反馈"LLM 建议修改字段名时，应该展示
+      新的字段名而不是老的"。`_render_preview` 第 2 列对 `llm_suggest_rename`
+      行：决策为 pending / approved 时显示 `ann.llm_rename_new_name`（新名），
+      tooltip 注明"由「<旧名>」改名而来（数据保留）"；rejected 时回到旧名
+      （与 `_on_decision_changed` "驳回 = 保留原名" 语义一致）。其它 status
+      行不变。
+    * **"LLM 建议"列 label 只列改了哪些维度，具体值挪到 tooltip**：原来
+      label 形如 `✏ 修改字段名、类型 → 出版商 (单行文本→多行文本)`，长字段名 /
+      长类型 label 会撑爆列宽。改成 `✏ 修改字段名、类型`，鼠标悬停才看到
+      `把字段「出版社」改名为「出版商」（数据保留）。\n把类型从「单行文本」
+      改为「多行文本」（旧值仍保留在库里...）。\n把 LLM 提示更新为「<前30字>」`。
+      `step1_action_label` 删掉 tail 计算块（rename `→<新名>` / `→<新名>
+      (旧→新)` / type_conflict `<旧>→<新>`）；tooltip 拼装逻辑保持不变。
+    * selftest：task22 改造 5 条 label 断言（rename only / +hint / +type /
+      +type approved / type_conflict only / +hint）改成 `assert_eq` 精确
+      label，新增 tooltip 含旧/新类型 label 的断言，共 58 条全过。task21 92 /
+      task11_t3 224 无回归。
+  - **round 9 LLM 建议删除/改名字段时 tooltip 展示原因（2026-06-03）**：
+    用户反馈"LLM 建议删除字段的 tooltip 显示删除原因"。新增
+    `AnnotatedSuggestion.llm_reason: str = ""` 字段，专门保存 LLM 给的
+    原始建议理由（与已有的 `reason` 字段区分：`reason` 在用户驳回时会被
+    覆盖成"已被你驳回..."的引导文案，还要进 refine feedback 回灌；
+    `llm_reason` 永不覆盖）。
+    * `annotate_conflicts` 在 `llm_suggest_delete` / `llm_suggest_rename`
+      两个分支同时把理由写到 `reason` 和 `llm_reason`
+    * `step1_action_label` delete 分支 tooltip 拼装成
+      `LLM 建议删除字段「X」。\n理由：<llm_reason>\n批准后会一并清掉...`，
+      `llm_reason` 为空时省略"理由："这段
+    * rename 分支 tooltip 末尾追加 `LLM 理由：<llm_reason>`
+    * 用户驳回 delete / rename 后 `llm_reason` 不变 → tooltip 仍可回看
+      LLM 当时为什么这么建议
+    * selftest：task22 新增 4 条断言（delete 含理由 / delete rejected
+      仍含理由 / delete 无理由时不出现"理由："前缀 / rename 含理由 /
+      annotate_conflicts 填 llm_reason），共 67 条全过。task21 92 /
+      task11_t3 224 无回归。
+  - **round 10 驳回不改变 LLM 建议维度展示 + Step 2 列名/列宽（2026-06-03）**：
+    用户反馈两点：
+      a. LLM 改字段名、类型、提示三项时驳回变成"修改字段名（已驳回）"，
+         其它情况驳回会变成"保持原样（已驳回）"——都不对，驳回不应该
+         改变 LLM 建议本身，应该都是"修改 xx（已驳回）"
+      b. Step 2 第 0 列标题"来源"应改成"状态"；操作列宽 +50%
+    * **根因**：`_on_decision_changed` 驳回时把 `ann.type` / `ann.prompt_hint`
+      还原回 existing 值，而 `step1_changed_dimensions` 用 `ann.type` vs
+      `existing_field_type` 判 type 维度、`ann._hint_changed()` 判 hint 维度
+      → 驳回后 dims 缩水或变空 → label 退化成"修改 X（已驳回）"或
+      "保持原样（已驳回）"，丢失了"LLM 原本建议改了什么"的信息
+    * **修法**：`AnnotatedSuggestion` 新增 `llm_orig_type` /
+      `llm_orig_prompt_hint` 字段，`annotate_conflicts` 在 LLM 触达分支
+      创建 ann 时镜像填入（system_required / same_type / type_conflict /
+      llm_suggest_rename），永不被覆盖。`step1_changed_dimensions` 改用
+      `llm_orig_*` vs `existing_*` 比较；`step1_action_label` 的 tooltip
+      也用 `llm_orig_*` 取代 `ann.*`，让"LLM 原本想改成什么"在驳回后仍
+      可见
+    * **Step 2 表头列宽**：第 0 列标题"来源"→"状态"（徽章显示的是
+      "现有 / LLM 新增 / 改名 / 改类型 / 将删除"等状态，不是数据来源）；
+      操作列 ResizeToContents → Interactive + 显式列宽 160（原 ~110，
+      +50%），按钮文字两侧多留可拖动空间
+    * **selftest**：旧的 `test_dims_type_conflict_after_revert_empty` /
+      `test_label_type_conflict_rejected_after_revert` /
+      `test_label_same_type_rejected_after_revert` 改名 + 重新解读为
+      "LLM 实际没改"用例；新增 5 条 round 10 守护测试覆盖"LLM 改了某项 +
+      用户驳回 → label 仍显示该项（已驳回）"四种组合（type only / rename
+      三项全改 / same_type 改 hint / type_conflict tooltip 仍展示 LLM
+      新值）。task22 共 75 条全过；task21 92 / task11_t3 224 无回归。
+  - **round 11 LLM 没改的字段不进 Step 1（2026-06-03）**：用户反馈
+    "LLM 真的什么都没改的情况根本不存在用户需要审批的内容"。`step1_visible_indices`
+    收紧：`system_required` / `same_type` / `type_conflict` 三个分支
+    仅当 `step1_changed_dimensions(ann)` 非空、或 `decision != pending`
+    时才显示，其它情况过滤掉。"✓ 保持原样" 行（round 6 引入，本意是
+    "让用户知道 LLM 看了"）从正常 Step 1 路径上消失——它不承载任何
+    决策内容，纯噪音。`new` / `llm_suggest_delete` / `llm_suggest_rename`
+    三种 LLM 显式建议路径不受影响（这些 status 本身就表达建议）。
+    `step1_action_label` 的"保持原样"分支保留为兜底（直接调用 label 函数
+    时仍能返回合理输出）。
+    * **selftest**：原"无变更也显示一行"的两条测试（task #22 round 6 引入）
+      反转为"无变更过滤掉"，对应"已决定但无变更"两条改造成"已决定 + LLM
+      实际有改动"。task22 共 75 条全过；task21 92 / task11_t3 224 无回归。
+  - **round 12 Step 1 表格批准/驳回后保留滚动位置（2026-06-03）**：用户反馈
+    "点批准或驳回时可以不马上滚动到表格顶端吗"。原因是 `_render_preview`
+    用 `setRowCount(0)` 全量重画表格，会触发 verticalScrollBar 复位到 0。
+    修法：渲染前记下 `tbl.verticalScrollBar().value()`，渲染完成后同步 +
+    `QTimer.singleShot(0, ...)` 兜底恢复（Qt 自动 clamp，行数变少时安全）。
+    现在长表格里下滑到中间点批准，重画后视图停留在原位置不动。
+  - **round 13 取消改"退出" + LLM 建议 label 去掉决策态后缀（2026-06-04）**：
+    * **取消 → 退出**：库字段设计助手主对话框 4 个页面（intro / scenario /
+      step1 / step2）底部的"取消"按钮全部改成"退出"。其它对话框（确认
+      删除字段、改类型确认、批量删除）的"取消"按钮不动——那是"放弃当前
+      操作"而不是"退出整个流程"，沿用 OS 通用语义。
+    * **Step 1 "LLM 建议"列 label 去掉后缀**：原来 approved/rejected 时
+      label 末尾追加"（已批准）"/"（已驳回）"。但第 0 列已经有"已批准/
+      已驳回/已删除" 标签 + 驳回时"LLM 建议"列文字变灰（`<span color=#757575>`），
+      再加后缀属于信息冗余。`step1_action_label` 删掉 suffix 计算，所有
+      label 分支不再带后缀；selftest 中 13 条断言改成"approved/rejected
+      label 与 pending 完全一致"。task22 75 / task21 92 / task11_t3 224
+      全过。
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 ### Changed
 - **task #20 废弃系统字段的 projects 列分流（schema v3 → v4，2026-06-03）**：把

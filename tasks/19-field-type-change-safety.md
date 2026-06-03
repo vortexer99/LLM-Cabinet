@@ -4,6 +4,15 @@
 > repo 层 + UI 层全部落地，58 条 selftest 通过。
 >
 > **Phase B 完成（2026-06-02）**：字段助手 `type_conflict` 行改为「批准 = 原地改类型 / 驳回 = 不动」二态语义。删掉 `<原名>_v2` 改名路径；apply 时弹批量类型变更确认对话框；`apply_field_plan_batch` 加 `type_changes` 参数（4-tuple 返回 breaking change）；全套 9 个 selftest 共 580 条断言通过。
+>
+> **收尾清理 完成（2026-06-03，task #22 round 7）**：删掉"rename 路径不顺手
+> 改类型"的临时安全约束。Phase A/B 已经具备安全改字段类型的能力，rename 路径
+> 现在直接合并 LLM 给的新 type 到 `ann.type`，与 `prompt_hint` 同源；apply 时
+> 复用 `type_changes` 三元组 + 类型变更确认对话框，跟 `type_conflict` 同构。
+> `AnnotatedSuggestion.llm_pending_type_change` 字段（曾用于把"被吞类型"中转
+> 给 Step 1 文案）已废弃；Step 1 行文案在 rename + 改类型时显示
+> `✏ 修改字段名、类型 → <新名> (<旧>→<新>)`，不再有"⚠ LLM 还想改类型"
+> 副标题。详见 CHANGELOG。
 
 ## 背景
 

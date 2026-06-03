@@ -211,6 +211,26 @@ def test_merge_llm_suggest_rename_approved(t: T) -> None:
     t.assert_eq("original_name 记录旧名", d.original_name, "出版社")
 
 
+def test_merge_llm_suggest_rename_approved_with_new_hint(t: T) -> None:
+    """task #22 round 6：llm_suggest_rename 批准时 hint 取 ann.prompt_hint
+    （annotate_conflicts 已把 LLM 在 fields[new_name] 里给的 hint 合并到
+    这里），不再用 f.prompt_hint。原 bug：批准改名 + 改 hint 后 Step 2 看到
+    的还是库里原 hint。"""
+    existing = [_f(1, "出版社", "text", prompt_hint="原提示")]
+    suggestions = [
+        _ann("出版社", "llm_suggest_rename",
+             ftype="text",
+             existing_field_id=1,
+             prompt_hint="新提示",                 # annotate_conflicts 合并后的 hint
+             existing_prompt_hint="原提示",
+             llm_rename_new_name="出版商"),
+    ]
+    drafts = merge_decisions_into_drafts(suggestions, existing)
+    d = drafts[0]
+    t.assert_eq("批准 rename 后 Step 2 看到 LLM 新 hint",
+                d.prompt_hint, "新提示")
+
+
 def test_merge_llm_suggest_rename_rejected(t: T) -> None:
     """llm_suggest_rename 用户驳回 → 退化为 existing 保留原名。"""
     existing = [_f(1, "出版社", "text")]
@@ -757,15 +777,23 @@ def test_drafts_dirty_hint_changed(t: T) -> None:
 
 
 def test_step1_visible_indices_filters_existing_user_field(t: T) -> None:
-    """step1_visible_indices：existing_user_field 行被过滤掉。"""
+    """step1_visible_indices：existing_user_field 行被过滤掉。
+
+    task #22：visible 同时收紧到 ``has_llm_change``，所以这里要给 LLM 触达
+    的 ann 显式设 llm_touched=True；same_type 还要让 hint 实际改了才算变更。
+    """
     s_new = AnnotatedSuggestion(name="new", type="text", prompt_hint="")
     s_new.status = "new"
+    s_new.llm_touched = True
     s_existing = AnnotatedSuggestion(name="existing", type="text", prompt_hint="")
     s_existing.status = "existing_user_field"
-    s_same = AnnotatedSuggestion(name="same", type="text", prompt_hint="")
+    s_same = AnnotatedSuggestion(name="same", type="text", prompt_hint="新提示")
     s_same.status = "same_type"
+    s_same.llm_touched = True
+    s_same.existing_prompt_hint = "旧提示"   # hint 改了 → has_llm_change=True
     s_del = AnnotatedSuggestion(name="del", type="text", prompt_hint="")
     s_del.status = "llm_suggest_delete"
+    s_del.llm_touched = True
     visible = step1_visible_indices([s_new, s_existing, s_same, s_del])
     t.assert_eq("过滤后剩 3 行", len(visible), 3)
     t.assert_eq("过滤后保留新增", visible[0], 0)
@@ -830,6 +858,7 @@ def main() -> int:
     test_merge_llm_suggest_delete_approved(t)
     test_merge_llm_suggest_delete_rejected(t)
     test_merge_llm_suggest_rename_approved(t)
+    test_merge_llm_suggest_rename_approved_with_new_hint(t)
     test_merge_llm_suggest_rename_rejected(t)
     test_merge_same_type_hint_update(t)
     test_merge_same_type_hint_kept(t)

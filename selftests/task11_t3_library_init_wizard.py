@@ -882,8 +882,12 @@ def _run_all(tmp: Path, t: T) -> None:
                 r_ann.prompt_hint, existing_zlp.prompt_hint,
             )
 
-        # 5d-9 LLM "既改名又改类型" → 类型变更被静默忽略，但加 warning
-        # （task #19 收尾；rename 路径只能改名，不能改类型，那是 type_conflict 的职责）
+        # 5d-9 LLM "既改名又改类型" → rename 路径合并 LLM 新 type 到 ann.type
+        # （task #19 收尾清理：不再"为保留数据吞类型"，因为 Phase A/B 的
+        # type_changes 安全路径已经具备改类型能力 → diff 阶段会自然产出
+        # type_change，apply 时弹一次类型变更确认对话框）。
+        # `existing_field_type` 仍记录改前的旧类型，便于 Step 1 文案展示
+        # `<旧>→<新>` 与驳回还原。
         if zlp_r is not None:
             # 子流派 现状是 text；LLM 在 fields[亚类型] 里给了 type=rating
             warnings_rt: list[str] = []
@@ -902,8 +906,12 @@ def _run_all(tmp: Path, t: T) -> None:
                 a for a in ann_rt if a.status == "llm_suggest_rename"
             )
             t.assert_eq(
-                "rename + 改类型：ann.type 仍是旧类型 text（rename 不改类型）",
-                r_ann_rt.type, "text",
+                "rename + 改类型：ann.type 合并 LLM 新 type=rating",
+                r_ann_rt.type, "rating",
+            )
+            t.assert_eq(
+                "rename + 改类型：existing_field_type 仍是旧类型 text（备份）",
+                r_ann_rt.existing_field_type, "text",
             )
             t.assert_eq(
                 "rename + 改类型：llm_rename_new_name 仍正确",
@@ -913,15 +921,15 @@ def _run_all(tmp: Path, t: T) -> None:
                 "rename + 改类型：合并新 hint",
                 r_ann_rt.prompt_hint, "1-5",
             )
-            t.assert_true(
-                "rename + 改类型：触发了类型变更被忽略的 warning",
-                any("rename 路径仅改名不动类型" in w for w in warnings_rt),
+            t.assert_eq(
+                "rename + 改类型：不再往 out_warnings 加文案",
+                warnings_rt, [],
             )
 
-        # 5d-10 LLM "纯改名（type 一致）" → 不触发 warning
+        # 5d-10 LLM "纯改名（type 一致）" → ann.type 仍与 existing 同
         if zlp_r is not None:
             warnings_pure: list[str] = []
-            annotate_conflicts(
+            ann_pure = annotate_conflicts(
                 [
                     {"name": "标题", "type": "text", "prompt_hint": ""},
                     {"name": "亚类型", "type": "text", "prompt_hint": ""},
@@ -932,9 +940,16 @@ def _run_all(tmp: Path, t: T) -> None:
                 ],
                 out_warnings=warnings_pure,
             )
+            r_ann_pure = next(
+                a for a in ann_pure if a.status == "llm_suggest_rename"
+            )
             t.assert_eq(
-                "纯改名（type 一致）：不触发类型变更 warning",
-                [w for w in warnings_pure if "rename 路径" in w], [],
+                "纯改名（type 一致）：ann.type=text",
+                r_ann_pure.type, "text",
+            )
+            t.assert_eq(
+                "纯改名（type 一致）：out_warnings 仍为空",
+                warnings_pure, [],
             )
 
         # 5d-11 out_warnings=None（默认）：不抛错也不污染调用方
@@ -954,8 +969,8 @@ def _run_all(tmp: Path, t: T) -> None:
                 a for a in ann_silent if a.status == "llm_suggest_rename"
             )
             t.assert_eq(
-                "out_warnings=None：rename ann 行为不变",
-                r_ann_silent.type, "text",
+                "out_warnings=None：rename ann.type 已合并 LLM 新 type",
+                r_ann_silent.type, "rating",
             )
 
 

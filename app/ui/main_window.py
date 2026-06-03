@@ -1492,17 +1492,19 @@ class MainWindow(QMainWindow):
 
     def _rebuild_columns(self) -> None:
         """根据当前 fields schema + 附加列 重建 QTableView 的列。
-        仅显示 visible=True 的字段；标题永远第一列。
+        仅显示 visible=True 的字段；列顺序完全跟随 fields.ord（task #22 round 5：
+        取消"标题强制第一列"的硬约束，与 Step 2 / 设置 → 字段 / 现有字段编辑面板
+        对齐——那几个面板都允许标题字段任意排序）。
         """
         all_fields = self.repo.list_fields()
         # 仅取可见的；title 即使不可见也强制保留
         visible_fields = [f for f in all_fields if f.visible or f.is_title]
-        # 把 title 排到最前
-        title_first = sorted(
+        # 按 ord / id 排序，标题字段不再特判
+        cols = sorted(
             visible_fields,
-            key=lambda f: (0 if f.is_title else 1, f.ord, f.id or 0),
+            key=lambda f: (f.ord, f.id or 0),
         )
-        self.proj_model.set_columns(title_first, include_extras=True)
+        self.proj_model.set_columns(cols, include_extras=True)
         self._apply_col_widths()
 
     def _apply_col_widths(self) -> None:

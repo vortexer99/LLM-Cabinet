@@ -28,7 +28,7 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-from PySide6.QtCore import QObject, Qt, QThread, Signal
+from PySide6.QtCore import QObject, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -133,6 +133,22 @@ class AnnotatedSuggestion:
     # 与 type_conflict 路径的 rename_to 含义不同：那个是"用户改名后创建新字段"，
     # 这个是"保留原 fid，UPDATE fields.name"
     llm_rename_new_name: str = ""
+    # LLM 给出的原始"建议理由"（仅 llm_suggest_delete / llm_suggest_rename
+    # 时填入）。与 `reason` 字段的区别：`reason` 在用户驳回时会被覆盖成
+    # "已被你驳回..." 这种用户引导文案，且也用于 refine feedback 回灌；
+    # `llm_reason` 永不覆盖，专供 Step 1 tooltip 持续展示 LLM 的原始意图，
+    # 让用户即使驳回后也能回看"LLM 当时为什么这么建议"。
+    llm_reason: str = ""
+    # LLM 在 annotate 时给的原始 type / prompt_hint 快照（仅 llm_touched=True
+    # 的分支填入，由 annotate_conflicts 设置，永不被覆盖）。
+    # `_on_decision_changed` 驳回会把 ann.type / ann.prompt_hint 还原回
+    # existing 值，导致 step1_changed_dimensions 算不出"LLM 原本想改哪些
+    # 维度"。这两个字段保留 LLM 的原始建议值，让 Step 1 「LLM 建议」列
+    # 在驳回后仍能展示完整维度（用户期望：驳回不改变 LLM 建议本身，只
+    # 是用户选择不应用它）。判据：和 existing_field_type /
+    # existing_prompt_hint 比较，不同即"LLM 改了这一维度"。
+    llm_orig_type: str = ""
+    llm_orig_prompt_hint: str = ""
     selected: bool = True
 
     # ---- 6/1 二次迭代新增（"LLM 建议"列）----------------------------------
@@ -614,12 +630,22 @@ def merge_decisions_into_drafts(
 
         if ann.status == "llm_suggest_rename":
             new_name = ann.llm_rename_new_name or f.name
+            # task #22 round 6：用 ann.prompt_hint（annotate_conflicts 已把
+            # LLM 在 fields[new_name] 里给的新 hint 合并到这里），不再回退
+            # 到 f.prompt_hint。原代码用 f.prompt_hint 导致"批准改名 + 改
+            # hint 后 Step 2 看到的还是库里原 hint" 的 bug。
+            # task #19 收尾清理：rename 路径同时合并 type（之前为保留数据
+            # 故意不动 type，但 Phase A/B 的 type_changes 安全路径已经具备
+            # 改类型能力 → 直接合并，让 diff 自然产出 type_change）。
+            # rejected 路径早在上面 DECISION_REJECTED 分支被处理掉了，
+            # 不会走到这里。
             drafts.append(FieldDraft(
                 origin=DRAFT_ORIGIN_LLM_RENAMED,
                 existing_field_id=f.id,
                 original_name=f.name,
                 original_type=f.type,
-                name=new_name, type=f.type, prompt_hint=f.prompt_hint or "",
+                name=new_name, type=ann.type,
+                prompt_hint=ann.prompt_hint or "",
             ))
             continue
 
@@ -832,17 +858,186 @@ def drafts_are_dirty(
 
 # task #21 阶段 B：Step 1 表的渲染过滤（哪些 ann 在 Step 1 显示；不依赖 Qt）
 def step1_visible_indices(suggestions: list["AnnotatedSuggestion"]) -> list[int]:
-    """task #21：Step 1 只展示 LLM 实际触达的条目。
+    """task #21：Step 1 只展示**真正有 LLM 建议**的条目（用户需要决策的）。
 
-    纯 user-only 现有字段（``existing_user_field``，含 LLM 删除/改名建议被驳回
-    后退化的）由 Step 2 编辑表承担，不在 Step 1 出现。
+    过滤掉：
+    - ``existing_user_field``：LLM 本轮根本没提到的现有字段（含 LLM
+      删除/改名建议被驳回后退化的）—— 由 Step 2 编辑表承担
+    - ``system_required`` / ``same_type`` / ``type_conflict`` 且
+      ``step1_changed_dimensions(ann)`` 为空：LLM 触达了但实际什么维度
+      都没改 → 没有需要用户审批的内容，不在 Step 1 出现
 
-    返回 ``suggestions`` 的索引列表，按原顺序（已过滤 existing_user_field）。
+    保留：
+    - ``new`` / ``llm_suggest_delete`` / ``llm_suggest_rename``：LLM 显式
+      建议（即使后两者被用户驳回也保留，让用户能看到 "我刚驳回了什么"
+      的视觉反馈，与 round 1 决策一致）
+    - 上述"维度变化"分支但 dims 非空的
+    - decision != pending 的所有 LLM 触达条目（已批准 / 已驳回的视觉
+      反馈不能消失，否则用户失去操作回溯）
+
+    task #22 round 11 改造：移除原"LLM 看了但没改也显示一行 ✓ 保持原样"
+    的语义——那种行没有用户需要审批的内容，纯粹噪音。round 6 引入这个
+    显示是误解了用户最初的诉求（用户当时说"LLM 完全没改字段似乎没显示"
+    指的是 Step 2 那种"完整字段表"的诉求，已经由 Step 2 满足）。
+
+    返回 ``suggestions`` 的索引列表，按原顺序。
     """
-    return [
-        i for i, ann in enumerate(suggestions)
-        if ann.status != "existing_user_field"
-    ]
+    out: list[int] = []
+    for i, ann in enumerate(suggestions):
+        if ann.status == "existing_user_field":
+            continue
+        if ann.status in ("new", "llm_suggest_delete", "llm_suggest_rename"):
+            out.append(i)
+            continue
+        # system_required / same_type / type_conflict：要看是否有实际改动
+        # 或已有决策（已批准 / 已驳回必须显示，保留视觉反馈）
+        if ann.decision in ("approved", "rejected"):
+            out.append(i)
+            continue
+        if step1_changed_dimensions(ann):
+            out.append(i)
+    return out
+
+
+# task #22：Step 1 「LLM 建议」列的纯函数（无 Qt 依赖）
+# ---------------------------------------------------------------------
+# 把 ann.status × 实际改动维度 × 决策态映射成"普通用户能读懂的动作描述"。
+# 文案矩阵见 tasks/22-wizard-status-column-redesign.md。
+def step1_changed_dimensions(ann: "AnnotatedSuggestion") -> list[str]:
+    """task #22：返回该 ann 实际改动的维度列表，按约定顺序：
+    ``['name', 'type', 'hint']`` 的子集。
+
+    判据（task #22 round 10：改用 ``llm_orig_*`` 与 ``existing_*`` 比较，
+    而不是 ``ann.type / ann.prompt_hint``——因为 ``_on_decision_changed``
+    在用户驳回时会把后者还原回 existing 值；dims 表达的是"**LLM 原本
+    建议**改了哪些维度"，跟用户接没接受无关）：
+
+    - ``llm_suggest_rename`` 必含 ``'name'``
+    - ``llm_suggest_rename`` / ``type_conflict`` 且
+      ``llm_orig_type != existing_field_type`` → 含 ``'type'``
+    - LLM 触达分支且 ``llm_orig_prompt_hint != existing_prompt_hint``
+      → 含 ``'hint'``
+
+    顺序固定为 name → type → hint，便于文案稳定拼装。
+    ``new`` / ``llm_suggest_delete`` 是单维动作，不走"维度组合"路径，
+    本函数返回空列表（调用方按 status 分支处理）。
+    """
+    dims: list[str] = []
+    if ann.status == "llm_suggest_rename":
+        dims.append("name")
+    if ann.status in ("llm_suggest_rename", "type_conflict"):
+        if ann.existing_field_type and ann.llm_orig_type \
+                and ann.llm_orig_type != ann.existing_field_type:
+            dims.append("type")
+    if ann.status in (
+        "llm_suggest_rename", "type_conflict",
+        "same_type", "system_required",
+    ):
+        if (ann.llm_orig_prompt_hint or "") != (ann.existing_prompt_hint or ""):
+            dims.append("hint")
+    return dims
+
+
+def step1_action_label(
+    ann: "AnnotatedSuggestion",
+) -> tuple[str, str]:
+    """task #22：Step 1 「LLM 建议」列的动作文案 + tooltip。
+
+    返回 ``(label, tooltip)``。文案矩阵见 task #22 卡片。
+
+    task #22 round 13：label 不再带"（已批准）/（已驳回）"后缀——决策
+    状态由第 0 列的"已批准/已驳回"标签 + 驳回时文字变灰已经表达，再加
+    后缀属于信息冗余。
+
+    label 可能含简单 HTML 片段（``<br/>`` + ``<small>``）用于"被吞类型"
+    场景的副标题；tooltip 是纯文本（多行 ``\\n`` 分隔）。
+    """
+    # ---- 单维动作：new / delete ----
+    if ann.status == "new":
+        type_label = FIELD_TYPE_LABELS.get(ann.type, ann.type)
+        label = "➕ 新增字段"
+        tooltip = (
+            f"LLM 建议新增字段「{ann.name}」"
+            f"（类型：{type_label}）。批准后会创建到库里。"
+        )
+        return label, tooltip
+
+    if ann.status == "llm_suggest_delete":
+        label = "🗑 删除字段"
+        tooltip_parts = [f"LLM 建议删除字段「{ann.name}」。"]
+        if ann.llm_reason:
+            tooltip_parts.append(f"理由：{ann.llm_reason}")
+        tooltip_parts.append(
+            "批准后会一并清掉该字段在所有项目里的填值（此操作不可恢复）。"
+        )
+        tooltip = "\n".join(tooltip_parts)
+        return label, tooltip
+
+    # ---- 多维"修改"动作 ----
+    dims = step1_changed_dimensions(ann)
+
+    # 兜底：dims 为空 + 非 rename 状态
+    # task #22 round 11 起 step1_visible_indices 已经把这类 ann 过滤掉
+    # （LLM 触达但实际没改任何维度 → 没有需要用户审批的内容），所以正常
+    # 渲染路径不会走到这个分支。保留兜底是为了直接调用 step1_action_label
+    # 的单元测试 / 调试场景能拿到合理输出。
+    if not dims and ann.status in ("system_required", "same_type", "type_conflict"):
+        label = "✓ 保持原样"
+        tooltip = (
+            "已驳回 LLM 的修改建议，字段恢复原状。"
+            if ann.decision == "rejected"
+            else "LLM 已审阅这个字段，没有修改建议。"
+        )
+        return label, tooltip
+
+    # 主词组装
+    parts_main: list[str] = []
+    if "name" in dims:
+        parts_main.append("字段名")
+    if "type" in dims:
+        parts_main.append("类型")
+    if "hint" in dims:
+        parts_main.append("提示")
+    head = "、".join(parts_main) if parts_main else "（无变更）"
+
+    # task #22 round 7：label 只显示改了哪些维度（字段名 / 类型 / 提示），
+    # 具体值（新名、旧→新类型、新 hint 内容）一律放 tooltip 里——保持
+    # Step 1 表格紧凑，长字段名 / 长类型不会撑爆"LLM 建议"列宽度。
+    label = f"✏ 修改{head}"
+
+    # ---- tooltip 拼装：每改一项追加一段 ----
+    # task #22 round 10：tooltip 描述的是"LLM 原本建议改成什么"，所以读
+    # llm_orig_type / llm_orig_prompt_hint（永不被覆盖），而不是 ann.type /
+    # ann.prompt_hint（驳回时会被还原回 existing 值）。
+    tooltip_lines: list[str] = []
+    if "name" in dims:
+        tooltip_lines.append(
+            f"把字段「{ann.name}」改名为「{ann.llm_rename_new_name}」"
+            f"（数据保留）。"
+        )
+    if "type" in dims:
+        old_l = FIELD_TYPE_LABELS.get(
+            ann.existing_field_type, ann.existing_field_type,
+        )
+        new_l = FIELD_TYPE_LABELS.get(ann.llm_orig_type, ann.llm_orig_type)
+        tooltip_lines.append(
+            f"把类型从「{old_l}」改为「{new_l}」"
+            f"（旧值仍保留在库里，新控件可能读不出）。"
+        )
+    if "hint" in dims:
+        new_hint = (ann.llm_orig_prompt_hint or "").strip().replace("\n", " ")
+        if len(new_hint) > 30:
+            new_hint = new_hint[:30] + "…"
+        tooltip_lines.append(
+            f"把 LLM 提示更新为「{new_hint or '（清空）'}」。"
+        )
+    # LLM 改名理由（只对 llm_suggest_rename 追加，让用户能看到 LLM 当时
+    # 为什么这么建议；type_conflict / same_type / system_required 的
+    # reason 是系统拼装的描述文案，不是 LLM 给的原始理由，不展示）
+    if ann.status == "llm_suggest_rename" and ann.llm_reason:
+        tooltip_lines.append(f"LLM 理由：{ann.llm_reason}")
+    tooltip = "\n".join(tooltip_lines) if tooltip_lines else (ann.reason or "")
+    return label, tooltip
 
 
 def annotate_conflicts(
@@ -888,9 +1083,10 @@ def annotate_conflicts(
             ``old_name`` 同时出现在 ``fields`` 中（保留）→ 以 ``fields`` 为准，
             改名建议被忽略。
         out_warnings: 可选的 list。若传入，函数会把发现的语义级 warning
-            (例如 LLM 在 ``fields[new_name]`` 里同时给了不同 type，"既改名
-            又改类型"会被忽略类型部分) append 进来。``None`` 表示静默丢弃，
-            兼容老调用方。"""
+            append 进来。``None`` 表示静默丢弃，兼容老调用方。
+            （task #22 round 6 起 rename + 改类型组合不再产生 warning：
+            task #19 收尾清理后该组合直接合并到 ``ann.type``，由
+            type_changes 安全路径处理。）"""
     by_name = {f.name: f for f in existing_fields}
     existing_names = {f.name for f in existing_fields}
     # 同名 LLM 建议保留**第一次**出现的（避免 dict 自动用最后一个覆盖；
@@ -969,6 +1165,11 @@ def annotate_conflicts(
             if s is not None:
                 handled_suggestion.add(ex.name)
                 a.llm_touched = True
+                # task #22 round 10：保留 LLM 原始 type / prompt_hint 快照，
+                # 让 step1_changed_dimensions 在用户驳回（ann 被还原）后仍能
+                # 算出"LLM 原本建议改了哪些维度"。
+                a.llm_orig_type = a.type
+                a.llm_orig_prompt_hint = a.prompt_hint
             out.append(a)
             continue
 
@@ -999,12 +1200,16 @@ def annotate_conflicts(
             else:
                 a.status = "type_conflict"
                 a.reason = (
-                    f"LLM 建议把现有字段「{ex.name}」从 {ex.type} 改为 {a.type}，"
-                    f"并配套新的提取提示。批准 → 一并更新；驳回 → 保持不变。"
+                    f"LLM 建议把现有字段「{ex.name}」的类型从 {ex.type} 改为 {a.type}，"
+                    f"并配套新的提示。批准 → 一并更新；驳回 → 保持不变。"
                 )
                 # task #19 Phase B：批准/驳回二态，默认 selected=True 表示
                 # "未驳回即接受"（跟 same_type / 普通 new 的默认接受行为一致）
                 a.selected = True
+            # task #22 round 10：same_type / type_conflict 共用，保留 LLM
+            # 原始 type / hint 快照，让驳回后 dims 仍能展示 LLM 改的维度
+            a.llm_orig_type = a.type
+            a.llm_orig_prompt_hint = a.prompt_hint
             out.append(a)
             continue
 
@@ -1013,33 +1218,21 @@ def annotate_conflicts(
             new_name, reason = renames_by_old[ex.name]
             # 如果 LLM 在 fields[] 里同时给了 new_name 那一行（这是预期的，
             # 因为 prompt 要求 fields 是改名后的完整方案），把它的
-            # prompt_hint 合并到 rename ann，并把那一行从"将被当成 new"中
-            # 摘除（标记为已处理）；type 不允许通过 rename 改动，type 不一致
-            # 时仍以现有 ex.type 为准（视觉提示 + 不构成 type_conflict）
+            # prompt_hint / type 都合并到 rename ann，让 rename 路径在 apply
+            # 时能一并改类型（task #19 Phase A 的安全护栏 + task #22 Phase B
+            # 的 type_changes 三元组路径已经具备能力 → 不再"为保留数据吞类型"）。
             new_row_in_fields = sugg_by_name.get(new_name)
             merged_hint = ex.prompt_hint
+            merged_type = ex.type
             if new_row_in_fields is not None:
                 handled_suggestion.add(new_name)
                 if (new_row_in_fields.get("prompt_hint") or "").strip():
                     merged_hint = new_row_in_fields["prompt_hint"]
-                # task #19 收尾：检测 LLM 在 fields[new_name] 里同时给了不同
-                # 类型（"既改名又改类型"）→ 静默忽略类型变更但加 warning，
-                # 让用户在「解析告警」区看到、知道如何后续手动改类型
-                new_row_type = (new_row_in_fields.get("type") or "").strip()
-                if (
-                    new_row_type
-                    and new_row_type != ex.type
-                    and out_warnings is not None
-                ):
-                    out_warnings.append(
-                        f"LLM 同时建议把「{ex.name}」改名为「{new_name}」"
-                        f"并把类型从 {ex.type} 改为 {new_row_type}；"
-                        f"为保留项目历史数据，rename 路径仅改名不动类型——"
-                        f"如需改类型，请在批准本次改名后到「设置 → 字段」"
-                        f"对「{new_name}」单独操作。"
-                    )
+                new_type_str = (new_row_in_fields.get("type") or "").strip()
+                if new_type_str:
+                    merged_type = new_type_str
             a = AnnotatedSuggestion(
-                name=ex.name, type=ex.type, prompt_hint=merged_hint,
+                name=ex.name, type=merged_type, prompt_hint=merged_hint,
             )
             a.status = "llm_suggest_rename"
             a.existing_field_id = ex.id
@@ -1050,6 +1243,11 @@ def annotate_conflicts(
             a.llm_touched = True
             a.llm_rename_new_name = new_name
             a.reason = reason or "（LLM 未提供改名理由）"
+            a.llm_reason = a.reason
+            # task #22 round 10：保留 LLM 原始 type / hint 快照，让 dims
+            # 在用户驳回（ann 被还原回 existing 值）后仍能展示完整维度
+            a.llm_orig_type = merged_type
+            a.llm_orig_prompt_hint = merged_hint
             out.append(a)
             continue
 
@@ -1066,6 +1264,7 @@ def annotate_conflicts(
             a.selected = False
             a.llm_touched = True
             a.reason = deletes_by_name[ex.name] or "（LLM 未提供删除理由）"
+            a.llm_reason = a.reason
             out.append(a)
             continue
 
@@ -1232,6 +1431,54 @@ def build_messages(
 # =============================================================================
 # 后台 worker
 # =============================================================================
+def _friendly_llm_error(e: Exception) -> str:
+    """把 LLM 调用抛出的异常翻译成用户能读懂的中文消息。
+
+    `type(e).__name__: e` 这种 repr 风格只适合给开发者看；普通用户看到
+    `JSONDecodeError` / `ConnectionResetError` 一类术语会一头雾水。这里按
+    异常类型 / 异常消息里的关键字做粗分类，给出动作建议。原始异常消息
+    会作为括号注脚附上，便于反馈。
+    """
+    name = type(e).__name__
+    msg = str(e) or name
+    low = (name + " " + msg).lower()
+    if any(k in low for k in ("timeout", "timed out")):
+        return (
+            "LLM 平台响应超时，请检查网络后重试。\n"
+            f"（错误信息：{msg}）"
+        )
+    if any(k in low for k in (
+        "connection", "network", "dns", "resolve", "ssl",
+        "unreachable", "refused",
+    )):
+        return (
+            "无法连接到 LLM 平台。请检查网络是否通畅 / 是否需要代理 / "
+            "API 地址是否正确。\n"
+            f"（错误信息：{msg}）"
+        )
+    if any(k in low for k in ("401", "403", "unauthorized", "forbidden", "api key", "apikey")):
+        return (
+            "LLM 平台拒绝了请求，多半是 API Key 不对或未授权。"
+            "请到「设置 → API」检查 Key 是否填写正确。\n"
+            f"（错误信息：{msg}）"
+        )
+    if any(k in low for k in ("429", "rate limit", "quota")):
+        return (
+            "请求过于频繁或额度已用完。请稍后再试，或检查账户余额。\n"
+            f"（错误信息：{msg}）"
+        )
+    if any(k in low for k in ("json", "parse", "decode")):
+        return (
+            "LLM 返回的内容无法解析。可以稍后重试一次；多次失败时可"
+            "切换其它模型或使用「在当前基础上调整」给出更明确的提示。\n"
+            f"（错误信息：{msg}）"
+        )
+    return (
+        "调用 LLM 时出错，请稍后重试。\n"
+        f"（错误信息：{msg}）"
+    )
+
+
 class _WizardLLMWorker(QObject):
     """后台直调 provider（决策 3：不走 LLMTaskQueue）。"""
 
@@ -1250,7 +1497,10 @@ class _WizardLLMWorker(QObject):
                 self.messages, json_mode=self.use_json_mode, timeout=120.0,
             )
         except Exception as e:  # noqa: BLE001
-            self.finished.emit(None, f"{type(e).__name__}: {e}", [], 0, 0)
+            # task #22 round 3：把异常类名 + repr 翻成用户能读懂的中文消息。
+            # 内部细节（class 名 / 完整堆栈）由 logger.exception 留给开发者。
+            err_friendly = _friendly_llm_error(e)
+            self.finished.emit(None, err_friendly, [], 0, 0)
             return
         tin = int(getattr(resp, "tokens_in", 0) or 0)
         tout = int(getattr(resp, "tokens_out", 0) or 0)
@@ -1285,8 +1535,8 @@ class LibraryInitWizard(WizardPlugin):
         id="library_init",
         title="库字段设计助手",
         description=(
-            "用一段话描述这个库的目的与字段偏好；可在调用 LLM 前先调整字段；"
-            "LLM 会基于现状给出新增 / 修改 / 删除建议，逐条批准或驳回。"
+            "用一段话描述这个库的目的与字段偏好；可以在让 LLM 给建议前先调整字段；"
+            "LLM 会基于现有情况给出新增 / 修改 / 删除建议，你可以逐条批准或驳回。"
             "适合刚建好新库或需要重整字段结构时使用。"
         ),
         category="库初始化",
@@ -1297,7 +1547,8 @@ class LibraryInitWizard(WizardPlugin):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("库字段设计助手")
-        self.resize(900, 704)
+        # task #22 round 1：对话框高度 +10% 给 Step 1 表多腾点空间
+        self.resize(900, 780)
         self.repo = None
         self.library = None
         self._max_rounds = DEFAULT_MAX_ROUNDS
@@ -1380,11 +1631,11 @@ class LibraryInitWizard(WizardPlugin):
         ttl.setFont(f)
         top.addWidget(ttl)
         top.addStretch(1)
-        self.lbl_tokens = QLabel("tokens：累计 0 in / 0 out")
+        self.lbl_tokens = QLabel("用量：累计 0 输入 / 0 输出")
         self.lbl_tokens.setProperty("muted", True)
         self.lbl_tokens.setToolTip(
-            "本次会话累计的 token 用量（in = 发送，out = 接收）；"
-            "实际计费按所用 provider 的口径"
+            "本次会话累计的对话用量（输入 = 发送给 LLM 的字数，输出 = LLM 回复的字数）；"
+            "实际计费按所选 LLM 平台的口径"
         )
         top.addWidget(self.lbl_tokens)
         sep = QLabel(" · ")
@@ -1419,8 +1670,8 @@ class LibraryInitWizard(WizardPlugin):
             "</ol>"
             "<p>提示：</p>"
             "<ul>"
-            "<li>整个过程会调用 LLM，使用「设置 → API」中默认 provider；"
-            "顶部会实时累计 token 用量；</li>"
+            "<li>整个过程会调用 LLM，使用「设置 → API」中选定的默认平台；"
+            "顶部会实时累计对话用量；</li>"
             "<li>可以随时取消；<b>不点「应用」就不会修改库</b>；</li>"
             "<li>已有的标题/作者等系统字段不会被重复创建。</li>"
             "</ul>"
@@ -1446,7 +1697,7 @@ class LibraryInitWizard(WizardPlugin):
 
         btns = QHBoxLayout()
         btns.addStretch(1)
-        b_cancel = QPushButton("取消")
+        b_cancel = QPushButton("退出")
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_cancel)
         self.btn_intro_next = QPushButton("下一步 →")
@@ -1467,33 +1718,30 @@ class LibraryInitWizard(WizardPlugin):
         if active is None:
             self.lbl_api_status.setText(
                 "<span style='color:#c62828'>⚠ 未选择默认 LLM 平台。</span>"
-                "请先在「设置 → API」中配置一个 provider 并设置默认。"
+                "请先在「设置 → API」中配置一个 LLM 平台并设为默认。"
             )
             self.btn_intro_next.setEnabled(False)
             self.btn_intro_next.setToolTip(
-                "请先在「设置 → API」中配置默认 provider 与 API Key"
+                "请先在「设置 → API」中配置默认 LLM 平台与 API Key"
             )
             return
         if not (active.api_key or "").strip():
             self.lbl_api_status.setText(
-                f"<span style='color:#c62828'>⚠ 默认 provider "
-                f"<b>{active.label()}</b> 未配置 API Key。</span>"
+                f"<span style='color:#c62828'>⚠ 默认 LLM 平台 "
+                f"<b>{active.label()}</b> 还没填 API Key。</span>"
                 f"<br>请到「设置 → API」中填入 Key 后重新打开本助手。"
             )
             self.btn_intro_next.setEnabled(False)
             self.btn_intro_next.setToolTip(
-                f"未配置 {active.label()} 的 API Key"
+                f"{active.label()} 还没填 API Key"
             )
             return
         # 一切就绪
-        from ...llm.providers import PROVIDERS
-        provider_cls = PROVIDERS.get(active.id)
-        supports_json = getattr(provider_cls, "supports_json_mode", True) if provider_cls else True
-        json_mode_str = "JSON 原生模式" if supports_json else "Prompt 强约束模式"
+        # task #22 round 3：不再向用户暴露 "JSON 原生 / Prompt 强约束" 这种
+        # 仅对开发者有意义的内部模式名（即原 supports_json_mode 派生文案）。
         self.lbl_api_status.setText(
             f"<span style='color:#2e7d32'>✓ 已配置：</span>"
-            f"<b>{active.label()}</b> · model=<code>{active.model}</code>"
-            f" · {json_mode_str}"
+            f"<b>{active.label()}</b> · 模型 <code>{active.model}</code>"
         )
         self.btn_intro_next.setEnabled(True)
         self.btn_intro_next.setToolTip("")
@@ -1532,8 +1780,8 @@ class LibraryInitWizard(WizardPlugin):
 
         # 中部：现有字段编辑面板（行为与「设置 → 字段」一致）
         v.addWidget(QLabel(
-            "<b>当前库的字段</b>　（可在调用 LLM 之前先调整；"
-            "操作语义与「设置 → 字段」一致）"
+            "<b>当前库的字段</b>　（可以在让 LLM 给建议之前先调整；"
+            "操作和「设置 → 字段」一致）"
         ))
         lbl_preadjust_hint = QLabel(
             "💡 这里的增删改只是 <b>给 LLM 的输入起点</b>，"
@@ -1547,17 +1795,17 @@ class LibraryInitWizard(WizardPlugin):
         self.tbl_existing = QTableWidget(0, 5)
         # 第 4 列原本叫"LLM 建议"，与预览页的「LLM 字段方案建议」列同名，
         # 在助手语境下容易让用户误以为"是否参与 LLM 给出修改建议"，
-        # 改名"参与建议"（语义：是否纳入 LLM 元数据建议流程）。
+        # 改名"参与元数据建议"（语义：是否纳入 LLM 元数据建议流程）。
         # 「设置 → 字段」对话框里没有这个混淆问题，沿用原列名不动。
         self.tbl_existing.setHorizontalHeaderLabels(
-            ["字段名", "类型", "显示", "参与建议", "LLM 提示"]
+            ["字段名", "类型", "显示", "参与元数据建议", "LLM 提示"]
         )
         _h_suggest = self.tbl_existing.horizontalHeaderItem(3)
         if _h_suggest is not None:
             _h_suggest.setToolTip(
-                "勾选后，该字段会出现在「LLM 元数据建议」流程的提问列表里\n"
-                "（与「设置 → 字段 → LLM 建议」列含义一致）；\n"
-                "与本助手在预览页给出的「字段方案建议」是完全独立的概念。"
+                "勾选后，给项目让 LLM 提取元数据时会参考这个字段。\n"
+                "（与「设置 → 字段 → 元数据建议」列含义一致；）\n"
+                "与本助手预览页的字段方案建议是两件事。"
             )
         self.tbl_existing.verticalHeader().setVisible(False)
         self.tbl_existing.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -1566,15 +1814,18 @@ class LibraryInitWizard(WizardPlugin):
         self.tbl_existing.setShowGrid(False)
         self.tbl_existing.setAlternatingRowColors(True)
         h = self.tbl_existing.horizontalHeader()
-        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        # task #22 round 5：字段名列宽缩到原来一半（Stretch → Interactive 90），
+        # LLM 提示列改 Stretch 接管剩余宽度（原 Fixed 96 太窄）
+        h.setSectionResizeMode(0, QHeaderView.Interactive)
         h.setSectionResizeMode(1, QHeaderView.Interactive)
         h.setSectionResizeMode(2, QHeaderView.Fixed)
         h.setSectionResizeMode(3, QHeaderView.Fixed)
-        h.setSectionResizeMode(4, QHeaderView.Fixed)
+        h.setSectionResizeMode(4, QHeaderView.Stretch)
+        self.tbl_existing.setColumnWidth(0, 90)
         self.tbl_existing.setColumnWidth(1, 160)
         self.tbl_existing.setColumnWidth(2, 56)
-        self.tbl_existing.setColumnWidth(3, 84)
-        self.tbl_existing.setColumnWidth(4, 96)
+        # 标题加长后给"参与元数据建议"列多腾点宽（84 → 130 容下中文）
+        self.tbl_existing.setColumnWidth(3, 130)
         self.tbl_existing.verticalHeader().setDefaultSectionSize(36)
         v.addWidget(self.tbl_existing, 1)
 
@@ -1604,7 +1855,7 @@ class LibraryInitWizard(WizardPlugin):
         b_back.clicked.connect(lambda: self.stack.setCurrentIndex(PAGE_INTRO))
         btns.addWidget(b_back)
         btns.addStretch(1)
-        b_cancel = QPushButton("取消")
+        b_cancel = QPushButton("退出")
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_cancel)
         self.btn_call_llm = QPushButton("🚀 让 LLM 给出建议")
@@ -1642,10 +1893,9 @@ class LibraryInitWizard(WizardPlugin):
         v.setSpacing(8)
 
         self.lbl_preview_hint = QLabel(
-            "<b>Step 1 · 审阅 LLM 建议</b>　每一条建议给出「批准」「驳回」决策；"
-            "未决策条目下一步时一律视作「已批准」（含删除建议——后续在 Step 2 与"
-            "应用前汇总对话框还会再有兜底）。这一步只看 LLM 提议，自主增删字段在"
-            "下一步进行。"
+            "<b>第 1 步 · 审阅 LLM 建议</b>　每条建议都可以「批准」或「驳回」；"
+            "没点过的条目，下一步会按「批准」处理。这一步只针对 LLM 给的建议，"
+            "你想自己加字段、删字段会在下一步进行。"
         )
         self.lbl_preview_hint.setTextFormat(Qt.RichText)
         self.lbl_preview_hint.setWordWrap(True)
@@ -1701,23 +1951,34 @@ class LibraryInitWizard(WizardPlugin):
         # task #21 起此表只承载 LLM 实际触达的条目（Step 1）；纯 user-only 现有
         # 字段移到 Step 2 编辑表
         self.tbl = QTableWidget(0, 5)
+        # task #22：列名重排——第 0 列实际是操作（批准/驳回按钮），
+        # 第 1 列才是 LLM 建议的内容描述（"新增/删除/修改..."）
         self.tbl.setHorizontalHeaderLabels(
-            ["LLM 建议", "状态", "字段名", "类型", "LLM 提示"]
+            ["操作", "LLM 建议", "字段名", "类型", "LLM 提示"]
         )
         self.tbl.verticalHeader().setVisible(False)
-        # 行高 38：要容下 LLM 建议列里的"批准/驳回"两个按钮
-        self.tbl.verticalHeader().setDefaultSectionSize(38)
+        # task #22 round 1：行高从 38 增加到 46（+20%），让 LLM 建议列的副标题
+        # （rename + 被吞类型场景）和动作描述都更清晰
+        self.tbl.verticalHeader().setDefaultSectionSize(46)
         self.tbl.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl.setSelectionMode(QTableWidget.SingleSelection)
         h = self.tbl.horizontalHeader()
-        # LLM 建议列固定宽 216：标签 + 「批准」/「驳回」两个 46+ 像素按钮 + 间距
-        h.setSectionResizeMode(0, QHeaderView.Fixed)
-        self.tbl.setColumnWidth(0, 216)
-        h.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        # task #22 round 1：所有列都改 Interactive 让用户可拖动调宽。
+        # 默认宽度比例：操作 144（原 216 × 2/3，按钮做扁后够用） /
+        # LLM 建议 360（原 ResizeToContents，现给 ×2 ≈ 360） /
+        # 字段名 90（原 180 / 2） / 类型 ResizeToContents 让 ComboBox 自适应 /
+        # LLM 提示用 Stretch 占满剩余
+        h.setSectionResizeMode(0, QHeaderView.Interactive)
+        h.setSectionResizeMode(1, QHeaderView.Interactive)
         h.setSectionResizeMode(2, QHeaderView.Interactive)
-        h.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        h.setSectionResizeMode(3, QHeaderView.Interactive)
         h.setSectionResizeMode(4, QHeaderView.Stretch)
-        self.tbl.setColumnWidth(2, 180)
+        self.tbl.setColumnWidth(0, 144)
+        # task #22 round 5：LLM 建议列宽减半（360 → 180），把腾出来的空间
+        # 让给类型列（默认 Qt 100 → 150，+50%）和 LLM 提示列（Stretch 自动接管剩余）
+        self.tbl.setColumnWidth(1, 180)
+        self.tbl.setColumnWidth(2, 90)
+        self.tbl.setColumnWidth(3, 150)
         # 双击编辑器：字段名走 LineEdit（撑满 cell）；LLM 提示双击弹独立多行对话框
         self._name_delegate = _TallLineEditDelegate(self.tbl)
         self.tbl.setItemDelegateForColumn(2, self._name_delegate)
@@ -1732,10 +1993,10 @@ class LibraryInitWizard(WizardPlugin):
         v.addWidget(self.lbl_warnings)
 
         # LLM 原始响应：改成弹窗（按钮触发），节省预览页的垂直空间
-        self.btn_show_raw = QPushButton("📄 查看 LLM 原始响应...")
+        self.btn_show_raw = QPushButton("📄 查看 LLM 原始回复...")
         self.btn_show_raw.setToolTip(
-            "弹出窗口显示本轮 LLM 的原始 JSON 响应；"
-            "窗口里可一键「再次应用 LLM 建议」（智能合并保留你的手改）"
+            "弹出窗口显示本轮 LLM 给的原始回复内容；"
+            "窗口里可以一键「再次应用 LLM 建议」"
         )
         self.btn_show_raw.clicked.connect(self._on_show_raw_dialog)
         v.addWidget(self.btn_show_raw)
@@ -1749,30 +2010,31 @@ class LibraryInitWizard(WizardPlugin):
 
         self.btn_refine = QPushButton("✏ 在当前基础上调整...")
         self.btn_refine.setToolTip(
-            "弹补充说明输入框；将 Step 1 反馈（决策 + 编辑过的 hint + 库描述）"
-            "和补充一起再问一轮 LLM"
+            "保留你已经做过的批准/驳回和编辑过的提示语，再补充一段说明，"
+            "让 LLM 在此基础上重新给一版建议。"
         )
         self.btn_refine.clicked.connect(self._on_refine)
         btns.addWidget(self.btn_refine)
 
-        # 一键批准/驳回所有
-        self.btn_approve_all = QPushButton("✓ 全部批准")
+        # 一键批准所有未决策项
+        self.btn_approve_all = QPushButton("✓ 全部批准未决策项")
         self.btn_approve_all.setToolTip(
-            "把本轮所有 LLM 提议（新增 / 修改 / 改名 / 删除）都标为已批准"
+            "把当前所有还没点过批准 / 驳回的 LLM 建议一次性标为「已批准」；"
+            "已经驳回的不会被改回来。"
         )
         self.btn_approve_all.clicked.connect(self._on_approve_all)
         btns.addWidget(self.btn_approve_all)
 
         btns.addStretch(1)
-        b_cancel = QPushButton("取消")
+        b_cancel = QPushButton("退出")
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_cancel)
 
         # task #21：把"应用"换成"下一步 →"；点击进入 Step 2
-        self.btn_step1_next = QPushButton("下一步 → 编辑字段表")
+        self.btn_step1_next = QPushButton("下一步（自动批准未决策）")
         self.btn_step1_next.setDefault(True)
         self.btn_step1_next.setToolTip(
-            "把当前 Step 1 决策合并成最终字段表草稿，进入 Step 2 进一步编辑"
+            "把当前批准/驳回决策合并成最终字段表草稿，进入下一步进一步编辑"
             "（增/删/改名/改类型/改提示）"
         )
         self.btn_step1_next.clicked.connect(self._on_step1_next)
@@ -1794,21 +2056,27 @@ class LibraryInitWizard(WizardPlugin):
         v.setSpacing(8)
 
         self.lbl_step2_hint = QLabel(
-            "<b>Step 2 · 编辑最终字段表</b>　以下是 Step 1 决策合并后的最终字段表，"
-            "你可以在这里增 / 删 / 改名 / 改类型 / 改提示。划删线行表示「将删除」"
-            "（点其右侧「↩ 撤销删除」可恢复）。点「应用」一并写入库。"
+            "<b>第 2 步 · 编辑最终字段表</b>　这是合并完上一步决策后的最终字段表。"
+            "你可以在这里增加、删除、改名、改类型、改提示。打了删除线的行表示"
+            "「将删除」，点右边的「↩ 撤销删除」可以恢复。点「应用」一次性写入库。"
         )
         self.lbl_step2_hint.setTextFormat(Qt.RichText)
         self.lbl_step2_hint.setWordWrap(True)
         v.addWidget(self.lbl_step2_hint)
 
-        # 字段表（6 列：来源徽章 / 字段名 / 类型 / LLM 提示 / 操作 / 状态）
-        self.tbl_step2 = QTableWidget(0, 6)
+        # 字段表（5 列：状态徽章 / 字段名 / 类型 / LLM 提示 / 操作）
+        # task #22：原"状态"列（第 5 列）已删——划删线视觉 + 操作列的"撤销
+        # 删除"按钮 + 字段名前缀已经够指示删除态，原状态列文字纯属冗余
+        # task #22 round 10：第 0 列标题"来源"→"状态"（用户视角：徽章
+        # 显示的是"现有 / LLM 新建 / 改名 / 改类型 / 将删除"等状态，不是
+        # 数据来源；"来源"是开发者视角的 origin 字段命名残留）
+        self.tbl_step2 = QTableWidget(0, 5)
         self.tbl_step2.setHorizontalHeaderLabels(
-            ["来源", "字段名", "类型", "LLM 提示", "操作", "状态"]
+            ["状态", "字段名", "类型", "LLM 提示", "操作"]
         )
         self.tbl_step2.verticalHeader().setVisible(False)
-        self.tbl_step2.verticalHeader().setDefaultSectionSize(34)
+        # task #22 round 3：行高 34 → 48（+40%），与 Step 1 的视觉节奏对齐
+        self.tbl_step2.verticalHeader().setDefaultSectionSize(48)
         self.tbl_step2.setSelectionBehavior(QTableWidget.SelectRows)
         self.tbl_step2.setSelectionMode(QTableWidget.SingleSelection)
         h2 = self.tbl_step2.horizontalHeader()
@@ -1816,9 +2084,13 @@ class LibraryInitWizard(WizardPlugin):
         h2.setSectionResizeMode(1, QHeaderView.Interactive)
         h2.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         h2.setSectionResizeMode(3, QHeaderView.Stretch)
-        h2.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        h2.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.tbl_step2.setColumnWidth(1, 180)
+        # task #22 round 10：操作列从 ResizeToContents 改成 Interactive + 显式
+        # 列宽，让 "↩ 撤销删除" 按钮两侧多留 ~50% 的可拖动空间，避免按钮文字
+        # 紧贴边框、点击体验拥挤
+        h2.setSectionResizeMode(4, QHeaderView.Interactive)
+        # task #22 round 3：字段名列宽 180 → 120（×2/3），把空间留给 LLM 提示列
+        self.tbl_step2.setColumnWidth(1, 120)
+        self.tbl_step2.setColumnWidth(4, 160)
         # 字段名列复用 Step 1 的高度撑满 delegate
         self._name_delegate_step2 = _TallLineEditDelegate(self.tbl_step2)
         self.tbl_step2.setItemDelegateForColumn(1, self._name_delegate_step2)
@@ -1836,9 +2108,7 @@ class LibraryInitWizard(WizardPlugin):
         ops.addWidget(self.btn_step2_add)
         ops.addStretch(1)
         self.btn_step2_up = QPushButton("↑ 上移")
-        self.btn_step2_up.setToolTip(
-            "把选中行上移一位（受保护字段固定在最前，不能跨越）"
-        )
+        self.btn_step2_up.setToolTip("把选中行上移一位")
         self.btn_step2_up.clicked.connect(lambda: self._on_step2_move(-1))
         ops.addWidget(self.btn_step2_up)
         self.btn_step2_down = QPushButton("↓ 下移")
@@ -1858,21 +2128,21 @@ class LibraryInitWizard(WizardPlugin):
         btns = QHBoxLayout()
         self.btn_step2_back = QPushButton("← 放弃修改并返回")
         self.btn_step2_back.setToolTip(
-            "丢弃 Step 2 当前编辑，返回 Step 1 重新审阅；Step 1 的批准/驳回决策保留"
+            "丢弃当前在字段表里的编辑，返回上一步重新审阅；上一步的批准/驳回会保留"
         )
         self.btn_step2_back.clicked.connect(self._on_step2_back)
         btns.addWidget(self.btn_step2_back)
 
         btns.addStretch(1)
 
-        b_cancel = QPushButton("取消")
+        b_cancel = QPushButton("退出")
         b_cancel.clicked.connect(self.reject)
         btns.addWidget(b_cancel)
 
         self.btn_step2_apply_continue = QPushButton("💾 应用并继续讨论...")
         self.btn_step2_apply_continue.setToolTip(
-            "先应用当前字段表（落库），再弹补充说明启动新一轮 LLM 讨论；"
-            "下一轮 LLM 看到的现有字段就是你刚刚落库的版本"
+            "先把当前字段表保存到库，再弹出补充说明开启新一轮和 LLM 的讨论；"
+            "下一轮 LLM 看到的现有字段就是你刚保存的版本"
         )
         self.btn_step2_apply_continue.clicked.connect(
             lambda: self._on_step2_apply(continue_refine=True)
@@ -1894,10 +2164,10 @@ class LibraryInitWizard(WizardPlugin):
     # ---- 状态管理 ----------------------------------------------------------
     def _refresh_round_label(self) -> None:
         self.lbl_round.setText(f"轮数 {self._current_round} / {self._max_rounds}")
-        # token 标签：累计值 + 上一轮增量（>0 才显示）
+        # 用量标签：累计值 + 上一轮增量（>0 才显示）
         tokens_text = (
-            f"tokens：累计 {self._tokens_in_total} in / "
-            f"{self._tokens_out_total} out"
+            f"用量：累计 {self._tokens_in_total} 输入 / "
+            f"{self._tokens_out_total} 输出"
         )
         if self._last_round_tokens_in or self._last_round_tokens_out:
             tokens_text += (
@@ -1920,21 +2190,20 @@ class LibraryInitWizard(WizardPlugin):
         if not self._last_raw_response:
             QMessageBox.information(
                 self, "暂无内容",
-                "本轮还没有 LLM 响应可供查看。",
+                "本轮还没有 LLM 回复内容可供查看。",
             )
             return
         dlg = QDialog(self)
-        dlg.setWindowTitle("LLM 原始响应（本轮）")
+        dlg.setWindowTitle("LLM 原始回复（本轮）")
         dlg.resize(720, 480)
         v = QVBoxLayout(dlg)
         v.setContentsMargins(14, 12, 14, 12)
         v.setSpacing(8)
 
         info = QLabel(
-            "以下是本轮 LLM 返回的**原始 JSON**。如果你之前误删 / 误改 / 误驳回了"
-            "某条建议，可以点下方「🔄 再次应用 LLM 建议」按钮 — 智能合并：你手加"
-            "的字段、删除标记、改过的描述等都会保留，仅 LLM 原本触达过的字段会"
-            "被重置为 LLM 给出的版本。"
+            "以下是本轮 LLM 返回的**原始内容**。如果你之前误驳回了某条建议，"
+            "可以点下方「🔄 再次应用 LLM 建议」按钮——所有 LLM 改过的条目都会"
+            "重置为 LLM 给出的版本（决策清空，类型 / 提示还原），可以重新审阅。"
         )
         info.setWordWrap(True)
         info.setTextFormat(Qt.RichText)
@@ -1948,10 +2217,10 @@ class LibraryInitWizard(WizardPlugin):
 
         btns = QHBoxLayout()
         b_reapply = QPushButton("🔄 再次应用 LLM 建议")
-        b_reapply.setToolTip("把 LLM 触达过的字段重置为 LLM 建议；保留你手加 / 删除的字段")
+        b_reapply.setToolTip("把 LLM 改过的字段重置回 LLM 给的版本；你自己加的、删的字段保持不动")
         if self._llm_round_payload is None:
             b_reapply.setEnabled(False)
-            b_reapply.setToolTip("缺少本轮 LLM 快照（不应发生），无法再次应用")
+            b_reapply.setToolTip("找不到本轮 LLM 建议的存档，无法再次应用")
         b_reapply.clicked.connect(lambda _c=False: self._on_reapply_llm(dlg))
         btns.addWidget(b_reapply)
         btns.addStretch(1)
@@ -2009,10 +2278,10 @@ class LibraryInitWizard(WizardPlugin):
                 ans = QMessageBox.question(
                     self, "字段名重复",
                     f"字段名「{ua.name}」既被你手加过，也是 LLM 这一轮的新建议。\n\n"
-                    f"  • 你手加的：type=<b>{ua.type}</b>，"
-                    f"hint=<i>{(ua.prompt_hint or '（空）')[:60]}</i>\n"
-                    f"  • LLM 的：type=<b>{llm_ann.type}</b>，"
-                    f"hint=<i>{(llm_ann.prompt_hint or '（空）')[:60]}</i>\n\n"
+                    f"  • 你手加的：类型=<b>{ua.type}</b>，"
+                    f"提示=<i>{(ua.prompt_hint or '（空）')[:60]}</i>\n"
+                    f"  • LLM 的：类型=<b>{llm_ann.type}</b>，"
+                    f"提示=<i>{(llm_ann.prompt_hint or '（空）')[:60]}</i>\n\n"
                     f"是 = 保留<b>你手加</b>的版本（丢弃 LLM 的同名建议）；"
                     f"否 = 用 <b>LLM</b> 的版本覆盖（丢弃你手加的）。",
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
@@ -2092,7 +2361,7 @@ class LibraryInitWizard(WizardPlugin):
             # else: 双方都空 → 没什么可参考的，不显示参考区
         new_text, ok = _ask_text(
             self, title,
-            "请输入该字段的 LLM 提示（多行；告诉 LLM 该字段的格式约束、示例等）：",
+            "请输入该字段的 LLM 提示（多行；告诉 LLM 这个字段的格式要求、示例等）：",
             initial=cur,
             reference_label=ref_label,
             reference_text=ref_text,
@@ -2110,7 +2379,10 @@ class LibraryInitWizard(WizardPlugin):
         # 如果之前是 rejected，提升为 pending 让用户再决定
         if ann.decision == "rejected":
             ann.decision = "pending"
-        self._refresh_change_cell(row)
+        # task #22 round 3：整表重画——第 1 列「LLM 建议」文案是
+        # step1_action_label 按 changed_dimensions / decision 算出来的，
+        # hint 编辑后 decision / hint 维度可能都变了，单刷第 0 列不够。
+        self._render_preview([])
 
     # ---- 现有字段编辑面板（场景页内嵌；行为对齐"设置 → 字段"） ------------
     def _reload_existing_fields_table(self) -> None:
@@ -2122,11 +2394,8 @@ class LibraryInitWizard(WizardPlugin):
         self.tbl_existing.blockSignals(True)
         self.tbl_existing.setRowCount(len(fields))
         for r, f in enumerate(fields):
-            tag_suffix = ""
-            if f.is_title:
-                tag_suffix = "  (标题)"
-            elif f.is_required:
-                tag_suffix = "  (必有)"
+            # 受保护字段标"必有"；标题字段已经叫"标题"了，括号里不再复读
+            tag_suffix = "  (必有)" if f.is_required else ""
             display_name = f.name + tag_suffix
             it_name = QTableWidgetItem(display_name)
             it_name.setData(Qt.UserRole, f.id)
@@ -2339,7 +2608,7 @@ class LibraryInitWizard(WizardPlugin):
         new_text, ok = _ask_text(
             self, f"LLM 提示 — {name}",
             f"为字段「{name}」自定义 LLM 建议时的格式说明。\n"
-            "留空 = 使用默认；填写 = 在 user prompt 中追加为该字段的格式要求。",
+            "留空 = 使用默认；填写 = 让 LLM 提取这个字段时按这里的要求来。",
             initial=current_hint or "",
         )
         if not ok:
@@ -2363,6 +2632,23 @@ class LibraryInitWizard(WizardPlugin):
         self._dispatch_call(extra="")
 
     def _on_restart(self) -> None:
+        # 仅当已经至少调过一轮 LLM（有建议或原始回复在手）时才弹确认；
+        # 没建议时点重新开始无破坏性，直接回场景页。
+        if self._suggestions or self._last_raw_response:
+            ret = QMessageBox.question(
+                self,
+                "确认重新开始",
+                "重新开始会丢弃当前这一轮 LLM 给出的所有建议（包括你已经做过的"
+                "批准 / 驳回决策），回到场景描述页重新写需求。\n\n"
+                "如果只是想撤销之前的决策，可以点「📄 查看 LLM 原始回复」"
+                "里的「🔄 再次应用 LLM 建议」，会把所有 LLM 触达过的字段重置为"
+                "本轮 LLM 给出的版本。\n\n"
+                "确认重新开始？",
+                QMessageBox.Yes | QMessageBox.Cancel,
+                QMessageBox.Cancel,
+            )
+            if ret != QMessageBox.Yes:
+                return
         self._history = []
         self._suggestions = []
         self._llm_round_payload = None
@@ -2410,19 +2696,20 @@ class LibraryInitWizard(WizardPlugin):
         if active is None or not active.api_key:
             QMessageBox.warning(
                 self, "未配置 API Key",
-                "请先到「设置 → API」配置默认 provider 的 API Key。",
+                "请先到「设置 → API」配置默认 LLM 平台的 API Key。",
             )
             return
         try:
             provider = get_provider(active)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "Provider 创建失败", str(e))
+            QMessageBox.critical(self, "LLM 平台连接失败", str(e))
             return
 
         use_json_mode = bool(getattr(provider, "supports_json_mode", True))
+        # task #22 round 3：等待页只显示用户认得的"平台 · 模型"，不再暴露
+        # JSON 原生 / Prompt 强约束 这种内部路由模式
         self.lbl_running_mode.setText(
-            f"{active.label()} · model={active.model} · "
-            f"模式={'JSON 原生' if use_json_mode else 'Prompt 强约束'}"
+            f"{active.label()} · 模型 {active.model}"
         )
         self.stack.setCurrentIndex(PAGE_RUNNING)
 
@@ -2501,82 +2788,62 @@ class LibraryInitWizard(WizardPlugin):
         self.stack.setCurrentIndex(PAGE_PREVIEW)
 
     # ---- 预览页渲染 --------------------------------------------------------
-    _STATUS_DISPLAY = {
-        "new": ("✅ 新字段", "将创建该字段"),
-        "system_required": ("⭐ 系统必有", "保护字段，将更新 LLM 提示"),
-        "existing_user_field": ("📝 现有字段", "保留；点行操作的「删除」按钮可标记删除"),
-        "same_type": ("🔁 现有 · 同类型", "现有字段，将更新 LLM 提示"),
-        "type_conflict": (
-            "⚠ 类型冲突 · 改类型",
-            "已存在但类型不同；批准 → 把现有字段类型改成 LLM 建议的；驳回 → 保持不变",
-        ),
-        "llm_suggest_delete": (
-            "🗑 LLM 建议删除",
-            "LLM 显式建议删除该现有字段（hover 看理由）；批准 → 真删，驳回 → 保留",
-        ),
-        "llm_suggest_rename": (
-            "✎ LLM 建议改名",
-            "LLM 显式建议改名该现有字段（hover 看理由 / 新名）；"
-            "批准 → 保留 fid 改名（项目历史值不丢），驳回 → 保留原名",
-        ),
-    }
+    # task #22：原 _STATUS_DISPLAY 的"系统必有 / 现有 · 同类型 / 类型冲突 /
+    # LLM 建议改名 / LLM 建议删除"等技术分类全部抹平，由 step1_action_label()
+    # 统一输出"普通用户能直接读懂"的动作描述（新增 / 删除 / 修改 (...)）。
 
     def _render_preview(self, warnings: list[str]) -> None:
         # task #21：Step 1 只展示 LLM 实际触达的条目；纯 user-only 现有字段
         # （existing_user_field 状态）由 Step 2 编辑表承担，不在此显示
+        # task #22：has_llm_change=False 的 ann（system_required / same_type
+        # 在 LLM 没改 hint 时）也不出现，避免空动作行
+        # task #22 round 12：保留滚动位置——用户点批准/驳回后表格全量
+        # 重画（setRowCount(0)）会让 verticalScrollBar 复位到 0，长表格里
+        # 用户下滑到中间点了一条建议，整个跳回顶部很难受。先记下当前滚动
+        # 偏移，渲染完再恢复（行数若变少则被 Qt 自动 clamp 到合法范围）。
+        vbar = self.tbl.verticalScrollBar()
+        scroll_pos = vbar.value() if vbar is not None else 0
         self.tbl.setRowCount(0)
         self._step1_visible_rows = step1_visible_indices(self._suggestions)
         for row, src_idx in enumerate(self._step1_visible_rows):
             ann = self._suggestions[src_idx]
             self.tbl.insertRow(row)
 
-            # 0：LLM 建议（标签 + 批准/驳回按钮；只在有变化时显示按钮）
+            # 0：操作（批准/驳回按钮 + "已批准/已驳回" 标签；task #22 列名）
             self._make_change_cell(row, ann)
 
-            # 1：状态
-            label, default_tip = self._STATUS_DISPLAY.get(
-                ann.status, (ann.status, ""),
-            )
-            it_status = QTableWidgetItem(label)
-            it_status.setFlags(it_status.flags() & ~Qt.ItemIsEditable)
-            it_status.setToolTip(ann.reason or default_tip)
-            # existing_user_field 已在循环开头过滤掉了
-            # llm_suggest_delete：默认红字（待批准）；批准后 selected=True 也保持红字
-            # （此时表示"将真删"），更明确的标签由用户决策状态体现
-            if ann.status == "llm_suggest_delete":
-                from PySide6.QtGui import QColor
-                if ann.decision == "rejected":
-                    # task #21 round 4：驳回后保留原字段；改灰字 + 不同文案
-                    it_status.setText("🗑 LLM 建议删除（已驳回，保留中）")
-                    it_status.setForeground(QColor("#757575"))
-                else:
-                    if ann.selected:
-                        it_status.setText("🗑 将删除（已批准）")
-                    it_status.setForeground(QColor("#c62828"))
-            # llm_suggest_rename：蓝字 + 在状态文字里直接附上新名，便于一眼看到
-            elif ann.status == "llm_suggest_rename":
-                from PySide6.QtGui import QColor
-                tail = f" → {ann.llm_rename_new_name}" if ann.llm_rename_new_name else ""
-                if ann.decision == "rejected":
-                    # task #21 round 4：驳回后保留原名；灰字 + 不同文案
-                    it_status.setText(f"✎ LLM 建议改名{tail}（已驳回，保留原名）")
-                    it_status.setForeground(QColor("#757575"))
-                elif ann.selected:
-                    it_status.setText(f"✎ 将改名{tail}（已批准）")
-                    it_status.setForeground(QColor("#1565c0"))
-                else:
-                    it_status.setText(f"✎ LLM 建议改名{tail}")
-                    it_status.setForeground(QColor("#1565c0"))
-            # new：驳回后保留行（不再 del），状态列灰字提示"不创建"
-            elif ann.status == "new" and ann.decision == "rejected":
-                from PySide6.QtGui import QColor
-                it_status.setText("✅ LLM 建议新增（已驳回，不创建）")
-                it_status.setForeground(QColor("#757575"))
-            self.tbl.setItem(row, 1, it_status)
+            # 1：LLM 建议（task #22：用 step1_action_label 给出"动作描述"）
+            label_text, tooltip_text = step1_action_label(ann)
+            # rejected 灰字；其它默认主文字色（rich text 里加 span 控制）
+            if ann.decision == "rejected":
+                label_html = f"<span style='color:#757575;'>{label_text}</span>"
+            else:
+                label_html = label_text
+            lbl_action = QLabel(label_html)
+            lbl_action.setTextFormat(Qt.RichText)
+            lbl_action.setWordWrap(True)
+            lbl_action.setContentsMargins(6, 2, 6, 2)
+            lbl_action.setToolTip(tooltip_text or (ann.reason or ""))
+            self.tbl.setCellWidget(row, 1, lbl_action)
 
             # 2：字段名（task #21：Step 1 全只读，所有改动迁移到 Step 2）
-            it_name = QTableWidgetItem(ann.name)
+            # task #22 round 7：LLM 建议改名时显示**新名**（用户视角想看的是
+            # "改成什么"，不是"原本叫啥"）；rejected 时回到旧名（与
+            # _on_decision_changed 的"驳回 = 保留原名"语义一致）。
+            # tooltip 里同时给出 "原名 → 新名" 完整信息。
+            display_name = ann.name
+            name_tooltip = ""
+            if (
+                ann.status == "llm_suggest_rename"
+                and ann.llm_rename_new_name
+                and ann.decision != DECISION_REJECTED
+            ):
+                display_name = ann.llm_rename_new_name
+                name_tooltip = f"由「{ann.name}」改名而来（数据保留）"
+            it_name = QTableWidgetItem(display_name)
             it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
+            if name_tooltip:
+                it_name.setToolTip(name_tooltip)
             self.tbl.setItem(row, 2, it_name)
 
             # 3：类型（task #21：Step 1 全只读；改类型在 Step 2 进行）
@@ -2627,6 +2894,17 @@ class LibraryInitWizard(WizardPlugin):
             self.ed_preview_library_desc.setToolTip("")
         self._refresh_desc_decision_ui()
         self._refresh_round_label()
+
+        # task #22 round 12：恢复滚动位置（先同步 set 一次让显示立即跟上；
+        # 再用 QTimer.singleShot(0) 兜底——某些情况下表头/行高变化要在事件
+        # 循环下一轮才完成布局，此时再赋一次 value 才能精确命中）。Qt 自动
+        # 把超出 max 的值 clamp 回合法范围，所以行数变少时也安全。
+        if vbar is not None:
+            vbar.setValue(scroll_pos)
+            QTimer.singleShot(
+                0,
+                lambda v=scroll_pos, b=vbar: b.setValue(v),
+            )
 
     # ---- LLM 建议列辅助 ---------------------------------------------------
     _CHANGE_BG = {
@@ -2680,20 +2958,20 @@ class LibraryInitWizard(WizardPlugin):
 
         if show_buttons:
             b_ok = QPushButton("批准")
-            b_ok.setMinimumWidth(46)
-            b_ok.setFixedHeight(26)
-            b_ok.setToolTip("批准这条 LLM 建议（立即把 LLM 的 type / hint 固化到该字段）")
+            # task #22 round 1：按钮做扁（22px 高），与窄了的操作列匹配
+            b_ok.setMinimumWidth(42)
+            b_ok.setFixedHeight(22)
+            b_ok.setToolTip("批准这条 LLM 建议（立即采用 LLM 给的类型和提示）")
             b_ok.clicked.connect(
                 lambda _c=False, sidx=src_idx: self._on_decision_changed(sidx, "approved")
             )
             hl.addWidget(b_ok)
 
             b_no = QPushButton("驳回")
-            b_no.setMinimumWidth(46)
-            b_no.setFixedHeight(26)
+            b_no.setMinimumWidth(42)
+            b_no.setFixedHeight(22)
             b_no.setToolTip(
-                "驳回（立即把该字段还原到 LLM 提建议之前的状态；"
-                "新增字段会被移除，可以基于还原后的内容继续修改）"
+                "驳回这条 LLM 建议（保持原样不变；如果是 LLM 新建的字段，会标记为不创建）"
             )
             b_no.clicked.connect(
                 lambda _c=False, sidx=src_idx: self._on_decision_changed(sidx, "rejected")
@@ -2703,21 +2981,12 @@ class LibraryInitWizard(WizardPlugin):
         hl.addStretch(1)
         self.tbl.setCellWidget(row, 0, w)
 
-    def _refresh_change_cell(self, row: int) -> None:
-        """重画 Step 1 表第 ``row`` 行的"LLM 建议"单元格（task #21：行号是渲染行号）。"""
-        if not (0 <= row < len(self._step1_visible_rows)):
-            return
-        src_idx = self._step1_visible_rows[row]
-        if 0 <= src_idx < len(self._suggestions):
-            self._make_change_cell(row, self._suggestions[src_idx])
-
-    def _src_idx_to_render_row(self, src_idx: int) -> int:
-        """task #21：把 ``self._suggestions`` 的真实索引翻译回 Step 1 渲染行号。
-        没找到（被过滤掉的 existing_user_field）返回 -1。"""
-        try:
-            return self._step1_visible_rows.index(src_idx)
-        except ValueError:
-            return -1
+    # task #22 round 3：原 `_refresh_change_cell` / `_src_idx_to_render_row`
+    # 在批准 / 驳回 / hint 编辑后只刷第 0 列单元格，但 task #22 把"已批准 /
+    # 已驳回"信息从第 0 列大标签迁移到第 1 列（LLM 建议列）的文案后缀
+    # （由 step1_action_label 输出），单刷第 0 列会让第 1 列后缀直到下一次
+    # 整表重画才更新——表现为"点了批准没反应"。所有决策变更现在统一走
+    # `_render_preview([])` 全表重画，两个 helper 已不再有调用方，已删除。
 
     def _on_decision_changed(self, idx: int, decision: str) -> None:
         """批准 / 驳回按钮：**立即**把决定固化到 ann，并重画对应行。
@@ -2742,11 +3011,11 @@ class LibraryInitWizard(WizardPlugin):
 
         # toggle：再次点同一按钮 → 退回 pending（仅清掉标记；不"反向操作"，
         # 因为内容已被前一次操作改过；想恢复 LLM 建议请用弹窗里的"再次应用"）
+        # task #22 round 3：toggle 也走整表重画——第 1 列的"（已批准 / 已驳回）"
+        # 后缀需要由 _render_preview 重新生成。
         if ann.decision == decision:
             ann.decision = "pending"
-            r = self._src_idx_to_render_row(idx)
-            if r >= 0:
-                self._refresh_change_cell(r)
+            self._render_preview([])
             return
 
         if decision == "approved":
@@ -2761,13 +3030,13 @@ class LibraryInitWizard(WizardPlugin):
             # 批准 llm_suggest_rename：补 selected=True 让 action 进 rename 路径
             elif ann.status == "llm_suggest_rename":
                 ann.selected = True
-            r = self._src_idx_to_render_row(idx)
-            if r >= 0:
-                self._refresh_change_cell(r)
-            # llm_suggest_delete / llm_suggest_rename 批准/驳回会改变状态列文字
-            # （"将删除（已批准）" / "✎ 将改名 → ..."），整表重画一次更稳
-            if ann.status in ("llm_suggest_delete", "llm_suggest_rename"):
-                self._render_preview([])
+            # task #22 round 3：批准统一走整表重画。原本只对
+            # llm_suggest_delete / llm_suggest_rename 走 `_render_preview`、
+            # 其余只刷第 0 列单元格——但 task #22 后"已批准 / 已驳回"已经
+            # 通过 step1_action_label 写到第 1 列（LLM 建议列）作为文案后缀，
+            # 单刷第 0 列会导致"修改提示（已批准）"等后缀直到下一次整表重画
+            # 才更新，给用户错觉"点了批准没反应"。
+            self._render_preview([])
             return
 
         # decision == "rejected"
@@ -2797,8 +3066,14 @@ class LibraryInitWizard(WizardPlugin):
         if ann.status == "llm_suggest_rename":
             # 驳回 LLM 改名建议 → 保留原名（selected=False → action 进 keep）。
             # 同 llm_suggest_delete：不退化 status，保留 Step 1 显示与决策反馈。
+            # task #19 收尾清理：rename 路径合并改类型后，驳回时把 ann.type /
+            # ann.prompt_hint 也还原回 existing 值，保证 Step 1 / Step 2 看到
+            # 的都是"还原后"状态（与 type_conflict 驳回对称）。
             ann.selected = False
             ann.decision = "rejected"
+            if ann.existing_field_type:
+                ann.type = ann.existing_field_type
+            ann.prompt_hint = ann.existing_prompt_hint or ""
             ann.reason = (
                 "LLM 曾建议改名此字段，已被你驳回；保留原名。"
                 "下一步进入字段表后，可以在那里改名。"
@@ -2806,41 +3081,43 @@ class LibraryInitWizard(WizardPlugin):
             self._render_preview([])
             return
 
-        # 其它 status：回滚 ann 内容到 LLM 建议之前的状态
+        # 其它 status：还原 ann.prompt_hint / ann.type 到 LLM 触达之前的状态
+        # task #22 round 6：恢复"还原"语义。round 1 之前会还原，但 round 1
+        # 因为 visible 收紧到 has_llm_change 而把还原撤掉了——还原后 dims=空
+        # 行就消失。round 6 已经把 visible 改成只过 existing_user_field（保留
+        # 所有 llm_touched 的 ann，dims 空时显示"✓ 保持原样"），所以可以放心
+        # 还原。还原后用户在 Step 1 hint 列看到的就是原 hint，与"已驳回"语义
+        # 一致。merge_decisions_into_drafts 的 rejected 分支用 f.prompt_hint
+        # （现有字段原 hint），与还原后的 ann.prompt_hint 一致。
         ann.decision = "rejected"
         if ann.status in ("same_type", "system_required"):
             ann.prompt_hint = ann.existing_prompt_hint or ""
-            # 同步表格里的 LLM 提示单元格（用渲染行号）
-            r = self._src_idx_to_render_row(idx)
-            if r >= 0:
-                it_h = self.tbl.item(r, 4)
-                if it_h is not None:
-                    it_h.setText(ann.prompt_hint)
         elif ann.status == "type_conflict":
             # task #19 Phase B：驳回 type_conflict → selected=False（action 变 skip），
-            # type 回滚到现有类型，hint 还原为旧值；ann.status 仍保持
-            # "type_conflict"，但 action 已是 skip → 字段彻底不动
+            # 字段彻底不动。同时把 ann.type / ann.prompt_hint 还原为现有字段值。
             ann.selected = False
             if ann.existing_field_type:
                 ann.type = ann.existing_field_type
             ann.prompt_hint = ann.existing_prompt_hint or ""
             ann.reason = (
                 "LLM 曾建议修改此字段的类型，已被你驳回；保持不变。"
-                "如果还是想改类型，请用 Step 2 字段表里的类型下拉。"
+                "如果还是想改类型，可以在下一步的字段表里用类型下拉。"
             )
         # existing_user_field：本来就不算 LLM 建议（由用户行操作"删除"驱动），
         # 到这里只标 decision
         self._render_preview([])
 
     def _on_approve_all(self) -> None:
-        """一键把所有未决条目标为 approved（仅影响有变化的 LLM 建议）。
+        """一键把所有「未决策（pending）」的 LLM 建议标为 approved。
 
+        语义：仅影响 ``decision == "pending"`` 且确有 LLM 改动的条目；
+        已驳回（rejected）的条目保持不动，避免误覆盖用户的明确选择。
         对 ``type_conflict`` / ``llm_suggest_delete`` / ``llm_suggest_rename``
         同步把 ``selected`` 提到 True。
         库描述如果 LLM 改过且尚未决策，也一并标为 approved。
         """
         for ann in self._suggestions:
-            if ann.has_llm_change and ann.decision != "approved":
+            if ann.has_llm_change and ann.decision == "pending":
                 ann.decision = "approved"
                 if ann.status in (
                     "type_conflict",
@@ -3028,11 +3305,11 @@ class LibraryInitWizard(WizardPlugin):
     # ---- task #21：Step 2 视图渲染 ---------------------------------------
     _ORIGIN_BADGE = {
         DRAFT_ORIGIN_EXISTING: ("📋 现有", "原本就存在的字段"),
-        DRAFT_ORIGIN_LLM_NEW: ("🤖 LLM 新增", "Step 1 批准的 LLM 新增建议"),
-        DRAFT_ORIGIN_LLM_RENAMED: ("✏ LLM 改名", "Step 1 批准的 LLM 改名建议"),
-        DRAFT_ORIGIN_LLM_TYPECHANGED: ("⚠ LLM 改类型", "Step 1 批准的 LLM 改类型建议"),
-        DRAFT_ORIGIN_LLM_DELETED: ("🗑 LLM 标删", "Step 1 批准的 LLM 删除建议"),
-        DRAFT_ORIGIN_USER_NEW: ("👤 新增", "你在 Step 2 添加的新字段"),
+        DRAFT_ORIGIN_LLM_NEW: ("🤖 LLM 新增", "上一步批准的 LLM 新增建议"),
+        DRAFT_ORIGIN_LLM_RENAMED: ("✏ LLM 改名", "上一步批准的 LLM 改名建议"),
+        DRAFT_ORIGIN_LLM_TYPECHANGED: ("⚠ LLM 改类型", "上一步批准的 LLM 改类型建议"),
+        DRAFT_ORIGIN_LLM_DELETED: ("🗑 LLM 标删", "上一步批准的 LLM 删除建议"),
+        DRAFT_ORIGIN_USER_NEW: ("👤 新增", "你在这一步自己添加的新字段"),
     }
 
     def _render_step2_table(self) -> None:
@@ -3046,7 +3323,7 @@ class LibraryInitWizard(WizardPlugin):
             for row, d in enumerate(self._drafts):
                 tbl.insertRow(row)
 
-                # 0：来源徽章
+                # 0：状态徽章
                 badge, badge_tip = self._ORIGIN_BADGE.get(
                     d.origin, (d.origin, ""),
                 )
@@ -3056,7 +3333,9 @@ class LibraryInitWizard(WizardPlugin):
                 tbl.setItem(row, 0, it_badge)
 
                 # 1：字段名
-                it_name = QTableWidgetItem(d.name)
+                # task #22：划删线行字段名前加 🗑 前缀，作为状态列被删后的视觉补偿
+                display_name = f"🗑 {d.name}" if d.deleted else d.name
+                it_name = QTableWidgetItem(display_name)
                 # 受保护字段（is_required=True）不可改名；划删线行也不可改名
                 is_protected = self._draft_is_protected(d)
                 if is_protected or d.deleted:
@@ -3108,7 +3387,7 @@ class LibraryInitWizard(WizardPlugin):
                     )
                     op_h.addWidget(b_undo)
                 elif is_protected:
-                    lbl = QLabel("（受保护）")
+                    lbl = QLabel("（系统保留）")
                     lbl.setStyleSheet("color:#999;")
                     op_h.addWidget(lbl)
                 else:
@@ -3121,15 +3400,6 @@ class LibraryInitWizard(WizardPlugin):
                     op_h.addWidget(b_del)
                 op_h.addStretch(1)
                 tbl.setCellWidget(row, 4, op_w)
-
-                # 5：状态徽章 / 提示（用于划删线行的额外说明）
-                if d.deleted:
-                    it_st = QTableWidgetItem("🗑 将删除")
-                    it_st.setForeground(QColor("#c62828"))
-                else:
-                    it_st = QTableWidgetItem("")
-                it_st.setFlags(it_st.flags() & ~Qt.ItemIsEditable)
-                tbl.setItem(row, 5, it_st)
 
                 # 划删线行：所有 cell 灰化
                 if d.deleted:
@@ -3381,14 +3651,12 @@ class LibraryInitWizard(WizardPlugin):
         self._render_step2_table()
 
     def _on_step2_move(self, delta: int) -> None:
-        """上下移当前选中行（task #21 阶段 B 补丁）。
+        """上下移当前选中行。
 
-        约束（与旧 ``_on_preview_row_move`` 一致）：
-        - 受保护字段（``_draft_is_protected``，即 ``is_required=True``）
-          始终保持在最前；不允许移动它们，也不允许其它字段越过它们
-          （target 不能落到受保护字段区段里）
-        - 划删线行（``deleted=True``）也可以参与排序——它们最后会被删除，
-          但调序不影响应用结果，保留行为简单
+        task #22 round 5：移除原有受保护字段（is_required=title/description/tags）
+        相关的两条移动限制，与「设置 → 字段」面板和现有字段编辑面板对齐
+        （那两个面板对受保护字段没有任何排序限制）。划删线行也可以参与
+        排序——它们最后会被删除，但调序不影响应用结果。
         """
         r = self.tbl_step2.currentRow()
         if r < 0 or r >= len(self._drafts):
@@ -3399,19 +3667,6 @@ class LibraryInitWizard(WizardPlugin):
             return
         target = r + delta
         if target < 0 or target >= len(self._drafts):
-            return
-        moving = self._drafts[r]
-        if self._draft_is_protected(moving):
-            QMessageBox.information(
-                self, "无法移动",
-                "受保护字段（标题 / 描述 / 标签）固定在最前，无法重排。",
-            )
-            return
-        if self._draft_is_protected(self._drafts[target]):
-            QMessageBox.information(
-                self, "无法移动",
-                "不能越过受保护字段（标题 / 描述 / 标签）；其余字段必须排在其后。",
-            )
             return
         self._drafts[r], self._drafts[target] = (
             self._drafts[target], self._drafts[r],
@@ -3424,8 +3679,8 @@ class LibraryInitWizard(WizardPlugin):
         if self._drafts_dirty():
             ret = QMessageBox.question(
                 self, "确认返回",
-                "返回会丢弃当前在字段表里做的所有修改（增/删/改名/改类型/改提示）。\n"
-                "Step 1 里对 LLM 建议的批准/驳回决策会保留。\n\n"
+                "返回会丢弃你在字段表里做的所有修改（增/删/改名/改类型/改提示）。\n"
+                "上一步对 LLM 建议的批准/驳回会保留。\n\n"
                 "确认返回？",
                 QMessageBox.Cancel | QMessageBox.Yes,
                 QMessageBox.Cancel,
