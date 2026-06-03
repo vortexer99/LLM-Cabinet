@@ -8,6 +8,10 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+---
+
+## [0.3.0] - 2026-06-04
+
 📦 schema v3 → v4 — 废弃系统字段的 `projects` 列分流（task #20）：把
 `projects.{author,date,source_url,rating}` 4 列的值搬到
 `project_field_values` 后 DROP COLUMN。`fields.key` 中的 `author/date/
@@ -414,7 +418,6 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
   - **`QGroupBox` 终于有显式 stylesheet**（`app/ui/theme.py` 浅 / 深两套都补）：之前两套 QSS 都漏了 `QGroupBox`，Qt fusion 给的默认 panel 在深色窗口上叠加成"白条遮住组标题 + 内部 form label"的诡异效果（设置 → API 里每个 provider GroupBox 标签那一行都被遮住）。现在显式给 `QGroupBox` 透明背景 + palette 协调的边框 + `::title` 用窗口色背景悬浮，浅 / 深都干净。
 - **启动期未捕获异常 crash logger**（`app/main.py::_install_crash_logger`）：装一个全局 `sys.excepthook`，把任何未被 except 抓住的异常追加到 `%APPDATA%/LLMCabinet/crash.log`（含时间戳 + traceback），并尝试弹 QMessageBox 提示用户。专治 PyInstaller GUI 子系统 / 双击 .pyw / IDE 静默吞 stderr 等"窗口悄悄消失"场景。注：仅捕 Python 层异常；Qt 内部 `qFatal` / abort / segfault 仍然不会触发本钩子（那种情况只能靠 Windows 事件查看器或 PyInstaller debug 模式抓）。
 
-### Added
 - **新建库 onboarding（task #15 T1/T2/T3）**：把"新建库"从一次性技术操作（选目录→起名→重启）升级为带入门引导的多步流程。
   - **T1 多页向导**（`app/ui/wizards/new_library_wizard.py`）：第 1 页选目录 + 名称、第 2 页库描述、第 3 页默认字段（必有字段标题/描述/标签都列出，描述/标签的「列表显示」可在向导里直接勾选；可选默认字段作者 / 日期 / 评分 / 来源每个独立配「列表显示」复选框）、第 4 页（仅当已有其它库时）「从其它库迁移 API 配置」（**不迁移 / 仅 LLM 配置 / 全部迁移** 三档单选放在源库选择器上方；源库选择器为近期库下拉 + 末项「📂 浏览其它库目录...」，浏览要求目录含 `.llm-cabinet` 标记，选中的非已知库目录会插入到下拉里）。每页底部不再有「跳过」按钮（「下一步」对空内容已直通，语义重复）；描述页提示从底部合并到顶部，明确写出"用于备忘 + 发给 LLM 参考，也可暂时留空"。**晚建语义**（D1）：1~4 页只收集表单数据，最后一步「创建库」按钮才一次性原子化建库（mark + connect + seed + 应用必有字段可见性 + 加可选字段 + 写描述 + **写 `default_view_mode="list"`**（新建库默认列表视图，与「列表显示」复选框心智一致；既有库全局 fallback 仍 `"grid"`）+ 迁移 API），任意页取消零副作用；中途出错自动 `rmtree(root)` 回滚。
   - **「库 → 从其它库导入 API 配置...」菜单同步统一**：原本是 `getOpenFileName(*.db)` 裸选 db 文件，现改为与新建库向导第 4 页一致的"近期库下拉 + 「📂 浏览其它库目录...」末项"对话框，浏览选目录而非 db 文件，识别同样依赖 `.llm-cabinet` 标记。两处入口"心智模型 = 选库目录"统一。
@@ -506,7 +509,6 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
     并在状态列标注"更新版本生成"）
 - 标签自动创建：导入项目时碰到库内不存在的标签会**直接创建**（沿用 Repository 现有行为）。
 
-### Changed
 - ⚠️ **「默认库」概念彻底取消 + 启动期 Welcome 兜底**：`%APPDATA%/LLMCabinet/` 不再被视作"自动登记的默认库"，仅作为软件全局配置（`cabinet.json` 及其备份）的存放点。具体行为：
   - **空配置** = 空配置：`CabinetConfig._default()` 不再自动塞一条"(默认库)"到 `recent_libraries`；`active_library = None`，`recent_libraries = []`。第一次安装、`cabinet.json` 损坏后回退、用户在主界面把所有库都"删除整个库"了——这三种情况下都进入空配置
   - **启动期 Welcome 兜底**（`app/main.py:_resolve_active_library_root`）：active 不可用 + 没有任何可降级的有效 recent → 弹 Welcome 让用户重新选；上次 active 失效但有具体路径时 Welcome 顶部显示「⚠ 上次打开的库已不可用：&lt;path&gt;」红字提示
@@ -523,9 +525,6 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
 
 ### Fixed
 - `app/utils.py` 中 `human_size()` 重复定义了两次（前者支持 `int|float` 与浮点格式化，后者只 `int` 且会修改入参）。删除后者，仅保留前者。
-
-### Deprecated
--
 
 ### Removed
 -
@@ -604,6 +603,7 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
 
 📦 schema v1 — 初始 schema，无需迁移。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.3.0
 [0.2.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.1.0
