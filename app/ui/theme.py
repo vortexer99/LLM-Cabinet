@@ -109,6 +109,10 @@ QScrollArea#AppScrollArea {
 QWidget#ApiScrollHost {
     background: #1a1b1e;
 }
+/* 通用 ScrollArea 内部容器（项目元数据编辑、库字段设计助手等都用 AppScrollHost） */
+QWidget#AppScrollHost {
+    background: #1a1b1e;
+}
 
 
 
@@ -457,6 +461,9 @@ QScrollArea#AppScrollArea {
     border: none;
 }
 QWidget#ApiScrollHost {
+    background: #ffffff;
+}
+QWidget#AppScrollHost {
     background: #ffffff;
 }
 

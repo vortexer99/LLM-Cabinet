@@ -1007,6 +1007,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import (
             QFileDialog, QMessageBox, QProgressDialog,
         )
+        from ..cabinet import scan_library_for_deletion
         from ..library_check import backup_library
         from datetime import datetime as _dt
         from pathlib import Path as _Path
@@ -1015,14 +1016,41 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "不可用", "当前库目录未知，无法备份。")
             return
 
-        # 默认文件名：<libname>-YYYYMMDD-HHMMSS.zip
+        # 扫一下目录里的"外来内容"（用户自己放进去的非库文件），
+        # 让用户决定要不要一并打包；默认包含
+        scan = scan_library_for_deletion(_Path(self.library_root))
+        include_foreign = True
+        if scan.foreign:
+            ans = QMessageBox.question(
+                self, "目录里有外来文件",
+                "当前库目录下还有 "
+                f"<b>{len(scan.foreign)}</b> 项不是库自身的内容"
+                f"（约 {_human_size(scan.foreign_size)}）：\n\n"
+                + "\n".join(
+                    f"  • {p.name}" for p in scan.foreign[:8]
+                )
+                + (f"\n  ……还有 {len(scan.foreign) - 8} 项"
+                   if len(scan.foreign) > 8 else "")
+                + "\n\n是否一并打包到备份 zip？\n\n"
+                "<b>是</b>：得到完整目录快照（推荐——恢复后能拿回这些文件）\n"
+                "<b>否</b>：只打包库自身（cabinet.db / library/ / 标记文件等），"
+                "备份体积更小",
+                QMessageBox.Yes | QMessageBox.No | QMessageBox.Cancel,
+                QMessageBox.Yes,
+            )
+            if ans == QMessageBox.Cancel:
+                return
+            include_foreign = (ans == QMessageBox.Yes)
+
+        # 默认文件名：<libname>-YYYYMMDD-HHMMSS[-slim].zip
         handle = (
             self.cabinet_config.find(self.library_root)
             if self.cabinet_config else None
         )
         label = handle.display_name if handle else _Path(self.library_root).name
         ts = _dt.now().strftime("%Y%m%d-%H%M%S")
-        default_name = f"{label}-{ts}.zip"
+        slim_tag = "" if include_foreign else "-slim"
+        default_name = f"{label}-{ts}{slim_tag}.zip"
         last_dir = self.repo.get_setting("last_backup_dir", "") or str(_Path.home())
         target, _ = QFileDialog.getSaveFileName(
             self, "选择备份保存位置",
@@ -1044,7 +1072,10 @@ class MainWindow(QMainWindow):
         prog.setMinimumDuration(0)
         prog.show()
         try:
-            out = backup_library(_Path(self.library_root), _Path(target))
+            out = backup_library(
+                _Path(self.library_root), _Path(target),
+                include_foreign=include_foreign,
+            )
         except Exception as e:
             prog.close()
             QMessageBox.critical(self, "备份失败", str(e))
@@ -1298,10 +1329,13 @@ class MainWindow(QMainWindow):
         splitter.addWidget(left)
         splitter.addWidget(center)
         splitter.addWidget(right)
-        splitter.setStretchFactor(0, 0)
-        splitter.setStretchFactor(1, 1)
-        splitter.setStretchFactor(2, 1)
-        splitter.setSizes([220, 520, 600])
+        # 默认宽度比 = 1 : 4 : 2（标签栏 : 项目栏 : 文件预览栏）
+        # stretchFactor 控制窗口缩放时三栏的拉伸比例；setSizes 给初始
+        # 绝对值（按窗口默认宽 1400 算 200 / 800 / 400 = 1:4:2）
+        splitter.setStretchFactor(0, 1)
+        splitter.setStretchFactor(1, 4)
+        splitter.setStretchFactor(2, 2)
+        splitter.setSizes([200, 800, 400])
         splitter.setHandleWidth(1)
 
         root = QWidget()

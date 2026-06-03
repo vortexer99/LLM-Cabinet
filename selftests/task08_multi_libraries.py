@@ -31,6 +31,7 @@ from app.cabinet import (
     delete_library_all, delete_library_owned_only,
     import_settings_from_other_db, is_empty_or_safe_for_library, is_library_dir,
     mark_as_library, resolve_library_paths, scan_library_for_deletion,
+    validate_library_path,
 )
 from app.db import connect
 from app.repository import Repository
@@ -234,6 +235,54 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     hidden.mkdir()
     (hidden / ".gitignore").write_text("*", encoding="utf-8")
     t.assert_eq("仅含隐藏文件 → 仍 safe", is_empty_or_safe_for_library(hidden), True)
+
+    # ----------------------------------------------------------------
+    # 阶段 5.5：validate_library_path（新建库路径合法性）
+    # ----------------------------------------------------------------
+    # 通过的：tmp 下的子目录（绝对路径 / 父目录存在）
+    t.assert_eq(
+        "tmp 子目录通过",
+        validate_library_path(tmp / "new_lib_a"), None,
+    )
+    # 已存在的目录也允许（内容由 is_empty_or_safe_for_library 把关）
+    t.assert_eq(
+        "已存在目录通过",
+        validate_library_path(tmp), None,
+    )
+
+    # 相对路径 → 拒
+    rel = Path("relative/path")
+    err_rel = validate_library_path(rel)
+    t.assert_true("相对路径被拒", err_rel is not None and "绝对路径" in err_rel)
+
+    # 父目录不存在 → 拒
+    err_no_parent = validate_library_path(tmp / "nope_a" / "nope_b" / "leaf")
+    t.assert_true(
+        "父目录不存在被拒",
+        err_no_parent is not None and "上层目录不存在" in err_no_parent,
+    )
+
+    # Windows 平台特定：盘符根 / 系统保护目录 / 非法字符
+    import sys as _sys
+    if _sys.platform == "win32":
+        # 盘符根
+        err_drive = validate_library_path(Path("C:/"))
+        t.assert_true(
+            "盘符根被拒",
+            err_drive is not None and "盘符根目录" in err_drive,
+        )
+        # 系统保护目录
+        err_win = validate_library_path(Path(r"C:\Windows"))
+        t.assert_true(
+            "C:\\Windows 被拒",
+            err_win is not None and "库根目录" in err_win,
+        )
+        # 非法字符
+        err_bad = validate_library_path(Path(r"D:\Lib<bad>"))
+        t.assert_true(
+            "含 <> 被拒",
+            err_bad is not None and "特殊字符" in err_bad,
+        )
 
     # ----------------------------------------------------------------
     # 阶段 6：resolve_library_paths

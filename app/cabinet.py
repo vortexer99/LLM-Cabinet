@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shutil
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -261,6 +263,78 @@ def is_empty_or_safe_for_library(root: Path) -> bool:
     return True
 
 
+# Windows 路径里不允许的字符（盘符 ":" 例外，但用户手输 "C:\..." 是合法的）
+_WIN_BAD_CHARS = '<>"|?*'
+
+
+def validate_library_path(root: Path) -> Optional[str]:
+    """检查给定路径是否适合作为新库的根目录。
+
+    返回 ``None`` 表示通过；否则返回**面向用户**的错误描述（中文，不带技术黑话）。
+
+    覆盖：
+    - 必须是绝对路径
+    - 不能是盘符根 / 系统保护目录（防灾难性删除）
+    - 不允许 Windows 非法字符（``<>"|?*``）
+    - 父目录必须存在（或路径本身已存在）
+
+    内容相关检查（目录非空 / 已是其它库 / 已在 recent 列表）由调用方
+    与 ``is_empty_or_safe_for_library`` 共同把关，本函数不重复。
+    """
+    root = Path(root)
+    s = str(root)
+
+    # 绝对路径
+    if not root.is_absolute():
+        return "请填写完整的绝对路径（例如 D:/Libraries/papers）。"
+
+    # Windows 非法字符（仅检查盘符之后的部分，盘符 "C:" 里的冒号合法）
+    tail = s
+    if sys.platform == "win32" and len(s) >= 2 and s[1] == ":":
+        tail = s[2:]
+    for ch in _WIN_BAD_CHARS:
+        if ch in tail:
+            return f"路径里不能包含特殊字符：{_WIN_BAD_CHARS}"
+    # 冒号在盘符之外的位置也是非法的
+    if sys.platform == "win32" and ":" in tail:
+        return "路径里冒号只能用在盘符（如 C:/）。"
+
+    # 盘符根（C:\、D:\ ...）—— 直接拿盘符当库根太危险
+    try:
+        if root.parent == root:
+            return "请不要直接选盘符根目录；建议在盘符下新建子目录作为库根。"
+    except OSError:
+        pass
+
+    # 系统保护目录：精确匹配几个高危位置 + 它们就是库根的情况；
+    # 子目录（如 C:/Users/<name>/Documents/...）不拦
+    if sys.platform == "win32":
+        protected = {
+            Path(os.environ.get("SystemRoot", r"C:\Windows")),
+            Path(os.environ.get("ProgramFiles", r"C:\Program Files")),
+            Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")),
+            Path(r"C:\Users"),
+        }
+        try:
+            r = root.resolve()
+            for prot in protected:
+                if r == prot.resolve():
+                    return f"不允许把 {prot} 直接当作库根目录。"
+        except OSError:
+            pass
+
+    # 父目录必须存在（已存在的 root 不要求）
+    if not root.exists():
+        parent = root.parent
+        if not parent.exists() or not parent.is_dir():
+            return (
+                f"上层目录不存在：{parent}\n"
+                "请先创建上层目录，或选一个已存在的位置。"
+            )
+
+    return None
+
+
 def mark_as_library(root: Path) -> None:
     """在库根目录写入 ``.llm-cabinet`` 标记文件。"""
     root = Path(root)
@@ -466,6 +540,7 @@ __all__ = [
     "resolve_library_paths",
     "is_library_dir",
     "is_empty_or_safe_for_library",
+    "validate_library_path",
     "mark_as_library",
     "scan_library_for_deletion",
     "delete_library_owned_only",

@@ -145,14 +145,32 @@ def backup_library(
     library_root: Path,
     target_zip: Path,
     *,
+    include_foreign: bool = True,
     progress: Callable[[int, int, str], None] | None = None,
 ) -> Path:
-    """把整个库目录打成 zip。
+    """把库目录打成 zip。
 
     返回最终 zip 路径（带 .zip 后缀）。target_zip 不带 .zip 时自动加上。
     用户负责事先关闭 LLM worker 与 db connection 以避免锁问题（建议主调用方
     用『让用户先关闭应用 → 在外部跑此函数』；GUI 内嵌调用方需先 PRAGMA wal_checkpoint）。
+
+    内容控制：
+    - **始终跳过** ``cabinet.json`` 等"软件全局配置"（``_is_app_global_entry``）：
+      这些文件只在库根 == ``%APPDATA%/LLMCabinet/`` 的历史场景下才会出现，
+      不属于任一库的内容，备份带上反而会污染恢复目标
+    - ``include_foreign=False``（默认 True）时还会跳过"用户外来内容"
+      （非 ``_is_library_owned_entry``、非 ``_is_app_global_entry`` 的顶层条目），
+      产出"瘦身"备份（只含 cabinet.db / library/ / .llm-cabinet 等）
+    - zip 内根目录名 = ``library_root.name``（与 ``shutil.make_archive`` 对齐，
+      保证 ``restore_library`` 能正确识别"包裹一层"的 zip 结构）
+
+    progress 回调签名 ``(current, total, name) -> None``：``current/total`` 都是
+    粗略文件计数，``name`` 是当前文件名。
     """
+    import zipfile
+    # 在函数内部 import 同包内的 helper，避免文件顶部循环依赖
+    from .cabinet import _is_app_global_entry, _is_library_owned_entry
+
     library_root = Path(library_root)
     if not library_root.is_dir():
         raise NotADirectoryError(f"库目录不存在：{library_root}")
@@ -160,25 +178,67 @@ def backup_library(
     target_zip = Path(target_zip)
     if target_zip.suffix.lower() != ".zip":
         target_zip = target_zip.with_suffix(target_zip.suffix + ".zip")
-
     target_zip.parent.mkdir(parents=True, exist_ok=True)
-    base = target_zip.with_suffix("")  # shutil.make_archive 自己加扩展名
 
-    # 临时重定向：让 shutil.make_archive 把整个目录打包，根目录名 = library_root.name
-    parent = library_root.parent
     base_name_in_zip = library_root.name
-    out = shutil.make_archive(
-        base_name=str(base),
-        format="zip",
-        root_dir=str(parent),
-        base_dir=base_name_in_zip,
-    )
-    if progress is not None:
-        try:
-            progress(1, 1, target_zip.name)
-        except Exception:
-            pass
-    return Path(out)
+
+    # 第一遍：决定要不要把每个顶层条目纳入备份
+    selected_top: list[Path] = []
+    try:
+        for p in library_root.iterdir():
+            if _is_app_global_entry(p.name):
+                continue  # 软件全局：永不备份（防孤儿）
+            if _is_library_owned_entry(p.name):
+                selected_top.append(p)
+                continue
+            # 其它都是 foreign（用户外来内容）
+            if include_foreign:
+                selected_top.append(p)
+    except OSError as e:
+        raise RuntimeError(f"扫描库目录失败：{e}") from e
+
+    # 第二遍：递归收集所有要打包的文件，记录 zip 内 arcname；
+    # 同时记录"空目录"以保留与 shutil.make_archive 一致的目录结构（restore
+    # 端有断言依赖空 library/ 等子目录的存在）
+    files_to_pack: list[tuple[Path, str]] = []
+    empty_dirs: list[str] = []
+    for top in selected_top:
+        if top.is_file():
+            arc = f"{base_name_in_zip}/{top.name}"
+            files_to_pack.append((top, arc))
+        elif top.is_dir():
+            had_any = False
+            for sub in top.rglob("*"):
+                if sub.is_file():
+                    rel = sub.relative_to(library_root).as_posix()
+                    arc = f"{base_name_in_zip}/{rel}"
+                    files_to_pack.append((sub, arc))
+                    had_any = True
+            if not had_any:
+                # 空目录：写一条目录条目占位
+                rel = top.relative_to(library_root).as_posix()
+                empty_dirs.append(f"{base_name_in_zip}/{rel}/")
+
+    total = len(files_to_pack)
+    with zipfile.ZipFile(
+        target_zip, "w", compression=zipfile.ZIP_DEFLATED,
+    ) as zf:
+        for arc in empty_dirs:
+            # ZipInfo 名字以 "/" 结尾被解释为目录条目
+            zf.writestr(zipfile.ZipInfo(arc), "")
+        for i, (src, arc) in enumerate(files_to_pack, 1):
+            try:
+                zf.write(src, arcname=arc)
+            except OSError:
+                # 单个文件读不到（被占用 / 权限）→ 跳过，继续打包剩下的
+                continue
+            if progress is not None:
+                try:
+                    progress(i, total, src.name)
+                except Exception:
+                    pass
+
+    return target_zip
 
 
 def restore_library(
@@ -231,8 +291,14 @@ def restore_library(
             raise ValueError(
                 f"备份 zip 内未找到 cabinet.db，可能不是有效的 LLM Cabinet 备份"
             )
-        # 把 chosen 内容搬到 target_root
+        # 把 chosen 内容搬到 target_root；
+        # 跳过 cabinet.json 等"软件全局配置"——老备份（库建在 appdata 时）
+        # 会把全局配置一起打包，搬到新位置就成了孤儿，后续删除/扫描时会
+        # 困扰用户（被识别为 app_global 不删）。源头清理，restore 直接丢弃。
+        from .cabinet import _is_app_global_entry
         for item in chosen.iterdir():
+            if _is_app_global_entry(item.name):
+                continue
             shutil.move(str(item), str(target_root / item.name))
 
     return target_root

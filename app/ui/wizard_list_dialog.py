@@ -53,10 +53,12 @@ class WizardListDialog(QDialog):
         ))
 
         scroll = QScrollArea()
+        scroll.setObjectName("AppScrollArea")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         v.addWidget(scroll, 1)
         host = QWidget()
+        host.setObjectName("AppScrollHost")
         scroll.setWidget(host)
         self.lay = QVBoxLayout(host)
         self.lay.setContentsMargins(0, 0, 0, 0)

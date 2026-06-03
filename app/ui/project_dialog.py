@@ -128,6 +128,7 @@ class ProjectDialog(QDialog):
                 self._suggestions[s.field_id] = s
 
         body = QWidget()
+        body.setObjectName("AppScrollHost")  # 跟随 dialog 背景，避免滚动区出现白条
         body_l = QVBoxLayout(body)
         body_l.setContentsMargins(0, 0, 0, 0)
         body_l.setSpacing(10)
@@ -214,6 +215,7 @@ class ProjectDialog(QDialog):
         body_l.addStretch(1)
 
         scroll = QScrollArea()
+        scroll.setObjectName("AppScrollArea")  # 让 theme.py 给它上深/浅色背景
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setWidget(body)

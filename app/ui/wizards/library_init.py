@@ -3861,10 +3861,12 @@ class _BatchDeleteConfirmDialog(QDialog):
 
         # 滚动区域：字段多时不会撑爆窗口
         scroll = QScrollArea()
+        scroll.setObjectName("AppScrollArea")
         scroll.setWidgetResizable(True)
         from PySide6.QtWidgets import QFrame
         scroll.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
+        inner.setObjectName("AppScrollHost")
         iv = QVBoxLayout(inner)
         iv.setContentsMargins(0, 0, 0, 0)
         iv.setSpacing(8)
@@ -3997,10 +3999,12 @@ class _BatchTypeChangeConfirmDialog(QDialog):
         v.addWidget(head)
 
         scroll = QScrollArea()
+        scroll.setObjectName("AppScrollArea")
         scroll.setWidgetResizable(True)
         from PySide6.QtWidgets import QFrame
         scroll.setFrameShape(QFrame.NoFrame)
         inner = QWidget()
+        inner.setObjectName("AppScrollHost")
         iv = QVBoxLayout(inner)
         iv.setContentsMargins(0, 0, 0, 0)
         iv.setSpacing(6)

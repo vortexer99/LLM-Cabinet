@@ -55,6 +55,7 @@ from ...cabinet import (
     is_empty_or_safe_for_library,
     mark_as_library,
     resolve_library_paths,
+    validate_library_path,
 )
 from ...db import OPTIONAL_DEFAULT_FIELDS, connect as db_connect
 
@@ -441,6 +442,11 @@ class NewLibraryWizard(QDialog):
             QMessageBox.warning(self, "请输入路径", "请先选一个库目录。")
             return False
         root = Path(path_str)
+        # 路径合法性（绝对路径 / 非法字符 / 系统保护目录 / 父目录存在 等）
+        err = validate_library_path(root)
+        if err is not None:
+            QMessageBox.warning(self, "路径不合适", err)
+            return False
         if not is_empty_or_safe_for_library(root):
             QMessageBox.warning(
                 self, "目录不可用",

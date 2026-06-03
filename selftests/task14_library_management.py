@@ -182,6 +182,59 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     t.assert_true("备份 zip 大小 > 0", backup_zip.stat().st_size > 0)
 
     # ----------------------------------------------------------------
+    # 阶段 7.5：backup_library 的 include_foreign / 跳过 app_global
+    # ----------------------------------------------------------------
+    # 在原库目录里加 foreign + app_global
+    (real_lib_root / "user_note.md").write_text("hi", encoding="utf-8")
+    (real_lib_root / "cabinet.json").write_text(
+        '{"active_library": ""}', encoding="utf-8",
+    )
+
+    import zipfile as _zipfile
+    # 默认 include_foreign=True
+    fat_zip = backup_library(real_lib_root, tmp / "fat.zip")
+    with _zipfile.ZipFile(fat_zip) as zf:
+        names = {n for n in zf.namelist()}
+    t.assert_true(
+        "默认（include_foreign=True）打包外来文件",
+        any(n.endswith("/user_note.md") for n in names),
+    )
+    t.assert_true(
+        "始终跳过软件全局 cabinet.json",
+        not any(n.endswith("/cabinet.json") for n in names),
+    )
+    t.assert_true(
+        "默认含 cabinet.db",
+        any(n.endswith("/cabinet.db") for n in names),
+    )
+
+    # include_foreign=False：瘦身
+    slim_zip = backup_library(
+        real_lib_root, tmp / "slim.zip", include_foreign=False,
+    )
+    with _zipfile.ZipFile(slim_zip) as zf:
+        slim_names = {n for n in zf.namelist()}
+    t.assert_true(
+        "瘦身备份不含外来文件",
+        not any(n.endswith("/user_note.md") for n in slim_names),
+    )
+    t.assert_true(
+        "瘦身备份仍跳过 cabinet.json",
+        not any(n.endswith("/cabinet.json") for n in slim_names),
+    )
+    t.assert_true(
+        "瘦身备份仍含 cabinet.db",
+        any(n.endswith("/cabinet.db") for n in slim_names),
+    )
+    t.assert_true(
+        "瘦身备份比完整备份小",
+        slim_zip.stat().st_size < fat_zip.stat().st_size,
+    )
+    # 清理"污染"，免得阶段 8 受干扰
+    (real_lib_root / "user_note.md").unlink()
+    (real_lib_root / "cabinet.json").unlink()
+
+    # ----------------------------------------------------------------
     # 阶段 8：restore_library
     # ----------------------------------------------------------------
     restore_target = tmp / "restored"
@@ -201,6 +254,29 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     t.assert_in("恢复后字段定义还在", "ISBN", field_names)
     titles = {p.title for p in restored_repo.list_projects()}
     t.assert_in("恢复后项目还在", "背包样本", titles)
+
+    # ----------------------------------------------------------------
+    # 阶段 8.5：restore 时跳过老 zip 里夹带的 cabinet.json（防孤儿）
+    # ----------------------------------------------------------------
+    # 模拟"老备份 zip"——库根 == appdata 时 backup 把 cabinet.json 一起打包
+    legacy_src = tmp / "legacy_lib"
+    legacy_src.mkdir()
+    (legacy_src / ".llm-cabinet").write_text("")
+    (legacy_src / "cabinet.db").write_bytes(b"x" * 32)
+    (legacy_src / "cabinet.json").write_text('{"active_library": ""}',
+                                             encoding="utf-8")
+    (legacy_src / "user_note.md").write_text("u", encoding="utf-8")
+    legacy_zip = backup_library(legacy_src, tmp / "legacy_backup.zip")
+    legacy_target = tmp / "legacy_restored"
+    restore_library(legacy_zip, legacy_target)
+    t.assert_true("legacy 恢复后含 cabinet.db",
+                  (legacy_target / "cabinet.db").is_file())
+    t.assert_true("legacy 恢复后保留外来文件 user_note.md",
+                  (legacy_target / "user_note.md").is_file())
+    t.assert_eq(
+        "legacy 恢复时 cabinet.json 被丢弃（孤儿不进新库）",
+        (legacy_target / "cabinet.json").exists(), False,
+    )
 
     # ----------------------------------------------------------------
     # 阶段 9：错误兜底
