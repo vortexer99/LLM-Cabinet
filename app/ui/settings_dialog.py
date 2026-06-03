@@ -162,6 +162,15 @@ class SettingsDialog(QDialog):
         self.cmb_theme.currentIndexChanged.connect(self._on_theme_changed)
         form.addRow("主题：", self.cmb_theme)
 
+        # 主题维护规划提示：v0.3.x 之后不再维护深色模式（精力 + 经费有限）。
+        note = QLabel(
+            "说明：受精力与经费所限，v0.3.x 之后的版本将不再继续维护深色模式，"
+            "届时仅保留浅色主题。"
+        )
+        note.setWordWrap(True)
+        note.setProperty("hint", True)
+        form.addRow("", note)
+
         lay.addWidget(gb)
 
         # LLM 助手对话轮数曾在此页（task #11 T3 决策 2b）；2026-06-02 起搬到「API」页，
