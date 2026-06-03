@@ -34,13 +34,19 @@
 
 <table>
   <tr>
-    <td align="center" width="62%">
+    <td align="center" colspan="2">
       <img src="docs/screenshots/main-window.png" alt="主界面" />
       <br/><sub>主界面：标签筛选 · 项目列表 · 预览与文件表</sub>
     </td>
-    <td align="center" width="38%">
+  </tr>
+  <tr>
+    <td align="center" width="50%">
       <img src="docs/screenshots/project-edit-llm-suggest.png" alt="项目元数据编辑对话框含 LLM 建议" />
       <br/><sub>项目编辑对话框，逐字段展示 LLM 建议（✓ 应用 / ✗ 驳回）</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/setup-wizard.jpg" alt="库字段设计助手" />
+      <br/><sub>库字段设计助手：Step 1 审阅 LLM 建议 ↔ Step 2 编辑应用后的字段表</sub>
     </td>
   </tr>
 </table>
@@ -48,7 +54,8 @@
 ## 特性
 
 - **项目化组织**：一个项目对应一组相关文件，每个文件可独立填写说明（如"中文版"、"第一页"）
-- **字段系统**：标题 / 作者 / 日期 / 评分 / 来源 / 标签 / 描述 等内置字段；可自由增删、排序、隐藏，并自定义类型（文本/多行/日期/URL/评分/数字）
+- **字段系统**：每个库默认 seed 3 个受保护字段——标题 / 标签 / 描述；新建库向导第 3 页可勾选 4 个预置字段——作者 / 日期 / 评分 / 来源；在此之上可自由新增用户字段。所有字段都能排序、隐藏、按类型（文本/多行/日期/URL/评分/数字）配置。
+- **库字段设计助手**：内置 LLM 向导（工具 → 🪄 LLM 助手 → 库字段设计助手），把你写的一段"这个库用来管什么"描述作为输入，LLM 给出字段集建议；两段式审阅（Step 1 逐条批准/驳回 LLM 建议 → Step 2 自由编辑应用后的字段表）后一键落库。
 - **标签**：作为多值字段一等公民，左栏可按标签筛选；空标签折叠至单独分组
 - **两种存储模式**（每项目可选）
   - `link`：仅记录原始路径，不动用户文件
@@ -75,7 +82,7 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-> 需要 Python 3.10+。首次启动会在 `%APPDATA%/LLMCabinet/` 下创建 `cabinet.db` 与 `library/` 目录，可在 **设置 → 项目库** 中查看。
+> 需要 Python 3.10+。首次启动会弹 Welcome 对话框：选目录新建库（多页向导会让你填一段库描述、默认存储方式、可选预置字段等），或打开已存在的库。库目录里包含 `cabinet.db` + `library/` + `.llm-cabinet` 标记；当前路径可在 **设置 → 项目库** 查看，搬家 / 切换库走 **库 → 切换库**。
 
 ## 数据隐私
 
@@ -119,6 +126,8 @@ app/
 ├── models.py          数据类
 ├── repository.py      数据访问层
 ├── library.py         仓库目录与文件落地策略
+├── library_check.py   库一致性检查 / 备份 / 恢复
+├── cabinet.py         多库注册表（最近 / 切换 / 删除）
 ├── exporter.py        项目导出（目录格式 + project.json）
 ├── importer.py        批量文件夹导入（识别 project.json）
 ├── utils.py
@@ -130,6 +139,7 @@ app/
 │   └── queue.py       后台任务队列
 └── ui/
     ├── main_window.py        三栏主界面（标签树 / 项目列表 / 预览+文件）
+    ├── welcome_dialog.py     首次启动 / 「没有打开任何库」时的入口
     ├── project_dialog.py     项目元数据编辑 + 建议审阅
     ├── llm_suggest_dialog.py LLM 触发对话框（选参考文件、选字段）
     ├── llm_tasks_panel.py    任务队列面板
@@ -137,9 +147,15 @@ app/
     ├── import_dialog.py      批量文件夹导入对话框
     ├── folder_drop_mode_dialog.py  多文件夹拖入时的"单/多项目"选择
     ├── settings_dialog.py    设置（通用/项目库/视图/字段/API/关于）
+    ├── about_dialog.py
     ├── tag_tree.py
     ├── preview.py            图/视频/PDF 内嵌预览
     ├── project_card.py       网格视图模型 + 卡片绘制
+    ├── files_table_columns.py
+    ├── first_run_banner.py
+    ├── theme.py              浅色/深色配色 + QSS
+    ├── wizard_list_dialog.py  LLM 助手列表入口
+    ├── wizards/               LLM 助手们（如库字段设计助手）
     └── widgets.py
 ```
 

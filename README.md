@@ -36,13 +36,19 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
 
 <table>
   <tr>
-    <td align="center" width="62%">
+    <td align="center" colspan="2">
       <img src="docs/screenshots/main-window.png" alt="Main window" />
       <br/><sub>Main window — tag tree · project list · preview &amp; file table</sub>
     </td>
-    <td align="center" width="38%">
+  </tr>
+  <tr>
+    <td align="center" width="50%">
       <img src="docs/screenshots/project-edit-llm-suggest.png" alt="Project edit dialog with LLM suggestions" />
       <br/><sub>Project edit dialog with inline LLM suggestions (✓ Apply / ✗ Reject)</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="docs/screenshots/setup-wizard.jpg" alt="Library field design wizard" />
+      <br/><sub>Library field design wizard — Step 1 review LLM suggestions ↔ Step 2 hand-edit the resulting field table</sub>
     </td>
   </tr>
 </table>
@@ -50,7 +56,8 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
 ## Features
 
 - **Project-centric organization**: one project groups related files; each file can carry its own per-file note (e.g. "Chinese edition", "page 1")
-- **Field system**: built-in *Title / Author / Date / Rating / Source / Tags / Description* plus user-defined fields. Free reorder, hide, and per-field type (text / textarea / date / URL / rating / number)
+- **Field system**: 3 protected fields *Title / Tags / Description* are seeded for every library; 4 optional preset fields *Author / Date / Rating / Source* can be checked on at library-creation time; on top of that you can freely add user-defined fields. Reorder, hide, and pick per-field type (text / textarea / date / URL / rating / number) at any time.
+- **Library field design wizard**: an LLM-powered wizard (Tools → 🪄 LLM Assistants → Library Field Design Assistant) takes your one-paragraph library description, suggests the right field set, and applies the diff after a two-step review (Step 1 approve/reject LLM suggestions → Step 2 hand-edit the resulting field table).
 - **Tags** are a first-class multi-value field; filter by tag in the sidebar; unused tags fold into a separate group
 - **Two storage modes** (per project)
   - `link`: only record the original path; never touch user files
@@ -79,7 +86,7 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-> Requires Python 3.10+. On first launch the app creates `cabinet.db` and `library/` under `%APPDATA%/LLMCabinet/`. Inspect/change locations under **Settings → Library**.
+> Requires Python 3.10+. On first launch the app shows a Welcome dialog: pick a directory to create a brand-new library (a multi-step wizard collects the library description, default storage mode, optional preset fields, etc.) or open an existing one. The chosen library directory holds `cabinet.db` + `library/` + a `.llm-cabinet` marker; inspect the current paths under **Settings → Library**, and use **Library → Switch Library** to relocate or jump between libraries.
 
 ## Data Privacy
 
@@ -123,6 +130,8 @@ app/
 ├── models.py          dataclasses
 ├── repository.py      data access layer
 ├── library.py         library directory & file landing strategy
+├── library_check.py   library consistency check / backup / restore
+├── cabinet.py         multi-library registry (recent / switch / delete)
 ├── exporter.py        project export (directory format + project.json)
 ├── importer.py        batch folder import (recognizes project.json)
 ├── utils.py
@@ -134,6 +143,7 @@ app/
 │   └── queue.py       background task queue
 └── ui/
     ├── main_window.py        3-pane main UI (tag tree / project list / preview + files)
+    ├── welcome_dialog.py     first-launch / "no library open" entry
     ├── project_dialog.py     project metadata editor + suggestion review
     ├── llm_suggest_dialog.py LLM trigger dialog (pick reference files & target fields)
     ├── llm_tasks_panel.py    task queue panel
@@ -141,9 +151,15 @@ app/
     ├── import_dialog.py      batch folder import dialog
     ├── folder_drop_mode_dialog.py  "merge / separate" picker for multi-folder drops
     ├── settings_dialog.py    settings (general / library / view / fields / API / about)
+    ├── about_dialog.py
     ├── tag_tree.py
     ├── preview.py            inline image / video / PDF preview
     ├── project_card.py       grid view model + card painting
+    ├── files_table_columns.py
+    ├── first_run_banner.py
+    ├── theme.py              light / dark palette + QSS
+    ├── wizard_list_dialog.py LLM-assistant wizard launcher
+    ├── wizards/              LLM assistants (library field design wizard, …)
     └── widgets.py
 ```
 
