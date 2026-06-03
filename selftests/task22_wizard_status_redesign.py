@@ -503,16 +503,17 @@ def test_visible_filters_existing_user_field(t: T) -> None:
                 step1_visible_indices(suggestions), [1])
 
 
-def test_visible_filters_system_required_no_hint_change(t: T) -> None:
-    """task #22 round 11：system_required 且 LLM 实际没改 hint
-    → 没有需要审批的内容，从 Step 1 过滤掉（不显示"✓ 保持原样"行了）。"""
+def test_visible_keeps_system_required_no_hint_change(t: T) -> None:
+    """task #22 round 15：system_required 即使 LLM 没改 hint 也要显示，
+    让用户审阅时看到完整字段表（"LLM 看了认为不用改"也是有效审阅结果）。
+    该行不显示批准/驳回按钮（has_llm_change=False），不打扰用户。"""
     suggestions = [
         _ann("标题", "system_required", ftype="text",
              existing_field_id=1, existing_field_type="text",
              prompt_hint="同提示", existing_prompt_hint="同提示"),
     ]
-    t.assert_eq("system_required 无变更 → 不显示",
-                step1_visible_indices(suggestions), [])
+    t.assert_eq("system_required 无变更 → 仍显示",
+                step1_visible_indices(suggestions), [0])
 
 
 def test_visible_keeps_system_required_with_hint_change(t: T) -> None:
@@ -525,15 +526,15 @@ def test_visible_keeps_system_required_with_hint_change(t: T) -> None:
                 step1_visible_indices(suggestions), [0])
 
 
-def test_visible_filters_same_type_no_hint_change(t: T) -> None:
-    """task #22 round 11：same_type 且 LLM 实际没改 hint → 过滤。"""
+def test_visible_keeps_same_type_no_hint_change(t: T) -> None:
+    """task #22 round 15：same_type 无变更也保留显示。"""
     suggestions = [
         _ann("评分", "same_type", ftype="text",
              existing_field_id=1, existing_field_type="text",
              prompt_hint="同提示", existing_prompt_hint="同提示"),
     ]
-    t.assert_eq("same_type 无变更 → 不显示",
-                step1_visible_indices(suggestions), [])
+    t.assert_eq("same_type 无变更 → 仍显示",
+                step1_visible_indices(suggestions), [0])
 
 
 def test_visible_keeps_same_type_with_hint_change(t: T) -> None:
@@ -648,9 +649,9 @@ def main() -> int:
 
     # step1_visible_indices 收紧
     test_visible_filters_existing_user_field(t)
-    test_visible_filters_system_required_no_hint_change(t)
+    test_visible_keeps_system_required_no_hint_change(t)
     test_visible_keeps_system_required_with_hint_change(t)
-    test_visible_filters_same_type_no_hint_change(t)
+    test_visible_keeps_same_type_no_hint_change(t)
     test_visible_keeps_same_type_with_hint_change(t)
     test_visible_keeps_rejected_decision_even_after_revert(t)
     test_visible_keeps_approved_decision_with_change(t)

@@ -292,6 +292,22 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
       label 分支不再带后缀；selftest 中 13 条断言改成"approved/rejected
       label 与 pending 完全一致"。task22 75 / task21 92 / task11_t3 224
       全过。
+  - **round 14 / 15 三个体验修复（2026-06-04）**：
+    * **库描述"已驳回"标签丢失**：`_refresh_desc_decision_ui` 原本用
+      `has_change` 兜底"全部隐藏"，但驳回会把 suggested 还原成 input →
+      has_change 变 False → 已驳回标签也被隐藏。改成"已决策状态优先"，
+      不论 has_change 都显示标签。
+    * **退出按钮弹确认框**：override `LibraryInitWizard.reject`，仅当用户
+      已投入内容（场景描述非空 / 已调过 LLM / 有 history）时弹确认；
+      intro 页空状态直接退出，不打扰。
+    * **撤销 round 11 的 step1 visible 过滤**：用户反馈"第二次的 step1
+      只列出了有改动的字段"，要求列出所有字段供审阅、未改动的不显示按钮
+      即可。`step1_visible_indices` 还原为只过滤 `existing_user_field`，
+      所有 LLM 触达字段（含 system_required / same_type 无改动）都显示
+      "✓ 保持原样"行（不带批准/驳回按钮）。round 11 的两条"无变更过滤"
+      测试反转为"无变更也显示"。task22 75 全过。
+
+
 
 
 

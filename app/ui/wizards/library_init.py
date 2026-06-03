@@ -858,45 +858,28 @@ def drafts_are_dirty(
 
 # task #21 阶段 B：Step 1 表的渲染过滤（哪些 ann 在 Step 1 显示；不依赖 Qt）
 def step1_visible_indices(suggestions: list["AnnotatedSuggestion"]) -> list[int]:
-    """task #21：Step 1 只展示**真正有 LLM 建议**的条目（用户需要决策的）。
+    """task #21：Step 1 展示所有 LLM 实际触达过的字段，供用户审阅。
 
-    过滤掉：
-    - ``existing_user_field``：LLM 本轮根本没提到的现有字段（含 LLM
-      删除/改名建议被驳回后退化的）—— 由 Step 2 编辑表承担
-    - ``system_required`` / ``same_type`` / ``type_conflict`` 且
-      ``step1_changed_dimensions(ann)`` 为空：LLM 触达了但实际什么维度
-      都没改 → 没有需要用户审批的内容，不在 Step 1 出现
+    过滤掉的：
+    - 纯 user-only 现有字段（``existing_user_field``，即 LLM 本轮完全没在
+      返回里提到的现有字段，含 LLM 删除/改名建议被驳回后退化的）—— 由
+      Step 2 编辑表承担
 
-    保留：
-    - ``new`` / ``llm_suggest_delete`` / ``llm_suggest_rename``：LLM 显式
-      建议（即使后两者被用户驳回也保留，让用户能看到 "我刚驳回了什么"
-      的视觉反馈，与 round 1 决策一致）
-    - 上述"维度变化"分支但 dims 非空的
-    - decision != pending 的所有 LLM 触达条目（已批准 / 已驳回的视觉
-      反馈不能消失，否则用户失去操作回溯）
+    保留的：
+    - 所有 ``llm_touched=True`` 的 ann：包括 ``system_required`` / ``same_type``
+      在 LLM 没改 hint 时也显示，由 ``step1_action_label`` 给出 "✓ 保持原样"
+      标签，让用户明确看到 "LLM 看了这个字段，认为不用改" 的反馈
 
-    task #22 round 11 改造：移除原"LLM 看了但没改也显示一行 ✓ 保持原样"
-    的语义——那种行没有用户需要审批的内容，纯粹噪音。round 6 引入这个
-    显示是误解了用户最初的诉求（用户当时说"LLM 完全没改字段似乎没显示"
-    指的是 Step 2 那种"完整字段表"的诉求，已经由 Step 2 满足）。
-
-    返回 ``suggestions`` 的索引列表，按原顺序。
+    task #22 round 11 曾经把"无改动"过滤掉，结果第二轮"应用并继续讨论"
+    时 step1 只剩三两条改动行，用户失去对完整字段表的上下文感。
+    round 15 撤销该过滤——"保持原样"行不带批准/驳回按钮，不打扰用户
+    （`_make_change_cell` 已用 `has_llm_change` 控制按钮可见），同时把
+    完整审阅视图还给用户。
     """
-    out: list[int] = []
-    for i, ann in enumerate(suggestions):
-        if ann.status == "existing_user_field":
-            continue
-        if ann.status in ("new", "llm_suggest_delete", "llm_suggest_rename"):
-            out.append(i)
-            continue
-        # system_required / same_type / type_conflict：要看是否有实际改动
-        # 或已有决策（已批准 / 已驳回必须显示，保留视觉反馈）
-        if ann.decision in ("approved", "rejected"):
-            out.append(i)
-            continue
-        if step1_changed_dimensions(ann):
-            out.append(i)
-    return out
+    return [
+        i for i, ann in enumerate(suggestions)
+        if ann.status != "existing_user_field"
+    ]
 
 
 # task #22：Step 1 「LLM 建议」列的纯函数（无 Qt 依赖）
@@ -976,11 +959,12 @@ def step1_action_label(
     # ---- 多维"修改"动作 ----
     dims = step1_changed_dimensions(ann)
 
-    # 兜底：dims 为空 + 非 rename 状态
-    # task #22 round 11 起 step1_visible_indices 已经把这类 ann 过滤掉
-    # （LLM 触达但实际没改任何维度 → 没有需要用户审批的内容），所以正常
-    # 渲染路径不会走到这个分支。保留兜底是为了直接调用 step1_action_label
-    # 的单元测试 / 调试场景能拿到合理输出。
+    # dims 为空 + 非 rename → LLM 触达了但实际没改任何维度（最常见：
+    # system_required / same_type 在 LLM 给的 hint 与现有相同时，或
+    # type_conflict 驳回还原后）。给用户一个明确的"✓ 保持原样"标签让
+    # 他知道"LLM 看了，认为不用改"或"已驳回，恢复原状"——这一行不
+    # 显示批准/驳回按钮（_make_change_cell 用 has_llm_change 控制），
+    # 不打扰用户但保留完整审阅视图。
     if not dims and ann.status in ("system_required", "same_type", "type_conflict"):
         label = "✓ 保持原样"
         tooltip = (
@@ -2631,6 +2615,35 @@ class LibraryInitWizard(WizardPlugin):
         self._history = []
         self._dispatch_call(extra="")
 
+    def reject(self) -> None:
+        """task #22 round 14：用户点"退出"按钮 / 按 Esc / 关右上角 X 都走
+        这里。如果用户已经投入过内容（写了场景描述、调过 LLM、或在
+        Step 2 改过字段表），弹一次确认；什么都没做的状态直接走默认 reject。
+        """
+        # 判据：用户已投入内容 = 场景框非空 / 已调过 LLM / Step 2 已编辑过
+        scenario_text = ""
+        try:
+            scenario_text = self.ed_scenario.toPlainText().strip()
+        except Exception:  # noqa: BLE001
+            pass
+        has_invested = bool(
+            scenario_text or self._suggestions or self._last_raw_response
+            or self._history
+        )
+        if has_invested:
+            ret = QMessageBox.question(
+                self,
+                "确认退出库字段设计助手",
+                "退出会丢弃当前的场景描述、所有 LLM 建议与你的批准/驳回"
+                "决策。\n\n"
+                "确定要退出吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ret != QMessageBox.Yes:
+                return
+        super().reject()
+
     def _on_restart(self) -> None:
         # 仅当已经至少调过一轮 LLM（有建议或原始回复在手）时才弹确认；
         # 没建议时点重新开始无破坏性，直接回场景页。
@@ -3166,34 +3179,40 @@ class LibraryInitWizard(WizardPlugin):
             self._refresh_desc_decision_ui()
 
     def _refresh_desc_decision_ui(self) -> None:
-        """根据 _desc_has_llm_change() + _library_desc_decision 控制按钮/标签可见性。"""
-        has_change = self._desc_has_llm_change()
-        if not has_change:
-            # LLM 这轮没改描述 → 全部隐藏
-            self.lbl_desc_decision.setVisible(False)
+        """根据 _desc_has_llm_change() + _library_desc_decision 控制按钮/标签可见性。
+
+        task #22 round 14：原代码用 `has_change` 兜底"全部隐藏"，但驳回操作
+        会把 _library_desc_suggested 还原成 _library_desc_input → has_change
+        变 False → 已驳回标签也被隐藏（用户失去视觉反馈）。修法：已决策
+        （approved/rejected）状态优先，不论当前 has_change 都显示状态标签；
+        pending 时才看 has_change 决定按钮可见。
+        """
+        # 已决策 → 显示状态标签，不管 has_change
+        if self._library_desc_decision == "approved":
             self.btn_desc_approve.setVisible(False)
             self.btn_desc_reject.setVisible(False)
-            return
-        if self._library_desc_decision == "pending":
-            self.lbl_desc_decision.setVisible(False)
-            self.btn_desc_approve.setVisible(True)
-            self.btn_desc_reject.setVisible(True)
-            return
-        # 已决策 → 隐藏按钮，只留状态标签
-        self.btn_desc_approve.setVisible(False)
-        self.btn_desc_reject.setVisible(False)
-        if self._library_desc_decision == "approved":
             self.lbl_desc_decision.setText(
                 "<span style='color:#2e7d32; background:rgba(46,125,50,0.12); "
                 "border-radius:4px; padding:1px 6px;'>已批准</span>"
             )
-        else:  # rejected
+            self.lbl_desc_decision.setTextFormat(Qt.RichText)
+            self.lbl_desc_decision.setVisible(True)
+            return
+        if self._library_desc_decision == "rejected":
+            self.btn_desc_approve.setVisible(False)
+            self.btn_desc_reject.setVisible(False)
             self.lbl_desc_decision.setText(
                 "<span style='color:#757575; background:rgba(117,117,117,0.12); "
                 "border-radius:4px; padding:1px 6px;'>已驳回</span>"
             )
-        self.lbl_desc_decision.setTextFormat(Qt.RichText)
-        self.lbl_desc_decision.setVisible(True)
+            self.lbl_desc_decision.setTextFormat(Qt.RichText)
+            self.lbl_desc_decision.setVisible(True)
+            return
+        # pending：按 has_change 决定按钮可见
+        has_change = self._desc_has_llm_change()
+        self.lbl_desc_decision.setVisible(False)
+        self.btn_desc_approve.setVisible(has_change)
+        self.btn_desc_reject.setVisible(has_change)
 
 
     # ---- 预览页行操作 -----------------------------------------------------
