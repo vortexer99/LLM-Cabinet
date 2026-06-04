@@ -192,14 +192,14 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器（JSON 内容由导出对�
 | `audit_metadata` | 无 | — |
 | `summarize_library` | 无 | — |
 
-**自定义技能**：打开 `app/mcp/skills/` 下的对应 `.md` 文件，按已有格式编辑即可。修改后重启 MCP 服务器生效（重新加载 Claude Desktop 或 Cursor 窗口）。
+**自定义技能**：打开 `app/mcp/skills/llm-cabinet/` 下的对应目录编辑 `SKILL.md` 即可。修改后重启 MCP 服务器生效（重新加载 Claude Desktop 或 Cursor 窗口）。
 
 | Prompt 名称 | 技能文件 |
 |------|------|
-| `organize_new_files` | `app/mcp/skills/organize_new_files.md` |
-| `audit_metadata` | `app/mcp/skills/audit_metadata.md` |
-| `summarize_library` | `app/mcp/skills/summarize_library.md` |
-| `suggest_tags` | `app/mcp/skills/suggest_tags.md` |
+| `organize_new_files` | `app/mcp/skills/llm-cabinet/organize-new-files/SKILL.md` |
+| `audit_metadata` | `app/mcp/skills/llm-cabinet/audit-metadata/SKILL.md` |
+| `summarize_library` | `app/mcp/skills/llm-cabinet/summarize-library/SKILL.md` |
+| `suggest_tags` | `app/mcp/skills/llm-cabinet/suggest-tags/SKILL.md` |
 
 ---
 
