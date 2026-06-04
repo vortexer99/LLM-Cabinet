@@ -29,7 +29,6 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
 
 **Looking ahead**:
 
-- **External agent integration**: future versions plan to expose Cabinet's capabilities via [MCP (Model Context Protocol)](https://modelcontextprotocol.io/), so any MCP-compatible client (Claude Desktop, Cursor, Cline, etc.) can drive an agent that fully manages your project files — deciding where new files go, assigning their metadata, and fetching whatever it needs from the library on demand. LLM Cabinet aims to be the substrate for this kind of "AI file hub".
 - **File preprocessing pipeline**: to further reduce token consumption — and to make non-multimodal models actually useful — there may be a pluggable preprocessing layer that distills raw files into compact "key-information summaries" before sending them to the LLM. Typical forms: extract a few keyframes from videos and treat them as images, run a lightweight local vision model on images to pre-extract tags/captions, run embeddings on very long texts for semantic compression or key-section extraction, and so on.
 
 ## Screenshots
@@ -58,7 +57,7 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
 - **Project-centric organization**: one project groups related files; each file can carry its own per-file note (e.g. "Chinese edition", "page 1")
 - **Field system**: 3 protected fields *Title / Tags / Description* are seeded for every library; 4 optional preset fields *Author / Date / Rating / Source* can be checked on at library-creation time; on top of that you can freely add user-defined fields. Reorder, hide, and pick per-field type (text / textarea / date / URL / rating / number) at any time.
 - **Library field design wizard**: an LLM-powered wizard (Tools → 🪄 LLM Assistants → Library Field Design Assistant) takes your one-paragraph library description, suggests the right field set, and applies the diff after a two-step review (Step 1 approve/reject LLM suggestions → Step 2 hand-edit the resulting field table).
-- **Tags** are a first-class multi-value field; filter by tag in the sidebar; unused tags fold into a separate group
+- **Tags** are a first-class multi-value field; filter by tag in the sidebar
 - **Two storage modes** (per project)
   - `link`: only record the original path; never touch user files
   - `copy`: import a copy into the unified library directory `library/<project_id>/`
@@ -75,6 +74,11 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
   multiple project folders onto the bottom DropZone and choose "one project per folder" —
   each `project.json` is recognized and its metadata / fields / tags restored, closing the
   export/import loop.
+- **MCP Agent integration**: expose your library via [MCP](https://modelcontextprotocol.io/) so
+  any compatible client (Claude Desktop / Cursor / Cline / Cherry Studio) can drive an agent
+  that searches, creates, and manages projects with metadata — complete with four pre-built
+  Agent skills (organize / audit / summarize / suggest-tags), audit logging, and MCP-modified
+  project tracking. Configure from **Settings → MCP**.
 - **Database**: SQLite — portable, zero-config
 
 ## Run
@@ -135,6 +139,14 @@ app/
 ├── exporter.py        project export (directory format + project.json)
 ├── importer.py        batch folder import (recognizes project.json)
 ├── utils.py
+├── mcp/
+│   ├── server.py              MCP server (17 → 5 aggregate tools)
+│   ├── standalone.py          standalone entry point
+│   ├── tools.py               tool implementations
+│   ├── prompts.py             Agent skill templates
+│   ├── resources.py           data resources
+│   ├── context.py             library context & switching
+│   └── skills/                Agent skills (organize / audit / summarize / suggest-tags)
 ├── llm/
 │   ├── config.py      LLM config (providers + defaults)
 │   ├── providers.py   DeepSeek / OpenAI / Gemini / Grok adapters
@@ -147,10 +159,11 @@ app/
     ├── project_dialog.py     project metadata editor + suggestion review
     ├── llm_suggest_dialog.py LLM trigger dialog (pick reference files & target fields)
     ├── llm_tasks_panel.py    task queue panel
+    ├── mcp_audit_dialog.py   MCP audit log viewer
     ├── export_dialog.py      project export dialog
     ├── import_dialog.py      batch folder import dialog
     ├── folder_drop_mode_dialog.py  "merge / separate" picker for multi-folder drops
-    ├── settings_dialog.py    settings (general / library / view / fields / API / about)
+    ├── settings_dialog.py    settings (general / library / view / fields / API / MCP / about)
     ├── about_dialog.py
     ├── tag_tree.py
     ├── preview.py            inline image / video / PDF preview

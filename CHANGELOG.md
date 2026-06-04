@@ -6,7 +6,9 @@
 `__version__`（应用版本）和 `SCHEMA_VERSION`（数据库 schema 版本）独立递增。
 schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并附迁移说明。
 
-## [Unreleased]
+## [0.4.0] - 2026-06-04
+
+📦 schema v4 → v5 — 添加 `mcp_audit` 审计日志表（task #13 T3，2026-06-03）。
 
 ### Changed
 - **BREAKING · MCP 工具收敛（task #23，2026-06-04）**：MCP 工具列表从 17 个
@@ -14,7 +16,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - `query_projects`（`search` / `get` / `count`）
   - `manage_project`（`create` / `update` / `add_tag` / `remove_tag`）
   - `manage_files`（`list` / `add` / `remove`）
-  - `manage_libraries`（`list` / `switch` / `get_field`）
+  - `manage_libraries`（`list` / `switch` / `get_field` / `get_fields`）
   - `export_project`（独立保留）
   已接入的 MCP 客户端配置需更新工具调用方式（旧工具名失效）。
 
@@ -31,6 +33,33 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   标注"T1 read-only no-op"，但 `LibraryContext.switch()` 早已是完整实现（关旧
   conn → 开新 db → 切 repo/library/handle）。单库模式（`--db`）下返回结构化
   error 是合理限制，与"no-op"无关。
+- **库描述同步（2026-06-03）**：在对话框编辑库描述时自动同步到 `cabinet.json`，
+  MCP `manage_libraries(action="list")` 可看到最新描述。新建库时描述一并写入注册表。
+- **MCP SDK 日志降噪（2026-06-03）**：standalone 启动时屏蔽 `mcp.server.lowlevel.server`
+  的 INFO 日志，避免每个请求都在终端刷屏。
+
+### Added
+- **MCP Server（task #13，2026-06-01→06-03）**：通过 Model Context Protocol 把库暴露
+  给外部 AI agent。支持 stdio 传输、多库感知、只读/会话/永久三种写权限控制。
+  最初提供 17 个工具 + 8 个数据资源 + 4 个任务提示；独立进程 `python -m app.mcp.standalone`
+  与 GUI 并行运行，通过 SQLite WAL 模式保证并发安全。
+- **MCP 操作记录查看面板（task #24，2026-06-04）**：状态栏 `📋 MCP 操作` 入口（每 10 秒轻量轮询 `MAX(id)` 变化），双 Tab 对话框（审计日志表格 + "MCP 修改过的项目"列表），支持按客户端/操作/状态筛选、翻页、清空。📦 schema v5 → v6：`projects` 加 `mcp_modified_at TEXT` 列，7 个 MCP write 工具操作成功后自动打标。标签树新增"🤖 MCP 修改过"筛选项。
+- **Agent 技能（Skills）系统化**（2026-06-04）：
+  - 四个内置技能（整理新入库文件 / 审核元数据质量 / 生成库概览 / 推荐标签）从简短提示重写为详细 SOP（平均 200 行/MD，含工具调用示例、字段推断规则、边界处理、错误恢复表）
+  - 遵守标准 SKILL.md 格式：YAML frontmatter（name + description + 触发短语）+ 按功能分目录
+  - 由 `app/mcp/prompts.py` 从文件加载并剥离 frontmatter，通过 MCP prompt 协议暴露给 agent
+- **MCP 相关增强**（2026-06-04）：
+  - `manage_libraries` 新增 `get_fields` action（一次返回全部字段定义含 `prompt_hint`，agent 可据此自动填充字段值）
+  - `cabinet://library/info` 新增 `default_storage_mode` 字段（agent 据此选择 link/copy 模式）
+  - `create_project` / `update_project` 支持 `field_values` 参数（创建/修改时一并填写字段值）
+  - `update_project` 的 audit 日志补全参数记录（title / description / tags / field_values，不再仅有 project_id）
+  - 审计日志面板参数摘要友好化（字段值显示为"项目 #N，填字段值"而非裸 JSON）
+  - `manage_files add` 强制要求 `label`（文件描述）；`storage_mode` 默认遵循库设置
+  - `switch_library` 描述修正（早已是实现，不是 no-op）
+- **GitHub Actions 技能打包**（2026-06-04）：CI 流程新增 `Compress-Archive` 步骤，每次构建产出 `llm-cabinet-skills.zip`（可单独从 Release 页下载）
+- **MCP 设置页文案更新**：推荐安装 Agent 技能并说明路径 + `导出配置` → `导出 MCP 配置`
+- **应用数据目录**从设置 → 项目库移至设置 → 通用（软件层级属性）
+- **侧边栏**：隐藏"未使用的标签"分组；MCP 修改过滤从独立 QLabel 改为 TagTree 内置节点，与"待审阅 LLM 建议"同模式
 
 ---
 
@@ -627,7 +656,8 @@ source_url/rating` 仍保留，仅作"种入时稳定标识"用（受保护判�
 
 📦 schema v1 — 初始 schema，无需迁移。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.3.0
 [0.2.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.2.0
 [0.1.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.1.0

@@ -27,7 +27,6 @@
 
 **未来设想**：
 
-- **外部 agent 调用接口**：计划通过 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 暴露 Cabinet 的能力，让 Claude Desktop / Cursor / Cline 等 MCP 兼容客户端的 agent 可以直接调用——把新文件放到合适的位置并自动分配元数据，需要资料时回到库里调阅检索。LLM Cabinet 期望成为这种"AI 文件中枢"的承载层。
 - **文件预处理流水线**：为了进一步降低 token 消耗、以及在不支持多模态的模型上也能取得较好效果，未来可能开放预处理接口——把原始文件先压缩成"关键信息摘要"再发给 LLM。典型形式包括：视频抽取若干关键帧再当作图像处理、图像先经轻量本地视觉模型提取标签/描述、超长文本通过嵌入模型做语义压缩或抽取关键段，等等。
 
 ## 截图
@@ -56,7 +55,7 @@
 - **项目化组织**：一个项目对应一组相关文件，每个文件可独立填写说明（如"中文版"、"第一页"）
 - **字段系统**：每个库默认 seed 3 个受保护字段——标题 / 标签 / 描述；新建库向导第 3 页可勾选 4 个预置字段——作者 / 日期 / 评分 / 来源；在此之上可自由新增用户字段。所有字段都能排序、隐藏、按类型（文本/多行/日期/URL/评分/数字）配置。
 - **库字段设计助手**：内置 LLM 向导（工具 → 🪄 LLM 助手 → 库字段设计助手），把你写的一段"这个库用来管什么"描述作为输入，LLM 给出字段集建议；两段式审阅（Step 1 逐条批准/驳回 LLM 建议 → Step 2 自由编辑应用后的字段表）后一键落库。
-- **标签**：作为多值字段一等公民，左栏可按标签筛选；空标签折叠至单独分组
+- **标签**：作为多值字段一等公民，左栏可按标签筛选
 - **两种存储模式**（每项目可选）
   - `link`：仅记录原始路径，不动用户文件
   - `copy`：导入时复制到统一仓库目录 `library/<project_id>/`
@@ -71,6 +70,10 @@
   `files.json` / `README.md` / `files/`；可选是否把链接模式（🔗）原始文件也复制进去。
   反向操作：把多个项目目录拖到底部 DropZone，可选择"分别建一个项目"，自动识别 `project.json`
   并恢复元数据/字段/标签——构成完整的导出/导入闭环。
+- **MCP Agent 集成**：通过 [MCP](https://modelcontextprotocol.io/) 把库暴露给外部 AI agent
+  （Claude Desktop / Cursor / Cline / Cherry Studio），支持搜索、创建、管理项目并填写元数据。
+  附带四个预置 Agent 技能（整理 / 审核 / 概览 / 推荐标签）、操作审计日志、MCP 修改项目
+  追踪。从 **设置 → MCP** 配置。
 - **数据库**：SQLite，便携、零配置
 
 ## 运行
@@ -131,6 +134,14 @@ app/
 ├── exporter.py        项目导出（目录格式 + project.json）
 ├── importer.py        批量文件夹导入（识别 project.json）
 ├── utils.py
+├── mcp/
+│   ├── server.py              MCP 服务端（17 → 5 聚合工具）
+│   ├── standalone.py          独立进程入口
+│   ├── tools.py                工具实现
+│   ├── prompts.py             Agent 技能模板
+│   ├── resources.py           数据资源
+│   ├── context.py             库上下文与切换
+│   └── skills/                Agent 技能（整理 / 审核 / 概览 / 推荐标签）
 ├── llm/
 │   ├── config.py      LLM 配置（providers + 默认值）
 │   ├── providers.py   DeepSeek / OpenAI / Gemini / Grok 适配
@@ -143,10 +154,11 @@ app/
     ├── project_dialog.py     项目元数据编辑 + 建议审阅
     ├── llm_suggest_dialog.py LLM 触发对话框（选参考文件、选字段）
     ├── llm_tasks_panel.py    任务队列面板
+    ├── mcp_audit_dialog.py   MCP 操作记录查看
     ├── export_dialog.py      项目导出对话框
     ├── import_dialog.py      批量文件夹导入对话框
     ├── folder_drop_mode_dialog.py  多文件夹拖入时的"单/多项目"选择
-    ├── settings_dialog.py    设置（通用/项目库/视图/字段/API/关于）
+    ├── settings_dialog.py    设置（通用/项目库/视图/字段/API/MCP/关于）
     ├── about_dialog.py
     ├── tag_tree.py
     ├── preview.py            图/视频/PDF 内嵌预览
