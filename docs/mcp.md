@@ -172,14 +172,34 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器（JSON 内容由导出对�
 
 ### 技能（Prompts）
 
-Prompts 是给 agent 的结构化任务指令，告诉它调哪些 Tool、按什么顺序。用户只需说"帮我整理新论文"，agent 就会按技能里的 SOP 执行。
+技能是给 agent 的结构化任务指令（SOP），告诉它调哪些工具、按什么顺序。每个技能对应 `app/mcp/skills/` 下的一个 `.md` 文件，你可以直接编辑这些文件来定制 agent 行为，无需改代码。
 
-| Prompt | 说明 |
-|--------|------|
-| `organize_new_files` | 整理新入库文件：发现 → 匹配项目 → 导入 → 补元数据 |
-| `audit_metadata` | 审核元数据质量：查缺失描述/标签/字段值，生成报告 |
-| `summarize_library` | 库概览：统计项目数、标签分布、近期活动 |
-| `suggest_tags` | 推荐标签：分析项目内容，推荐已有或新建标签 |
+**如何使用**：在 agent 对话中直接说出对应场景即可，agent 会自动调用对应技能：
+
+| 你说的话 | agent 自动使用的技能 |
+|---|---|
+| "帮我整理下载的论文" | `organize_new_files` |
+| "审核一下库里的元数据质量" | `audit_metadata` |
+| "给我一个库的概览" | `summarize_library` |
+| "给这个项目推荐几个标签" / "检查哪些项目缺标签" | `suggest_tags` |
+
+也可以显式指定参数：
+
+| 技能 | 参数 | 示例 |
+|------|------|------|
+| `organize_new_files` | `directory`（可选） | "整理 `D:\Downloads\papers\` 里的文件" |
+| `suggest_tags` | `project_id`（可选，0=全部未分类） | "给项目 #42 推荐标签" |
+| `audit_metadata` | 无 | — |
+| `summarize_library` | 无 | — |
+
+**自定义技能**：打开 `app/mcp/skills/` 下的对应 `.md` 文件，按已有格式编辑即可。修改后重启 MCP 服务器生效（重新加载 Claude Desktop 或 Cursor 窗口）。
+
+| Prompt 名称 | 技能文件 |
+|------|------|
+| `organize_new_files` | `app/mcp/skills/organize_new_files.md` |
+| `audit_metadata` | `app/mcp/skills/audit_metadata.md` |
+| `summarize_library` | `app/mcp/skills/summarize_library.md` |
+| `suggest_tags` | `app/mcp/skills/suggest_tags.md` |
 
 ---
 
