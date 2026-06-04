@@ -22,11 +22,16 @@ LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotoco
   "mcpServers": {
     "llm-cabinet": {
       "command": "python",
-      "args": ["-m", "app.mcp.standalone"]
+      "args": ["-m", "app.mcp.standalone"],
+      "env": {
+        "PYTHONPATH": "/path/to/LLM-Cabinet"
+      }
     }
   }
 }
 ```
+
+``PYTHONPATH`` 是 LLM Cabinet 的安装目录（包含 ``app/`` 文件夹的目录），**必须填**，否则 Python 找不到 ``app`` 模块。
 
 **单库模式（安全锁定）**——agent 只能访问指定的一个库：
 
@@ -37,7 +42,7 @@ LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotoco
       "command": "python",
       "args": [
         "-m", "app.mcp.standalone",
-        "--db", "D:/Projects/work/cabinet.db"
+        "--db", "/path/to/your-library/cabinet.db"
       ]
     }
   }
@@ -56,9 +61,9 @@ LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotoco
 用户：我有哪些库？
 
 agent 调用 list_libraries() → 返回：
-  - 论文（D:\Documents\Calibre-libs\论文库）
-  - 工作文档（D:\Projects\work）
-  - 游戏设计（D:\Projects\game_design）
+  - 论文库（/path/to/papers-library）
+  - 工作文档（/path/to/work-library）
+  - 游戏设计（/path/to/game-library）
 ```
 
 ### 示例 2：切换到指定库并搜索
@@ -106,6 +111,7 @@ python -m app.mcp.standalone [选项]
 | `--library PATH` | 单库模式：library 子目录（默认与 db 同目录） |
 | `--config PATH` | 自定义 cabinet.json 路径 |
 | `--allow-file-read` | 开启文件内容读取（默认关闭） |
+| `--write-permission disabled|session|permanent` | 写操作权限（默认 disabled，agent 只能读不能写） |
 | `--log-level LEVEL` | 日志等级：DEBUG / INFO（默认） / WARNING / ERROR |
 
 不传 `--db` 时为多库模式，自动从 `%APPDATA%/LLMCabinet/cabinet.json` 读取已注册库列表。

@@ -43,6 +43,8 @@ class LibraryContext:
         self._library: Optional[Library] = None
         self._current_handle: Optional[LibraryHandle] = None
         self._db_override = db_override  # single-library mode (--db)
+        self.client_name: str = "standalone"  # MCP client identifier for audit log
+        self.write_permission: str = "disabled"  # disabled / session / permanent
 
     # ---- factory ----------------------------------------------------------
 

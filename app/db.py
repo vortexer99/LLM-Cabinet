@@ -24,7 +24,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -420,10 +420,27 @@ def _migrate_v3_to_v4(conn: sqlite3.Connection) -> None:
         cur.execute(f"ALTER TABLE projects DROP COLUMN {col}")
 
 
+def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
+    """task #13 T3：添加 mcp_audit 表（MCP 审计日志）。"""
+
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS mcp_audit (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            ts              TEXT NOT NULL DEFAULT (datetime('now')),
+            client_name     TEXT,
+            tool_name       TEXT NOT NULL,
+            arguments_json  TEXT,
+            result_status   TEXT NOT NULL DEFAULT 'success',
+            error_message   TEXT
+        )
+    """)
+
+
 MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (1, 2, _migrate_v1_to_v2),
     (2, 3, _migrate_v2_to_v3),
     (3, 4, _migrate_v3_to_v4),
+    (4, 5, _migrate_v4_to_v5),
 ]
 
 

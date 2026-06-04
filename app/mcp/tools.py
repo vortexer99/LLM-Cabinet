@@ -176,3 +176,410 @@ async def switch_library(
 ) -> dict[str, Any]:
     """Switch the active library by name (no-op in T1 read-only mode)."""
     return ctx.switch(library_name)
+
+
+# ---------------------------------------------------------------------------
+# Write tools (T3)
+# ---------------------------------------------------------------------------
+
+# ---- Audit logging ------------------------------------------------------
+
+
+def _audit_log(ctx: LibraryContext, tool_name: str, arguments: dict, status: str, error: str = ""):
+    """Record a tool invocation in the mcp_audit table."""
+    import json as _json
+
+    try:
+        ctx.repo.conn.execute(
+            "INSERT INTO mcp_audit (client_name, tool_name, arguments_json, result_status, error_message) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (
+                ctx.client_name,
+                tool_name,
+                _json.dumps(arguments, ensure_ascii=False, default=str),
+                status,
+                error,
+            ),
+        )
+        ctx.repo.conn.commit()
+    except Exception:
+        pass  # audit failure should not block the tool
+
+
+# ---- Confirmation --------------------------------------------------------
+
+
+def _check_write_permission(ctx: LibraryContext, tool_name: str) -> tuple[bool, str]:
+    """Check whether a write tool is allowed to proceed.
+
+    Returns:
+        (allowed, reason) — ``allowed=False`` means the tool should be denied.
+    """
+    permission = ctx.write_permission
+    if permission == "disabled":
+        return False, "MCP 写操作已禁用（可在设置中调整）"
+    return True, ""
+
+
+def _confirm(ctx: LibraryContext, tool_name: str, message: str, danger: bool = False) -> tuple[bool, str]:
+    """Check permission and return (allowed, reason).
+
+    ``danger=True`` means the tool is high-risk and needs extra scrutiny.
+    Currently always returns True if permission is not disabled.
+    Future: full MCP elicitation (sampling) for text-based confirmation.
+    """
+    allowed, reason = _check_write_permission(ctx, tool_name)
+    return allowed, reason
+
+
+# ---- create_project ------------------------------------------------------
+
+
+async def create_project(
+    ctx: LibraryContext,
+    title: str,
+    tags: str = "",
+    description: str = "",
+) -> dict[str, Any]:
+    """Create a new project."""
+    allowed, reason = _confirm(ctx, "create_project", f"创建项目「{title}」")
+    if not allowed:
+        _audit_log(ctx, "create_project", {"title": title}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        from app.models import Project
+
+        tag_list = [t.strip() for t in tags.split(",")] if tags else []
+        p = Project(title=title, description_md=description, tags=tag_list)
+        pid = ctx.repo.save_project(p)
+        _audit_log(ctx, "create_project", {"title": title, "tags": tags}, "success")
+        return {"ok": True, "project_id": pid}
+    except Exception as e:
+        _audit_log(ctx, "create_project", {"title": title}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- update_project -------------------------------------------------------
+
+
+async def update_project(
+    ctx: LibraryContext,
+    project_id: int,
+    title: str = "",
+    description: str = "",
+    tags: str = "",
+    field_values: str = "",
+) -> dict[str, Any]:
+    """Update an existing project's metadata."""
+    allowed, reason = _confirm(ctx, "update_project", f"修改项目 #{project_id}")
+    if not allowed:
+        _audit_log(ctx, "update_project", {"project_id": project_id}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        p = ctx.repo.get_project(project_id)
+        if p is None:
+            _audit_log(ctx, "update_project", {"project_id": project_id}, "error", "项目不存在")
+            return {"ok": False, "error": f"项目 {project_id} 不存在"}
+
+        if title:
+            p.title = title
+        if description:
+            p.description_md = description
+        if tags:
+            p.tags = [t.strip() for t in tags.split(",")]
+
+        # Parse field_values if provided: "field_id:value,field_id:value"
+        if field_values:
+            import json as _json
+            try:
+                fv_dict = _json.loads(field_values)
+                if isinstance(fv_dict, dict):
+                    for fid_str, val in fv_dict.items():
+                        p.field_values[int(fid_str)] = str(val)
+            except (_json.JSONDecodeError, ValueError):
+                pass
+
+        ctx.repo.save_project(p)
+        _audit_log(ctx, "update_project", {"project_id": project_id}, "success")
+        return {"ok": True, "project_id": project_id}
+    except Exception as e:
+        _audit_log(ctx, "update_project", {"project_id": project_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- add_tag / remove_tag -------------------------------------------------
+
+
+async def add_tag(ctx: LibraryContext, project_id: int, tag: str) -> dict[str, Any]:
+    """Add a tag to a project."""
+    allowed, reason = _confirm(
+        ctx, "add_tag", f"给项目 #{project_id} 添加标签「{tag}」"
+    )
+    if not allowed:
+        _audit_log(ctx, "add_tag", {"project_id": project_id, "tag": tag}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        p = ctx.repo.get_project(project_id)
+        if p is None:
+            return {"ok": False, "error": f"项目 {project_id} 不存在"}
+        if tag not in p.tags:
+            p.tags.append(tag)
+            ctx.repo.save_project(p)
+        _audit_log(ctx, "add_tag", {"project_id": project_id, "tag": tag}, "success")
+        return {"ok": True}
+    except Exception as e:
+        _audit_log(ctx, "add_tag", {"project_id": project_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+async def remove_tag(ctx: LibraryContext, project_id: int, tag: str) -> dict[str, Any]:
+    """Remove a tag from a project."""
+    allowed, reason = _confirm(
+        ctx, "remove_tag", f"移除项目 #{project_id} 的标签「{tag}」"
+    )
+    if not allowed:
+        _audit_log(ctx, "remove_tag", {"project_id": project_id, "tag": tag}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        p = ctx.repo.get_project(project_id)
+        if p is None:
+            return {"ok": False, "error": f"项目 {project_id} 不存在"}
+        if tag in p.tags:
+            p.tags.remove(tag)
+            ctx.repo.save_project(p)
+        _audit_log(ctx, "remove_tag", {"project_id": project_id, "tag": tag}, "success")
+        return {"ok": True}
+    except Exception as e:
+        _audit_log(ctx, "remove_tag", {"project_id": project_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- add_file / remove_file -----------------------------------------------
+
+
+async def add_file(
+    ctx: LibraryContext,
+    project_id: int,
+    path: str,
+    storage_mode: str = "link",
+    label: str = "",
+) -> dict[str, Any]:
+    """Add a file to a project."""
+    allowed, reason = _confirm(
+        ctx, "add_file", f"给项目 #{project_id} 添加文件「{path}」"
+    )
+    if not allowed:
+        _audit_log(ctx, "add_file", {"project_id": project_id, "path": path}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        from app.models import FileItem
+        from pathlib import Path as _Path
+
+        fp = _Path(path)
+        kind = _guess_file_kind(fp.suffix)
+
+        f = FileItem(
+            project_id=project_id,
+            path=str(fp),
+            is_relative=(storage_mode == "copy"),
+            label=label or fp.name,
+            kind=kind,
+        )
+        fid = ctx.repo.add_file(f)
+        _audit_log(ctx, "add_file", {"project_id": project_id, "path": path}, "success")
+        return {"ok": True, "file_id": fid}
+    except Exception as e:
+        _audit_log(ctx, "add_file", {"project_id": project_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+async def remove_file(ctx: LibraryContext, file_id: int) -> dict[str, Any]:
+    """Remove a file from its project (double-confirmation in tool description)."""
+    allowed, reason = _confirm(
+        ctx, "remove_file", f"删除文件 #{file_id}", danger=True,
+    )
+    if not allowed:
+        _audit_log(ctx, "remove_file", {"file_id": file_id}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        f = ctx.repo.get_file(file_id)
+        if f is None:
+            return {"ok": False, "error": f"文件 {file_id} 不存在"}
+        ctx.repo.delete_file(file_id)
+        _audit_log(ctx, "remove_file", {"file_id": file_id}, "success")
+        return {"ok": True}
+    except Exception as e:
+        _audit_log(ctx, "remove_file", {"file_id": file_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- apply_suggestion -----------------------------------------------------
+
+
+async def apply_suggestion(ctx: LibraryContext, suggestion_id: int) -> dict[str, Any]:
+    """Apply or reject a pending LLM suggestion."""
+    allowed, reason = _confirm(ctx, "apply_suggestion", f"应用建议 #{suggestion_id}")
+    if not allowed:
+        _audit_log(ctx, "apply_suggestion", {"suggestion_id": suggestion_id}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        ctx.repo.resolve_suggestion(suggestion_id, "applied")
+        _audit_log(ctx, "apply_suggestion", {"suggestion_id": suggestion_id}, "success")
+        return {"ok": True}
+    except Exception as e:
+        _audit_log(ctx, "apply_suggestion", {"suggestion_id": suggestion_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- trigger_llm_suggestion -----------------------------------------------
+
+
+async def trigger_llm_suggestion(
+    ctx: LibraryContext,
+    project_id: int,
+    target_fields: str = "",
+) -> dict[str, Any]:
+    """Trigger LLM to generate field suggestions for a project."""
+    allowed, reason = _confirm(
+        ctx, "trigger_llm_suggestion", f"为项目 #{project_id} 触发 LLM 建议（消耗 token）"
+    )
+    if not allowed:
+        _audit_log(ctx, "trigger_llm_suggestion", {"project_id": project_id}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        p = ctx.repo.get_project(project_id)
+        if p is None:
+            return {"ok": False, "error": f"项目 {project_id} 不存在"}
+
+        from app.llm.queue import LLMTaskQueue  # type: ignore[import]
+        from app.repository import Repository as Repo
+
+        # Create LLM suggestion task — reuse existing infrastructure
+        payload = {"project_id": project_id}
+        if target_fields:
+            payload["target_fields"] = [f.strip() for f in target_fields.split(",")]
+        import json as _json
+
+        tid = ctx.repo.create_llm_task(
+            project_id=project_id,
+            project_title=p.title,
+            ttype="suggest_fields",
+            payload_json=_json.dumps(payload, ensure_ascii=False),
+            provider="",
+            model="",
+        )
+        _audit_log(ctx, "trigger_llm_suggestion", {"project_id": project_id}, "success")
+        return {"ok": True, "task_id": tid, "note": "LLM 任务已加入队列，完成后可在 pending_suggestions 查看"}
+    except Exception as e:
+        _audit_log(ctx, "trigger_llm_suggestion", {"project_id": project_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- export / import ------------------------------------------------------
+
+
+async def export_project(
+    ctx: LibraryContext, project_id: int, target_dir: str,
+) -> dict[str, Any]:
+    """Export a project to a local directory."""
+    allowed, reason = _confirm(
+        ctx, "export_project", f"导出项目 #{project_id} 到 {target_dir}"
+    )
+    if not allowed:
+        _audit_log(ctx, "export_project", {"project_id": project_id}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        from pathlib import Path as _Path
+        from app.exporter import ExportOptions, export_project as _export  # type: ignore[import]
+
+        p = ctx.repo.get_project(project_id)
+        if p is None:
+            return {"ok": False, "error": f"项目 {project_id} 不存在"}
+
+        target = _Path(target_dir)
+        options = ExportOptions(target_root=target, copy_link_files=True)
+        result = _export(ctx.repo, ctx.library, p, options)
+        _audit_log(ctx, "export_project", {"project_id": project_id, "target_dir": target_dir}, "success")
+        return {
+            "ok": True,
+            "target_dir": str(target),
+            "files_exported": len(result.files_exported),
+        }
+    except Exception as e:
+        _audit_log(ctx, "export_project", {"project_id": project_id}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+async def import_folder(
+    ctx: LibraryContext, folder_path: str, storage_mode: str = "link",
+) -> dict[str, Any]:
+    """Import a folder as a new project."""
+    allowed, reason = _confirm(
+        ctx, "import_folder", f"导入目录「{folder_path}」"
+    )
+    if not allowed:
+        _audit_log(ctx, "import_folder", {"folder_path": folder_path}, "denied", reason)
+        return {"ok": False, "error": reason}
+
+    try:
+        from pathlib import Path as _Path
+        from app.importer import (  # type: ignore[import]
+            ImportOptions,
+            import_folder_as_project,
+            scan_folders,
+        )
+
+        fp = _Path(folder_path)
+        if not fp.exists():
+            return {"ok": False, "error": f"目录不存在：{folder_path}"}
+
+        plans = scan_folders([fp], ctx.repo)
+        if not plans:
+            return {"ok": False, "error": "未找到可导入的文件"}
+
+        options = ImportOptions(storage_mode=storage_mode, label_from=plans[0].folder.name)
+        result = import_folder_as_project(
+            ctx.repo, ctx.library, plans[0], options,
+        )
+        _audit_log(ctx, "import_folder", {"folder_path": folder_path}, "success")
+        return {
+            "ok": True,
+            "project_id": result.project_id,
+            "files_imported": len(result.imported),
+        }
+    except Exception as e:
+        _audit_log(ctx, "import_folder", {"folder_path": folder_path}, "error", str(e))
+        return {"ok": False, "error": str(e)}
+
+
+# ---- helper ----------------------------------------------------------------
+
+
+def _guess_file_kind(suffix: str) -> str:
+    """Map file extension to a file kind."""
+    suffix = suffix.lower()
+    doc_exts = {".pdf", ".txt", ".md", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx", ".csv"}
+    if suffix in doc_exts:
+        return "document"
+    img_exts = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".svg", ".ico"}
+    if suffix in img_exts:
+        return "image"
+    vid_exts = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm"}
+    if suffix in vid_exts:
+        return "video"
+    aud_exts = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma"}
+    if suffix in aud_exts:
+        return "audio"
+    arch_exts = {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"}
+    if suffix in arch_exts:
+        return "archive"
+    return "other"

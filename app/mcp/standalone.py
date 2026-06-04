@@ -68,6 +68,10 @@ def main() -> None:
         log.info("Multi-library mode (default config)")
         ctx = LibraryContext.from_default()
 
+    # Apply write permission
+    ctx.write_permission = args.write_permission
+    log.info("Write permission: %s", ctx.write_permission)
+
     # Create and run the MCP server
     server = make_mcp_server(ctx)
     log.info("MCP server ready, listening on stdio")
@@ -98,6 +102,12 @@ def _parse_args() -> argparse.Namespace:
         "--allow-file-read",
         action="store_true",
         help="开启 cabinet://file/{id} 文件内容资源",
+    )
+    parser.add_argument(
+        "--write-permission",
+        choices=["disabled", "session", "permanent"],
+        default="disabled",
+        help="写操作权限（默认 disabled）。session 仅本次有效；permanent 永久允许。",
     )
     parser.add_argument(
         "--log-level",

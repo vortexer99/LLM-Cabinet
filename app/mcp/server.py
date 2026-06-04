@@ -116,6 +116,86 @@ def make_mcp_server(ctx: LibraryContext) -> FastMCP:
     async def switch_library(library_name: str) -> str:
         return _json_result(await tools.switch_library(ctx, library_name))
 
+    # ---- Write tools (T3) -----------------------------------------------------
+
+    @mcp.tool(
+        name="create_project",
+        description="创建新项目。title 必填，tags 用逗号分隔（可选），description 可选。",
+    )
+    async def create_project(title: str, tags: str = "", description: str = "") -> str:
+        return _json_result(await tools.create_project(ctx, title, tags, description))
+
+    @mcp.tool(
+        name="update_project",
+        description=(
+            "修改项目元数据。可修改 title / description / tags（逗号分隔）/ field_values（JSON 对象）。"
+            "不传的字段保持原值不变。"
+        ),
+    )
+    async def update_project(
+        project_id: int, title: str = "", description: str = "",
+        tags: str = "", field_values: str = "",
+    ) -> str:
+        return _json_result(await tools.update_project(ctx, project_id, title, description, tags, field_values))
+
+    @mcp.tool(
+        name="add_tag",
+        description="给项目添加一个标签。",
+    )
+    async def add_tag(project_id: int, tag: str) -> str:
+        return _json_result(await tools.add_tag(ctx, project_id, tag))
+
+    @mcp.tool(
+        name="remove_tag",
+        description="移除项目的一个标签。",
+    )
+    async def remove_tag(project_id: int, tag: str) -> str:
+        return _json_result(await tools.remove_tag(ctx, project_id, tag))
+
+    @mcp.tool(
+        name="add_file",
+        description="给项目添加文件。path 为文件路径，storage_mode 为 link（链接）或 copy（复制到库内）。",
+    )
+    async def add_file(
+        project_id: int, path: str, storage_mode: str = "link", label: str = "",
+    ) -> str:
+        return _json_result(await tools.add_file(ctx, project_id, path, storage_mode, label))
+
+    @mcp.tool(
+        name="remove_file",
+        description="删除项目的文件。此操作不可逆，请谨慎使用。建议在执行前先向用户确认。",
+    )
+    async def remove_file(file_id: int) -> str:
+        return _json_result(await tools.remove_file(ctx, file_id))
+
+    @mcp.tool(
+        name="apply_suggestion",
+        description="应用一条待处理的 LLM 建议。会更新项目字段值。",
+    )
+    async def apply_suggestion(suggestion_id: int) -> str:
+        return _json_result(await tools.apply_suggestion(ctx, suggestion_id))
+
+    @mcp.tool(
+        name="trigger_llm_suggestion",
+        description="为指定项目触发 LLM 建议任务。会消耗 API token。target_fields 为逗号分隔的字段名。",
+    )
+    async def trigger_llm_suggestion(project_id: int, target_fields: str = "") -> str:
+        return _json_result(await tools.trigger_llm_suggestion(ctx, project_id, target_fields))
+
+    @mcp.tool(
+        name="export_project",
+        description="导出项目到本地目录。会创建 project.json + 文件副本。",
+    )
+    async def export_project(project_id: int, target_dir: str) -> str:
+        return _json_result(await tools.export_project(ctx, project_id, target_dir))
+
+    @mcp.tool(
+        name="import_folder",
+        description="导入本地目录为一个新项目。storage_mode 可选 link（链接）或 copy（复制）。",
+    )
+    async def import_folder(folder_path: str, storage_mode: str = "link") -> str:
+        return _json_result(await tools.import_folder(ctx, folder_path, storage_mode))
+
     # ---- Resources -----------------------------------------------------------
 
     @mcp.resource("cabinet://library/info", name="库元信息", description="路径、项目数、字段数等", mime_type="application/json")
