@@ -256,6 +256,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
     # 调用方必须自行加锁保证串行化（见 LLMTaskQueue._db_lock）
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA journal_mode=WAL;")
+    conn.execute("PRAGMA busy_timeout=3000;")
     conn.execute("PRAGMA foreign_keys = ON;")
     conn.executescript(SCHEMA)
     # 版本化迁移：按注册表顺序应用未跑过的迁移
