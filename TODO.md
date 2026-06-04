@@ -41,6 +41,7 @@
 [#11 · ⚪] 初始化库时，通过和LLM交流，规划项目的字段结构，标题、描述等字段的格式（形成专属的prompt模板）
 [#13 · ⚪] MCP Server：通过 Model Context Protocol 把库暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端，agent 可读元数据/检索/写入项目（受权限控制）
 [#23 · ✅ 2026-06-04] MCP 工具收敛：17 个细粒度 tool → 5 个聚合 tool（query_projects / manage_project / manage_files / manage_libraries / export_project）；下线 AI 套 AI 的 trigger_llm_suggestion / apply_suggestion / list_pending_suggestions 和冗余的 import_folder；修正 switch_library 过时描述
+[#24 · ⚪] MCP 操作记录查看面板：状态栏入口 + 双 tab 对话框（审计日志 + MCP 修改项目） + schema v5→v6 mcp_modified_at 列 + 主界面筛选 MCP 修改过的项目
 -
 
 ## ⚙️ 设置 / 配置 / 持久化
