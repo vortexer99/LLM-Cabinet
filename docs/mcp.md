@@ -4,25 +4,25 @@ LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotoco
 
 ## 快速开始
 
-### Claude Desktop 配置
+在 LLM Cabinet 中打开「设置 → MCP 集成」，点击「导出 JSON」，选择模式和权限后复制配置。
 
-打开 Claude Desktop 的配置文件：
+也可以手动编辑配置文件：
 
-| 平台 | 路径 |
-|------|------|
+| 平台 | Claude Desktop 配置路径 |
+|------|------------------------|
 | Windows | `%APPDATA%\Claude\claude_desktop_config.json` |
 | macOS | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 
-在 `mcpServers` 下添加以下条目：
+在 `mcpServers` 下添加以下条目（名称后缀由导出对话框自动生成）：
 
-**多库模式（推荐，零配置）**——agent 自动发现所有注册的库，可按名称切换：
+**多库模式，可读写**（默认）：
 
 ```json
 {
   "mcpServers": {
     "llm-cabinet": {
       "command": "python",
-      "args": ["-m", "app.mcp.standalone"],
+      "args": ["-m", "app.mcp.standalone", "--write-permission", "session"],
       "env": {
         "PYTHONPATH": "/path/to/LLM-Cabinet"
       }
@@ -31,14 +31,25 @@ LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotoco
 }
 ```
 
-``PYTHONPATH`` 是 LLM Cabinet 的安装目录（包含 ``app/`` 文件夹的目录），**必须填**，否则 Python 找不到 ``app`` 模块。
+``PYTHONPATH`` 是 LLM Cabinet 的安装目录（包含 ``app/`` 文件夹的目录），**必须填**。
 
-**单库模式（安全锁定）**——agent 只能访问指定的一个库：
+不同选项会生成不同的名称，避免冲突：
+
+| 模式 | 只读 | 名称 |
+|------|------|------|
+| 多库 | 关闭（默认） | `llm-cabinet` |
+| 多库 | 开启 | `llm-cabinet-ro` |
+| 单库 | 关闭（默认） | `llm-cabinet-<库名>` |
+| 单库 | 开启 | `llm-cabinet-<库名>-ro` |
+
+> JSON 原生支持中文键名，中文库名不会造成问题。
+
+**单库模式示例**：
 
 ```json
 {
   "mcpServers": {
-    "llm-cabinet-work": {
+    "llm-cabinet-论文库": {
       "command": "python",
       "args": [
         "-m", "app.mcp.standalone",
@@ -60,8 +71,8 @@ LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotoco
 ```
 用户：我有哪些库？
 
-agent 调用 list_libraries() → 返回：
-  - 论文库（/path/to/papers-library）
+agent 调用 manage_libraries(action="list") → 返回：
+  - 论文库（/path/to/papers-library）— 存放学术论文和参考文献
   - 工作文档（/path/to/work-library）
   - 游戏设计（/path/to/game-library）
 ```
@@ -72,9 +83,9 @@ agent 调用 list_libraries() → 返回：
 用户：切换到"工作文档"库，找一下上个月的周报
 
 agent:
-  1. switch_library("工作文档")   → {"ok": true}
-  2. search_projects("周报")     → [{"id": 15, "title": "2026年5月周报汇总", ...}]
-  3. list_files(project_id=15)  → 列出周报项目下的全部文件
+  1. manage_libraries(action="switch", library_name="工作文档")   → {"ok": true}
+  2. query_projects(action="search", keyword="周报")              → [{"id": 15, "title": "2026年5月周报汇总", ...}]
+  3. manage_files(action="list", project_id=15)                  → 列出周报项目下的全部文件
 ```
 
 ### 示例 3：浏览项目详情
@@ -83,7 +94,7 @@ agent:
 用户：打开第 15 号项目看看
 
 agent:
-  1. get_project(15) → 返回完整元数据（tags / fields / description）
+  1. query_projects(action="get", project_id=15) → 返回完整元数据（tags / fields / description）
 ```
 
 ### 示例 4：只读浏览
@@ -91,8 +102,8 @@ agent:
 ```
 用户：列出所有项目，看看有多少
 
-agent: count_projects()      → {"total": 42}
-agent: search_projects("")   → 返回 42 个项目的摘要列表
+agent: query_projects(action="count")      → {"total": 42}
+agent: query_projects(action="search")    → 返回 42 个项目的摘要列表
 ```
 
 ---
@@ -111,7 +122,7 @@ python -m app.mcp.standalone [选项]
 | `--library PATH` | 单库模式：library 子目录（默认与 db 同目录） |
 | `--config PATH` | 自定义 cabinet.json 路径 |
 | `--allow-file-read` | 开启文件内容读取（默认关闭） |
-| `--write-permission disabled|session|permanent` | 写操作权限（默认 disabled，agent 只能读不能写） |
+| `--write-permission disabled|session|permanent` | 写操作权限。设置面板默认生成 `session`（本次连接可读写）；选「只读模式」时不带此参数（等效 `disabled`）。 |
 | `--log-level LEVEL` | 日志等级：DEBUG / INFO（默认） / WARNING / ERROR |
 
 不传 `--db` 时为多库模式，自动从 `%APPDATA%/LLMCabinet/cabinet.json` 读取已注册库列表。
@@ -120,18 +131,17 @@ python -m app.mcp.standalone [选项]
 
 ## Cursor 配置
 
-Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器：
+Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器（JSON 内容由导出对话框生成）：
 
-```json
-{
-  "mcpServers": {
-    "llm-cabinet": {
-      "command": "python",
-      "args": ["-m", "app.mcp.standalone"]
-    }
-  }
-}
-```
+---
+
+## Cherry Studio 配置
+
+1. 右上角齿轮 → **设置** → **MCP服务器** → **添加**
+2. 选择 **从JSON导入**，粘贴导出的 JSON
+3. 保存后，点击开关图标 **启用**
+4. 进入对应智能体的 **设置 → 工具页**，启用 **LLM Cabinet**
+5. 按需设置工具预授权（写操作建议开启审批）
 
 ---
 
@@ -139,16 +149,13 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器：
 
 ### 工具（Tools）
 
-| 工具 | 说明 |
-|------|------|
-| `search_projects` | 按关键词或标签搜索项目 |
-| `get_project` | 获取单个项目的完整元数据 |
-| `list_files` | 列出项目下的文件（可按类型过滤） |
-| `list_pending_suggestions` | 列出待审阅的 LLM 建议 |
-| `count_projects` | 统计项目总数 |
-| `get_field_definition` | 获取字段定义 |
-| `list_libraries` | 列出所有注册的库 |
-| `switch_library` | 切换到指定库 |
+| 工具 | actions | 说明 |
+|------|------|------|
+| `query_projects` | `search` / `get` / `count` | 搜索项目、查看详情、统计数量 |
+| `manage_project` | `create` / `update` / `add_tag` / `remove_tag` | 创建项目、修改信息、增减标签 |
+| `manage_files` | `list` / `add` / `remove` | 列出文件、添加文件、删除文件 |
+| `manage_libraries` | `list` / `switch` / `get_field` / `get_fields` | 列出库、切换库、查看字段定义 |
+| `export_project` | — | 导出项目到本地目录 |
 
 ### 资源（Resources）
 

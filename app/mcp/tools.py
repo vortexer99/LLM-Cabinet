@@ -10,7 +10,7 @@ leak across the protocol boundary.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from .context import LibraryContext
 
@@ -96,48 +96,6 @@ async def list_files(
     ]
 
 
-async def list_pending_suggestions(
-    ctx: LibraryContext, project_id: Optional[int] = None,
-) -> list[dict[str, Any]]:
-    """List pending LLM suggestions, optionally for a specific project."""
-    if project_id is not None:
-        suggestions = ctx.repo.list_pending_suggestions(project_id)
-    else:
-        # Grab all projects with pending suggestions, then collect
-        pids = ctx.repo.conn.execute(
-            "SELECT DISTINCT project_id FROM project_field_suggestions "
-            "WHERE status='pending'"
-        ).fetchall()
-        suggestions = []
-        for row in pids:
-            suggestions.extend(ctx.repo.list_pending_suggestions(row["project_id"]))
-
-    # Resolve field names in one batch
-    field_names: dict[int, str] = {}
-    if suggestions:
-        fids = list({s.field_id for s in suggestions if s.field_id})
-        if fids:
-            placeholders = ",".join("?" for _ in fids)
-            rows = ctx.repo.conn.execute(
-                f"SELECT id, name FROM fields WHERE id IN ({placeholders})",
-                fids,
-            ).fetchall()
-            field_names = {r["id"]: r["name"] for r in rows}
-
-    return [
-        {
-            "id": s.id,
-            "project_id": s.project_id,
-            "field_id": s.field_id,
-            "field_name": field_names.get(s.field_id, ""),
-            "suggested_value": s.suggested_value,
-            "status": s.status,
-            "created_at": s.created_at,
-        }
-        for s in suggestions
-    ]
-
-
 async def count_projects(ctx: LibraryContext, tag: str = "") -> dict[str, int]:
     """Count total projects, optionally filtered by tag."""
     if tag:
@@ -166,6 +124,24 @@ async def get_field_definition(
     raise ValueError(f"字段 '{field_name}' 不存在")
 
 
+async def get_all_fields(ctx: LibraryContext) -> list[dict[str, Any]]:
+    """Return all field definitions in the current library."""
+    fields = ctx.repo.list_fields()
+    return [
+        {
+            "id": f.id,
+            "name": f.name,
+            "type": f.type,
+            "key": f.key,
+            "ord": f.ord,
+            "visible": f.visible,
+            "suggest_enabled": getattr(f, "suggest_enabled", True),
+            "prompt_hint": getattr(f, "prompt_hint", ""),
+        }
+        for f in fields
+    ]
+
+
 async def list_libraries(ctx: LibraryContext) -> list[dict[str, Any]]:
     """Return all registered libraries from cabinet.json."""
     return ctx.list_libraries()
@@ -174,7 +150,7 @@ async def list_libraries(ctx: LibraryContext) -> list[dict[str, Any]]:
 async def switch_library(
     ctx: LibraryContext, library_name: str,
 ) -> dict[str, Any]:
-    """Switch the active library by name (no-op in T1 read-only mode)."""
+    """Switch the active library by name. Returns an error in single-DB mode."""
     return ctx.switch(library_name)
 
 
@@ -240,8 +216,9 @@ async def create_project(
     title: str,
     tags: str = "",
     description: str = "",
+    field_values: str = "",
 ) -> dict[str, Any]:
-    """Create a new project."""
+    """Create a new project (optionally with field values)."""
     allowed, reason = _confirm(ctx, "create_project", f"创建项目「{title}」")
     if not allowed:
         _audit_log(ctx, "create_project", {"title": title}, "denied", reason)
@@ -249,9 +226,26 @@ async def create_project(
 
     try:
         from app.models import Project
+        import json as _json
 
         tag_list = [t.strip() for t in tags.split(",")] if tags else []
         p = Project(title=title, description_md=description, tags=tag_list)
+
+        if field_values:
+            try:
+                fv_dict = _json.loads(field_values)
+                if isinstance(fv_dict, dict):
+                    for fid_str, val in fv_dict.items():
+                        try:
+                            p.field_values[int(fid_str)] = str(val)
+                        except (ValueError, TypeError):
+                            log.warning(
+                                "create_project: 跳过非数字 field_id %r（请使用 field.id，不是 field.name）",
+                                fid_str,
+                            )
+            except _json.JSONDecodeError:
+                log.warning("create_project: field_values JSON 解析失败")
+
         pid = ctx.repo.save_project(p)
         _audit_log(ctx, "create_project", {"title": title, "tags": tags}, "success")
         return {"ok": True, "project_id": pid}
@@ -290,16 +284,23 @@ async def update_project(
         if tags:
             p.tags = [t.strip() for t in tags.split(",")]
 
-        # Parse field_values if provided: "field_id:value,field_id:value"
+        # Parse field_values if provided: JSON {"field_id": "value"}
+        # keys MUST be numeric field IDs; field names will be silently skipped
         if field_values:
             import json as _json
             try:
                 fv_dict = _json.loads(field_values)
                 if isinstance(fv_dict, dict):
                     for fid_str, val in fv_dict.items():
-                        p.field_values[int(fid_str)] = str(val)
-            except (_json.JSONDecodeError, ValueError):
-                pass
+                        try:
+                            p.field_values[int(fid_str)] = str(val)
+                        except (ValueError, TypeError):
+                            log.warning(
+                                "update_project #%d: 跳过非数字 field_id %r（请使用 get_fields 返回的 field.id，不是 field.name）",
+                                project_id, fid_str,
+                            )
+            except _json.JSONDecodeError:
+                log.warning("update_project #%d: field_values JSON 解析失败", project_id)
 
         ctx.repo.save_project(p)
         _audit_log(ctx, "update_project", {"project_id": project_id}, "success")
@@ -419,71 +420,7 @@ async def remove_file(ctx: LibraryContext, file_id: int) -> dict[str, Any]:
         return {"ok": False, "error": str(e)}
 
 
-# ---- apply_suggestion -----------------------------------------------------
-
-
-async def apply_suggestion(ctx: LibraryContext, suggestion_id: int) -> dict[str, Any]:
-    """Apply or reject a pending LLM suggestion."""
-    allowed, reason = _confirm(ctx, "apply_suggestion", f"应用建议 #{suggestion_id}")
-    if not allowed:
-        _audit_log(ctx, "apply_suggestion", {"suggestion_id": suggestion_id}, "denied", reason)
-        return {"ok": False, "error": reason}
-
-    try:
-        ctx.repo.resolve_suggestion(suggestion_id, "applied")
-        _audit_log(ctx, "apply_suggestion", {"suggestion_id": suggestion_id}, "success")
-        return {"ok": True}
-    except Exception as e:
-        _audit_log(ctx, "apply_suggestion", {"suggestion_id": suggestion_id}, "error", str(e))
-        return {"ok": False, "error": str(e)}
-
-
-# ---- trigger_llm_suggestion -----------------------------------------------
-
-
-async def trigger_llm_suggestion(
-    ctx: LibraryContext,
-    project_id: int,
-    target_fields: str = "",
-) -> dict[str, Any]:
-    """Trigger LLM to generate field suggestions for a project."""
-    allowed, reason = _confirm(
-        ctx, "trigger_llm_suggestion", f"为项目 #{project_id} 触发 LLM 建议（消耗 token）"
-    )
-    if not allowed:
-        _audit_log(ctx, "trigger_llm_suggestion", {"project_id": project_id}, "denied", reason)
-        return {"ok": False, "error": reason}
-
-    try:
-        p = ctx.repo.get_project(project_id)
-        if p is None:
-            return {"ok": False, "error": f"项目 {project_id} 不存在"}
-
-        from app.llm.queue import LLMTaskQueue  # type: ignore[import]
-        from app.repository import Repository as Repo
-
-        # Create LLM suggestion task — reuse existing infrastructure
-        payload = {"project_id": project_id}
-        if target_fields:
-            payload["target_fields"] = [f.strip() for f in target_fields.split(",")]
-        import json as _json
-
-        tid = ctx.repo.create_llm_task(
-            project_id=project_id,
-            project_title=p.title,
-            ttype="suggest_fields",
-            payload_json=_json.dumps(payload, ensure_ascii=False),
-            provider="",
-            model="",
-        )
-        _audit_log(ctx, "trigger_llm_suggestion", {"project_id": project_id}, "success")
-        return {"ok": True, "task_id": tid, "note": "LLM 任务已加入队列，完成后可在 pending_suggestions 查看"}
-    except Exception as e:
-        _audit_log(ctx, "trigger_llm_suggestion", {"project_id": project_id}, "error", str(e))
-        return {"ok": False, "error": str(e)}
-
-
-# ---- export / import ------------------------------------------------------
+# ---- export ----------------------------------------------------------------
 
 
 async def export_project(
@@ -516,48 +453,6 @@ async def export_project(
         }
     except Exception as e:
         _audit_log(ctx, "export_project", {"project_id": project_id}, "error", str(e))
-        return {"ok": False, "error": str(e)}
-
-
-async def import_folder(
-    ctx: LibraryContext, folder_path: str, storage_mode: str = "link",
-) -> dict[str, Any]:
-    """Import a folder as a new project."""
-    allowed, reason = _confirm(
-        ctx, "import_folder", f"导入目录「{folder_path}」"
-    )
-    if not allowed:
-        _audit_log(ctx, "import_folder", {"folder_path": folder_path}, "denied", reason)
-        return {"ok": False, "error": reason}
-
-    try:
-        from pathlib import Path as _Path
-        from app.importer import (  # type: ignore[import]
-            ImportOptions,
-            import_folder_as_project,
-            scan_folders,
-        )
-
-        fp = _Path(folder_path)
-        if not fp.exists():
-            return {"ok": False, "error": f"目录不存在：{folder_path}"}
-
-        plans = scan_folders([fp], ctx.repo)
-        if not plans:
-            return {"ok": False, "error": "未找到可导入的文件"}
-
-        options = ImportOptions(storage_mode=storage_mode, label_from=plans[0].folder.name)
-        result = import_folder_as_project(
-            ctx.repo, ctx.library, plans[0], options,
-        )
-        _audit_log(ctx, "import_folder", {"folder_path": folder_path}, "success")
-        return {
-            "ok": True,
-            "project_id": result.project_id,
-            "files_imported": len(result.imported),
-        }
-    except Exception as e:
-        _audit_log(ctx, "import_folder", {"folder_path": folder_path}, "error", str(e))
         return {"ok": False, "error": str(e)}
 
 

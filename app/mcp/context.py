@@ -1,7 +1,6 @@
 """LibraryContext: manages the currently active repository and library instance.
 
 Supports runtime switching between libraries registered in ``cabinet.json``.
-For T1 (read-only single-library mode), ``switch()`` is a no-op.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ class LibraryContext:
         # Discover available libraries
         libs = ctx.list_libraries()
 
-        # Switch (no-op in T1 read-only mode)
+        # Switch library (multi-DB mode only; single-DB returns error)
         ctx.switch("My Library")
     """
 
@@ -99,6 +98,7 @@ class LibraryContext:
                     "name": label,
                     "path": str(self._db_override.parent),
                     "label": label,
+                    "description": "",
                     "last_opened": "",
                     "is_current": True,
                 }
@@ -116,6 +116,7 @@ class LibraryContext:
                     "name": h.display_name,
                     "path": str(handle_path),
                     "label": h.label,
+                    "description": h.description or "",
                     "last_opened": h.last_opened or "",
                     "is_current": is_current,
                 }

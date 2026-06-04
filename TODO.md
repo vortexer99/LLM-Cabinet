@@ -40,6 +40,7 @@
 [#11 · ⚪] 自定义LLM prompt模板，每个字段单独给出建议使用的格式
 [#11 · ⚪] 初始化库时，通过和LLM交流，规划项目的字段结构，标题、描述等字段的格式（形成专属的prompt模板）
 [#13 · ⚪] MCP Server：通过 Model Context Protocol 把库暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端，agent 可读元数据/检索/写入项目（受权限控制）
+[#23 · ✅ 2026-06-04] MCP 工具收敛：17 个细粒度 tool → 5 个聚合 tool（query_projects / manage_project / manage_files / manage_libraries / export_project）；下线 AI 套 AI 的 trigger_llm_suggestion / apply_suggestion / list_pending_suggestions 和冗余的 import_folder；修正 switch_library 过时描述
 -
 
 ## ⚙️ 设置 / 配置 / 持久化
@@ -76,6 +77,7 @@ LLM 调用的网络异常处理打磨：超时 / 鉴权失败 / 限流 / 连接�
 
 ## 🧺 杂项 / 待归类
 [✅ 2026-06-02] 新建项目对话框里面去掉LLM建议按钮，这个时候肯定没什么好建议的
+设置中，目前项目库-应用数据目录挪到通用页里面，它是软件层级的属性。
 -
 
 ---

@@ -8,6 +8,30 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+### Changed
+- **BREAKING · MCP 工具收敛（task #23，2026-06-04）**：MCP 工具列表从 17 个
+  细粒度工具收敛为 5 个聚合工具，减少 LLM 工具选择开销：
+  - `query_projects`（`search` / `get` / `count`）
+  - `manage_project`（`create` / `update` / `add_tag` / `remove_tag`）
+  - `manage_files`（`list` / `add` / `remove`）
+  - `manage_libraries`（`list` / `switch` / `get_field`）
+  - `export_project`（独立保留）
+  已接入的 MCP 客户端配置需更新工具调用方式（旧工具名失效）。
+
+### Removed
+- **MCP 工具下线（task #23，2026-06-04）**：
+  - `trigger_llm_suggestion` / `apply_suggestion` / `list_pending_suggestions` — agent
+    本身就是 LLM，不应套娃调内部 cabinet LLM；agent 场景也没有"人类审核
+    pending"环节
+  - `import_folder` — 本质是 `create_project` + 多次 `add_file` 的组合操作，
+    agent 可自行组合，不再维护独立路径
+
+### Fixed
+- **`switch_library` 描述修正（task #23，2026-06-04）**：工具描述 / docstring 长期
+  标注"T1 read-only no-op"，但 `LibraryContext.switch()` 早已是完整实现（关旧
+  conn → 开新 db → 切 repo/library/handle）。单库模式（`--db`）下返回结构化
+  error 是合理限制，与"no-op"无关。
+
 ---
 
 ## [0.3.0] - 2026-06-04

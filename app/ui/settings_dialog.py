@@ -36,6 +36,7 @@ from PySide6.QtWidgets import (
     QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
+    QTextBrowser,
     QVBoxLayout,
     QWidget,
 )
@@ -44,6 +45,46 @@ from .. import HOMEPAGE_URL, __version__
 from ..db import SCHEMA_VERSION
 from ..repository import Repository
 from ..utils import app_data_dir, reveal_in_explorer
+
+# ---------------------------------------------------------------------------
+# MCP capabilities display (shown in Settings → MCP page)
+# ---------------------------------------------------------------------------
+_MCP_CAPABILITIES_HTML = """\
+<h3 style="margin-top:0">🔧 工具（共 5 个）</h3>
+
+<p><b>浏览与搜索</b></p>
+<ul style="margin-top:2px; margin-bottom:8px">
+<li><b>query_projects</b> — 搜索 / 查看 / 统计项目（search / get / count）</li>
+<li><b>manage_libraries</b> — 列出 / 切换库、查看字段定义（list / switch / get_field / get_fields）</li>
+</ul>
+
+<p><b>编辑与管理</b></p>
+<ul style="margin-top:2px; margin-bottom:8px">
+<li><b>manage_project</b> — 创建项目、修改信息、增减标签（create / update / add_tag / remove_tag）</li>
+<li><b>manage_files</b> — 列出 / 添加 / 移除项目文件（list / add / remove）</li>
+<li><b>export_project</b> — 导出项目到本地目录</li>
+</ul>
+
+<h3>📦 数据资源（8 个）</h3>
+<ul style="margin-top:2px; margin-bottom:8px">
+<li><b>cabinet://library/info</b> — 库元信息（路径、项目数等）</li>
+<li><b>cabinet://library/stats</b> — 统计概览（标签分布、填充率等）</li>
+<li><b>cabinet://tags</b> — 所有标签及每标签的项目计数</li>
+<li><b>cabinet://fields</b> — 所有自定义字段的定义</li>
+<li><b>cabinet://projects</b> — 全部项目的摘要列表</li>
+<li><b>cabinet://project/{id}</b> — 单个项目的完整元数据</li>
+<li><b>cabinet://project/{id}/files</b> — 某个项目下的文件清单</li>
+<li><b>cabinet://file/{id}</b> — 单个文件内容（默认禁用）</li>
+</ul>
+
+<h3>📋 任务提示（4 个）</h3>
+<ul style="margin-top:2px; margin-bottom:0">
+<li><b>整理新入库文件</b> — 引导 agent 按流程发现、匹配、导入新文件</li>
+<li><b>审核元数据质量</b> — 检查描述、标签、字段填充率，生成质量报告</li>
+<li><b>生成库概览</b> — 统计项目、标签分布、近期活动，生成综合报告</li>
+<li><b>推荐标签</b> — 分析项目内容，推荐合适的标签</li>
+</ul>
+"""
 
 
 class SettingsDialog(QDialog):
@@ -976,194 +1017,155 @@ class SettingsDialog(QDialog):
         desc.setWordWrap(True)
         lay.addWidget(desc)
 
-        # ---- 配置状态 ----
-        gb_status = QGroupBox("配置状态")
-        form = QFormLayout(gb_status)
-        form.setLabelAlignment(Qt.AlignLeft)
-
-        self._mcp_status_label = QLabel()
-        self._mcp_status_label.setWordWrap(True)
-        form.addRow(self._mcp_status_label)
-
-        self._mcp_detail_label = QLabel()
-        self._mcp_detail_label.setWordWrap(True)
-        self._mcp_detail_label.setStyleSheet("color: gray; font-size: 11px;")
-        form.addRow(self._mcp_detail_label)
-        lay.addWidget(gb_status)
-
-        # ---- 一键配置 ----"
-        gb_config = QGroupBox("配置 Claude Desktop")
-        cv = QVBoxLayout(gb_config)
-        cv.setSpacing(8)
+        gb = QGroupBox("导出配置")
+        gv = QVBoxLayout(gb)
+        gv.setSpacing(8)
 
         hint = QLabel(
-            "点击按钮后会将 MCP server 条目写入 Claude Desktop 的配置文件。\n"
-            "不会影响 LLM Cabinet 自身的行为。"
+            "生成一段 JSON 配置，粘贴到对应客户端的配置文件中即可连接。"
         )
         hint.setWordWrap(True)
         hint.setStyleSheet("color: gray; font-size: 11px;")
-        cv.addWidget(hint)
+        gv.addWidget(hint)
 
-        btns_multi = QHBoxLayout()
-        self._btn_config_multi = QPushButton("多库模式（推荐）")
-        self._btn_config_multi.setToolTip(
-            "agent 可以发现所有已注册的库，用自然语言切换"
+        places = QLabel(
+            "粘贴位置：<br>"
+            "&nbsp;&nbsp;Claude Desktop → <code>claude_desktop_config.json</code> 的 <code>mcpServers</code> 节点<br>"
+            "&nbsp;&nbsp;Cursor → 项目根目录 <code>.cursor/mcp.json</code><br>"
+            "&nbsp;&nbsp;Cherry Studio → 右上角设置 → MCP服务器 → 添加 → 从JSON导入，粘贴后启用，"
+            "再到智能体设置中开启工具并设置预授权"
         )
-        self._btn_config_multi.clicked.connect(lambda: self._mcp_write_claude_config(multi=True))
-        btns_multi.addWidget(self._btn_config_multi)
+        places.setWordWrap(True)
+        places.setStyleSheet("color: gray; font-size: 11px;")
+        places.setTextFormat(Qt.RichText)
+        gv.addWidget(places)
 
-        self._btn_copy_multi = QPushButton("复制多库 JSON")
-        self._btn_copy_multi.clicked.connect(lambda: self._mcp_copy_json(multi=True))
-        btns_multi.addWidget(self._btn_copy_multi)
-        btns_multi.addStretch()
-        cv.addLayout(btns_multi)
+        self._btn_export = QPushButton("导出 JSON...")
+        self._btn_export.clicked.connect(self._mcp_show_export_dialog)
+        btn_row = QHBoxLayout()
+        btn_row.addWidget(self._btn_export)
+        btn_row.addStretch()
+        gv.addLayout(btn_row)
 
-        desc_multi = QLabel("agent 自动发现全部库，可自然语言切换。Claude Desktop 只需配置一次。")
-        desc_multi.setStyleSheet("color: gray; font-size: 11px; margin-left: 4px;")
-        desc_multi.setWordWrap(True)
-        cv.addWidget(desc_multi)
+        lay.addWidget(gb)
 
-        btns_single = QHBoxLayout()
-        self._btn_config_single = QPushButton("仅当前库（安全锁定）")
-        self._btn_config_single.setToolTip(
-            "agent 只能访问当前打开的库，无法切换到其他库"
-        )
-        self._btn_config_single.clicked.connect(lambda: self._mcp_write_claude_config(multi=False))
-        btns_single.addWidget(self._btn_config_single)
+        # ---- 可调用能力 ----
+        gb_caps = QGroupBox("可调用能力（Tools / Resources / Prompts）")
+        cv = QVBoxLayout(gb_caps)
+        cv.setSpacing(0)
 
-        self._btn_copy_single = QPushButton("复制单库 JSON")
-        self._btn_copy_single.clicked.connect(lambda: self._mcp_copy_json(multi=False))
-        btns_single.addWidget(self._btn_copy_single)
-        btns_single.addStretch()
-        cv.addLayout(btns_single)
+        caps_browser = QTextBrowser()
+        caps_browser.setOpenExternalLinks(False)
+        caps_browser.setFrameShape(QFrame.NoFrame)
+        caps_browser.setMinimumHeight(260)
+        caps_browser.setHtml(_MCP_CAPABILITIES_HTML)
+        cv.addWidget(caps_browser)
 
-        desc_single = QLabel("agent 只能操作当前库，适合敏感资料或只想暴露一个库的场景。")
-        desc_single.setStyleSheet("color: gray; font-size: 11px; margin-left: 4px;")
-        desc_single.setWordWrap(True)
-        cv.addWidget(desc_single)
+        lay.addWidget(gb_caps, 1)
 
-        lay.addWidget(gb_config)
-
-        # ---- Cursor 提示 ----
-        cursor_note = QLabel(
-            "Cursor 用户请将 JSON 粘贴到项目根目录的 <code>.cursor/mcp.json</code> 文件中。"
-        )
-        cursor_note.setWordWrap(True)
-        cursor_note.setStyleSheet("color: gray; font-size: 11px;")
-        lay.addWidget(cursor_note)
-
-        lay.addStretch(1)
-
-        # 初始检测
-        self._mcp_refresh_status()
         return w
 
-    def _mcp_refresh_status(self) -> None:
-        """检测 Claude Desktop 配置状态并更新 UI。"""
-        claude_config_path = self._claude_config_path()
-        has_claude = claude_config_path and claude_config_path.exists()
-        has_entry = False
-        if has_claude:
-            try:
-                import json
-                data = json.loads(claude_config_path.read_text(encoding="utf-8"))
-                servers = data.get("mcpServers", {})
-                has_entry = "llm-cabinet" in servers
-            except Exception:
-                pass
+    def _mcp_show_export_dialog(self) -> None:
+        """Show the MCP config export dialog."""
+        dlg = QDialog(self)
+        dlg.setWindowTitle("导出 MCP 配置")
+        dlg.setMinimumWidth(420)
+        dlg.setModal(True)
 
-        if has_entry:
-            self._mcp_status_label.setText("已配置 Claude Desktop")
-            self._mcp_detail_label.setText(str(claude_config_path))
-        elif has_claude:
-            self._mcp_status_label.setText("检测到 Claude Desktop（未配置 Cabinet）")
-            self._mcp_detail_label.setText(str(claude_config_path))
-        else:
-            self._mcp_status_label.setText("未检测到 Claude Desktop")
-            self._mcp_detail_label.setText(
-                "安装 Claude Desktop 后点击按钮自动配置"
-                if claude_config_path
-                else "当前系统不支持自动检测 Claude Desktop"
-            )
+        layout = QVBoxLayout(dlg)
+        layout.setSpacing(12)
 
-    def _build_mcp_config(self, multi: bool = True) -> dict:
-        """Build MCP server config for the given mode."""
-        args: list[str] = ["-m", "app.mcp.standalone"]
-        if not multi:
-            args.extend(["--db", str(self.db_path)])
-        import app as _app_module
-        project_root = str(Path(_app_module.__file__).resolve().parent.parent)
-        return {
-            "command": "python",
-            "args": args,
-            "env": {
-                "PYTHONPATH": project_root,
-            },
-        }
+        # Mode
+        gb_mode = QGroupBox("库模式")
+        mv = QVBoxLayout(gb_mode)
+        self._radio_multi = QRadioButton("多库模式（推荐）")
+        self._radio_single = QRadioButton("仅当前库")
+        self._radio_multi.setChecked(True)
+        mv.addWidget(self._radio_multi)
+        mv.addWidget(self._radio_single)
 
-    def _mcp_write_claude_config(self, multi: bool = True) -> None:
-        """Write or update Claude Desktop config file."""
-        config_path = self._claude_config_path()
-        if config_path is None:
-            QMessageBox.warning(self, "不支持",
-                "当前系统无法自动检测 Claude Desktop 配置文件路径。\n"
-                '请用"复制 JSON"按钮手动粘贴。')
-            return
+        mode_hint = QLabel(
+            "多库：agent 可发现全部库并自然语言切换。只需配置一次。\n"
+            "单库：agent 仅操作当前打开的库，适合敏感资料。"
+        )
+        mode_hint.setWordWrap(True)
+        mode_hint.setStyleSheet("color: gray; font-size: 11px; margin-left: 18px;")
+        mv.addWidget(mode_hint)
+        layout.addWidget(gb_mode)
 
-        import json
-        try:
-            if config_path.exists():
-                data = json.loads(config_path.read_text(encoding="utf-8"))
-            else:
-                data = {}
-            if not isinstance(data, dict):
-                data = {}
-            if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
-                data["mcpServers"] = {}
+        # Read-only mode toggle
+        gb_write = QGroupBox("只读模式")
+        wv = QVBoxLayout(gb_write)
+        self._cb_write = QCheckBox("只读模式（agent 只能浏览和搜索，不能修改数据）")
+        self._cb_write.setChecked(False)
+        self._cb_write.setToolTip(
+            "默认关闭：agent 可以正常浏览和编辑库内容。\n"
+            "勾选后 agent 只能查看，适合公开场合或给别人演示时使用。"
+        )
+        wv.addWidget(self._cb_write)
 
-            entry = self._build_mcp_config(multi)
-            existing = "llm-cabinet" in data["mcpServers"]
-            data["mcpServers"]["llm-cabinet"] = entry
+        write_hint = QLabel(
+            "默认情况下 agent 拥有添加/修改能力（对应 --write-permission session，仅当次连接有效）。\n"
+            "Claude Desktop 内的写工具默认也需要手动批准，形成双重保护。"
+            "如需完全只读，请勾选上方复选框。"
+        )
+        write_hint.setWordWrap(True)
+        write_hint.setStyleSheet("color: gray; font-size: 11px; margin-left: 18px;")
+        wv.addWidget(write_hint)
+        layout.addWidget(gb_write)
 
-            config_path.parent.mkdir(parents=True, exist_ok=True)
-            config_path.write_text(
-                json.dumps(data, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+        # Buttons
+        bb = QHBoxLayout()
+        bb.addStretch()
+        btn_cancel = QPushButton("取消")
+        btn_cancel.clicked.connect(dlg.reject)
+        bb.addWidget(btn_cancel)
 
-            self._mcp_refresh_status()
-            action = "已更新" if existing else "已配置"
-            QMessageBox.information(self, "完成",
-                f"{action} Claude Desktop MCP 配置。\n重启 Claude Desktop 后生效。")
-        except Exception as e:
-            QMessageBox.warning(self, "配置失败", f"写入配置文件时出错：{e}")
+        btn_copy = QPushButton("复制 JSON")
+        btn_copy.setDefault(True)
 
-    def _mcp_copy_json(self, multi: bool = True) -> None:
-        """Copy MCP config JSON to clipboard for the given mode."""
-        import json
-        from PySide6.QtGui import QGuiApplication
+        def _on_copy():
+            import json
+            from PySide6.QtGui import QGuiApplication
 
-        entry = self._build_mcp_config(multi)
-        full = {
-            "mcpServers": {
-                "llm-cabinet": entry,
-            },
-        }
-        text = json.dumps(full, ensure_ascii=False, indent=2)
-        QGuiApplication.clipboard().setText(text)
-        QMessageBox.information(self, "已复制",
-            "MCP 配置 JSON 已复制到剪贴板。\n请粘贴到 Claude Desktop / Cursor 的配置文件中。")
+            multi = self._radio_multi.isChecked()
+            read_only = self._cb_write.isChecked()
 
-    @staticmethod
-    def _claude_config_path() -> Path | None:
-        """返回 Claude Desktop 配置文件的路径，不支持则返回 None。"""
-        import sys
-        from pathlib import Path as _Path
-        if sys.platform == "win32":
-            return _Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
-        elif sys.platform == "darwin":
-            return _Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
-        return None
+            args: list[str] = ["-m", "app.mcp.standalone"]
+            if not multi:
+                args.extend(["--db", str(self.db_path)])
+            if not read_only:
+                args.append("--write-permission")
+                args.append("session")
+
+            # Build server name with suffixes
+            name = "llm-cabinet"
+            if not multi:
+                # Use library directory name as suffix
+                lib_name = self.library_root.name if self.library_root else "single"
+                name += f"-{lib_name}"
+            if read_only:
+                name += "-ro"
+
+            import app as _app_module
+            project_root = str(Path(_app_module.__file__).resolve().parent.parent)
+            entry = {
+                "command": "python",
+                "args": args,
+                "env": {"PYTHONPATH": project_root},
+            }
+            full = {"mcpServers": {name: entry}}
+            text = json.dumps(full, ensure_ascii=False, indent=2)
+            QGuiApplication.clipboard().setText(text)
+            dlg.accept()
+            QMessageBox.information(self, "已复制",
+                f"MCP 配置 JSON 已复制到剪贴板（名称：{name}）。\n请粘贴到 Claude Desktop / Cursor 的配置文件中。")
+
+        btn_copy.clicked.connect(_on_copy)
+        bb.addWidget(btn_copy)
+        layout.addLayout(bb)
+
+        dlg.exec()
 
     # =================================================================
     # 关于

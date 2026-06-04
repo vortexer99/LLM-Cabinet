@@ -36,33 +36,40 @@ def organize_new_files(directory: str = "") -> list[PromptMessage]:
                 text=f"""你的任务是帮助用户整理新入库的文件。请按以下步骤操作：
 
 1. 确认目标库：
-   - 先调用 list_libraries() 查看可用库
-   - 如果用户有指定目标库名，调用 switch_library(name) 切换
+   - 先调用 manage_libraries(action="list") 查看可用库
+   - 如果用户有指定目标库名，调用 manage_libraries(action="switch", library_name=name) 切换
 
 2. 发现待整理的文件：{path_hint}
    如果没有指定目录，跳过此步，直接进入第 3 步。
 
 3. 分析文件内容：
-   - 对于每个文件，调用 search_projects(keyword=文件名中的关键词) 查找匹配项目
-   - 查看 search_projects 返回的 title 和 tags，判断是否存在合适的现有项目
+   - 对于每个文件，调用 query_projects(action="search", keyword=文件名中的关键词) 查找匹配项目
+   - 查看 query_projects 返回的 title 和 tags，判断是否存在合适的现有项目
 
-4. 处理文件：
-   - 找到匹配项目 → 直接 add_file(project_id=..., path=...)
-   - 找不到匹配 → create_project(title=合适的项目名) 然后 add_file
+4. 入库：
+   - 找到匹配项目 → manage_files(action="add", project_id=..., path=...)
+   - 找不到匹配 → 创建新项目（看下一步）
    - 不确定 → 列出候选项目，让用户选择
 
-5. 补充元数据：
-   - 为新创建的项目添加合适的 tags
-   - 调用 get_field_definition 了解库有哪些可用字段
-   - 如有合适的字段（如 author、year、source），设置到项目中
+5. 新建项目时（按顺序执行）：
+   a) 先调用 manage_project(action="create", title=项目名, description=项目描述, tags=逗号分隔标签)
+      得到新项目的 project_id
+   b) 再调用 manage_libraries(action="get_fields") 获取库中所有字段定义
+      每个字段返回 {id: 数字, name: "字段名", type: "类型", prompt_hint: "填写提示"}
+   c) 仔细阅读每个字段的 prompt_hint，根据项目 title 和 description 为每个字段推断合适的值
+   d) 调用 manage_project(action="update", project_id=..., field_values=...) 写入字段值
+      **关键：field_values 的 key 必须是 get_fields 返回的 field.id（数字），严禁用 field.name（中文名）**
+      正确示例：{"3": "张三", "5": "2024"}（3 和 5 是 get_fields 里看到的 field.id）
+      错误示例：{"作者": "张三"}（会静默失败，数据不保存）
+   e) 调用 manage_files(action="add", project_id=..., path=...) 添加文件
 
 6. 总结：
    - 报告本次入库了多少文件，新建了多少项目
    - 如有未处理的文件，说明原因
 
 注意：
-- search_projects 只搜项目标题和描述，不会搜文件内容；找不到时请创建新项目
-- list_files(project_id, kind) 可按文档/图片/视频等类型过滤
+- query_projects(action="search") 只搜项目标题和描述，不会搜文件内容；找不到时请创建新项目
+- manage_files(action="list", project_id=..., kind=...) 可按文档/图片/视频等类型过滤
 - 不确定标签时，使用现有标签树中的标签（通过 cabinet://tags 查看可用标签）""",
             ),
         ),
@@ -94,24 +101,20 @@ def audit_metadata() -> list[PromptMessage]:
    - 调用 cabinet://library/stats（Resource）获取标签分布和待处理建议数
 
 2. 检查空描述项目：
-   - 调用 search_projects(keyword="") 获取全部项目
+   - 调用 query_projects(action="search", keyword="") 获取全部项目
    - 标记 description_md 为空的项目
 
 3. 检查缺少标签的项目：
-   - 查看 search_projects 返回的 tags 字段
+   - 查看 query_projects 返回的 tags 字段
    - 列出 tags 为空的项目
 
-4. 检查待处理的 LLM 建议：
-   - 调用 list_pending_suggestions()（不传 project_id）获取全部待处理建议
-   - 统计数量，列出涉及的项目
+4. 检查字段填充率：
+   - 调用 manage_libraries(action="get_field", field_name=...) 了解库有哪些自定义字段
+   - 对每个字段，通过 query_projects(action="get", project_id=...) 检查各项目的 field_values 是否为空
 
-5. 检查字段填充率：
-   - 调用 get_field_definition(field_name) 了解库有哪些自定义字段
-   - 对每个字段，检查 key 非空的字段（如 author、date 等）在各项目中的值是否为空
-
-6. 生成审核报告：
+5. 生成审核报告：
    - 用表格列出问题项目数和占比
-   - 按严重程度排序：缺描述 > 缺标签 > 缺字段值 > 待处理建议
+   - 按严重程度排序：缺描述 > 缺标签 > 缺字段值
    - 对每个问题给出具体的修改建议（哪些标签适合、哪个字段该填什么）
 
 注意：
@@ -149,7 +152,7 @@ def summarize_library() -> list[PromptMessage]:
    - 区分系统字段（key 非空）和用户自定义字段（key 为空）
 
 4. 近期活动：
-   - 调用 search_projects(keyword="") 获取全部项目，按 updated_at 排序
+   - 调用 query_projects(action="search", keyword="") 获取全部项目，按 updated_at 排序
    - 列出最近更新的 5 个项目
 
 5. 生成报告：
@@ -186,9 +189,9 @@ def summarize_library() -> list[PromptMessage]:
 def suggest_tags(project_id: int = 0) -> list[PromptMessage]:
     """Task: suggest tags for untagged or poorly tagged projects."""
     project_clause = (
-        f"查看项目 #{project_id}：先调用 get_project({project_id}) 获取项目详情"
+        f"查看项目 #{project_id}：先调用 query_projects(action=\"get\", project_id={project_id}) 获取项目详情"
         if project_id
-        else "列出缺少标签的项目：调用 search_projects(keyword='') 并筛选 tags 为空的项"
+        else "列出缺少标签的项目：调用 query_projects(action=\"search\", keyword='') 并筛选 tags 为空的项"
     )
 
     return [
