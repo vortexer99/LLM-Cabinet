@@ -98,9 +98,13 @@ class CabinetConfig:
         return app_data_dir() / CABINET_JSON
 
     @classmethod
-    def load(cls) -> "CabinetConfig":
-        """读 ``cabinet.json``。损坏 / 缺失时备份并重建为默认。"""
-        path = cls.config_path()
+    def load(cls, path: Optional[Path] = None) -> "CabinetConfig":
+        """读 ``cabinet.json``。损坏 / 缺失时备份并重建为默认。
+
+        ``path`` 可指定自定义 cabient.json 路径；不传则用默认的
+        ``app_data_dir() / "cabinet.json"``。
+        """
+        path = path or cls.config_path()
         if not path.exists():
             return cls._default()
         try:

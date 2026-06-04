@@ -47,9 +47,12 @@ class LibraryContext:
     # ---- factory ----------------------------------------------------------
 
     @classmethod
-    def from_default(cls) -> "LibraryContext":
-        """Load from the default ``cabinet.json`` in the app data directory."""
-        config = CabinetConfig.load()
+    def from_default(cls, config_path: Optional[Path] = None) -> "LibraryContext":
+        """Load from the default ``cabinet.json`` in the app data directory.
+
+        ``config_path`` overrides the default cabinet.json location.
+        """
+        config = CabinetConfig.load(config_path)
         return cls(config)
 
     @classmethod
@@ -122,24 +125,80 @@ class LibraryContext:
     def switch(self, name: str) -> dict:
         """Switch to a library by its display name.
 
-        T1 read-only mode: this is a **no-op** (returns the current library).
+        In single-library (``--db``) mode, switching is not allowed.
 
         Returns:
             ``{"ok": bool, "library_name": str, "path": str, "error": str}``
         """
-        # T1: no-op. Full implementation in T2.
-        current = self._current_handle
-        if current is None:
+        if self._db_override:
             return {
                 "ok": False,
                 "library_name": "",
                 "path": "",
-                "error": "当前未打开任何库",
+                "error": "单库模式下不支持切换库",
             }
+
+        # Find the target library
+        match: Optional[LibraryHandle] = None
+        for h in self._config.recent_libraries:  # TODO: → .libraries after refactoring
+            if h.display_name == name:
+                match = h
+                break
+
+        if match is None:
+            return {
+                "ok": False,
+                "library_name": name,
+                "path": "",
+                "error": f"未找到名为 '{name}' 的库。可用 list_libraries 查看全部库。",
+            }
+
+        # If already on this library, no-op
+        if (
+            self._current_handle is not None
+            and match.path.resolve() == self._current_handle.path.resolve()
+        ):
+            return {
+                "ok": True,
+                "library_name": match.display_name,
+                "path": str(match.path),
+            }
+
+        # Close old connection
+        try:
+            if self._repo is not None and self._repo.conn is not None:
+                self._repo.conn.close()
+        except Exception:
+            pass
+
+        # Open new library
+        db_path = match.path / "cabinet.db"
+        if not db_path.exists():
+            return {
+                "ok": False,
+                "library_name": match.display_name,
+                "path": str(match.path),
+                "error": f"库文件不存在：{db_path}",
+            }
+
+        try:
+            conn = db_connect(db_path)
+            self._repo = Repository(conn)
+            self._library = Library(match.path / "library")
+            self._current_handle = match
+            log.info("Switched to library: %s (%s)", match.display_name, db_path)
+        except Exception as exc:
+            return {
+                "ok": False,
+                "library_name": match.display_name,
+                "path": str(match.path),
+                "error": f"无法打开库：{exc}",
+            }
+
         return {
             "ok": True,
-            "library_name": current.display_name,
-            "path": str(current.path),
+            "library_name": match.display_name,
+            "path": str(match.path),
         }
 
     def load_default(self) -> None:
