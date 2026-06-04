@@ -99,7 +99,7 @@ PROMPT_REGISTRY: list[dict] = [
     {
         "name": "organize_new_files",
         "title": "整理新入库文件",
-        "description": "引导 agent 按流程发现、匹配、导入新文件到合适的项目，并自动填写字段元数据",
+        "description": "将文件导入库：扫描目录→匹配已有项目/创建新项目→自动填写标题/描述/标签/字段值。适用于'帮我把论文入库''导入文件夹''这个 PDF 加到库里'等请求。",
         "handler": organize_new_files,
         "arguments": [
             {
@@ -112,21 +112,21 @@ PROMPT_REGISTRY: list[dict] = [
     {
         "name": "audit_metadata",
         "title": "审核元数据质量",
-        "description": "审视库中所有项目的描述、标签、字段填充率和文件完整性，生成结构化审核报告",
+        "description": "全库元数据体检：检查缺失描述/标签/字段填充率/标签分布/文件完整性，生成结构化报告。适用于'检查数据质量''审核元数据''有哪些项目缺标签'等请求。",
         "handler": audit_metadata,
         "arguments": [],
     },
     {
         "name": "summarize_library",
         "title": "生成库概览",
-        "description": "统计项目数、标签分布、字段概况、近期活动，生成可读的库总结报告",
+        "description": "库全景报告：项目总数、标签分布、字段概况、最近更新、未分类项目。适用于'给我一个库概览''库里都有什么''最近加了什么'等请求。",
         "handler": summarize_library,
         "arguments": [],
     },
     {
         "name": "suggest_tags",
         "title": "推荐标签",
-        "description": "分析项目内容与库中已有标签体系，推荐合适的标签（可指定单项目或全部未分类项目）",
+        "description": "为项目推荐标签：分析标题/描述，匹配已有标签体系，优先复用。适用于'推荐标签''这个论文该打什么标签''给未分类项目补标签'等请求。",
         "handler": suggest_tags,
         "arguments": [
             {
