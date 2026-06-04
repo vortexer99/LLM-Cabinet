@@ -1,7 +1,11 @@
 # 03 · 类 Calibre 的搜索
 
-**工作量**：M  
-**优先级**：P0  
+> **2026-06-04 更新**：拆为两段——
+> **Phase A（基础，XS~S）**：激活灰色搜索框，连 `repo.list_projects(keyword, tag)` 做关键词+标签搜索。与 MCP `query_projects(action="search")` 共享同一后端。
+> **Phase B（Calibre 级，M）**：字段过滤 + 布尔逻辑 + 解析器 + 语法提示。agent 也可用更精确的查询。
+
+**工作量**：M（Phase A XS~S + Phase B M）
+**优先级**：P0
 **状态**：待做
 
 ## 来源
