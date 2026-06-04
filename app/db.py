@@ -24,7 +24,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -436,11 +436,18 @@ def _migrate_v4_to_v5(conn: sqlite3.Connection) -> None:
     """)
 
 
+def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
+    """task #24：projects 加 mcp_modified_at 列（MCP 修改标记）。"""
+
+    conn.execute("ALTER TABLE projects ADD COLUMN mcp_modified_at TEXT")
+
+
 MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (1, 2, _migrate_v1_to_v2),
     (2, 3, _migrate_v2_to_v3),
     (3, 4, _migrate_v3_to_v4),
     (4, 5, _migrate_v4_to_v5),
+    (5, 6, _migrate_v5_to_v6),
 ]
 
 

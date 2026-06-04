@@ -88,11 +88,12 @@ manage_libraries(action="switch", library_name="工作文档")
 ### 第 4 步：添加文件到已有项目
 
 ```
-manage_files(action="add", project_id=15, path="D:\\papers\\attention-is-all-you-need.pdf")
+manage_files(action="add", project_id=15, path="D:\\papers\\attention-is-all-you-need.pdf",
+    label="Transformer 架构论文 (Vaswani et al., 2017)")
 → {"ok": true, "file_id": 27}
 ```
 
-`storage_mode` 默认为 `link`（不拷贝文件，只记录路径）。如果库设置为 `copy` 模式可传 `storage_mode="copy"`。
+`label` **必须填**：一句简短的中文文件描述，说明文件内容和用途（如"Transformer 论文 PDF"、"项目源码压缩包"、"数据集 CSV"）。`storage_mode`：先通过 `cabinet://library/info` 查看库的 `default_storage_mode`。用户未指定时，以此为准。`link` = 记录原始绝对路径，`copy` = 记录库内相对路径——**两者均不会实际搬移物理文件**。添加成功后必须向用户报告（如"已添加文件（链接模式，按库默认设置）"）。
 
 ---
 
@@ -152,9 +153,12 @@ manage_project(action="update",
 **5e) 添加文件**：
 
 ```
-manage_files(action="add", project_id=42, path="D:\\papers\\attention-is-all-you-need.pdf")
+manage_files(action="add", project_id=42, path="D:\\papers\\attention-is-all-you-need.pdf",
+    label="Transformer 架构论文 (Vaswani et al., 2017)")
 → {"ok": true, "file_id": 28}
 ```
+
+> `label` **必须填**。根据文件名和项目内容生成一句简短的中文文件描述。
 
 **5f) 合并同类文件（仅当用户要求分门别类时执行）**：
 

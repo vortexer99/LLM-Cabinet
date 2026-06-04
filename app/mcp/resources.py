@@ -107,6 +107,7 @@ async def read_library_info(ctx: LibraryContext) -> dict[str, Any]:
         "total_projects": repo.count_projects_total(),
         "total_fields": len(fields),
         "tag_count": len(repo.list_tag_counts()),
+        "default_storage_mode": repo.get_setting("default_storage_mode", "link") or "link",
     }
 
 

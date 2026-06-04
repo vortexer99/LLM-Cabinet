@@ -1030,6 +1030,80 @@ class Repository:
             resolved_at=r["resolved_at"] or "",
         )
 
+    # ------------------------------------------------------------------ mcp audit / modified tasks (#24)
+    def count_mcp_audit(
+        self,
+        client_name: str = "",
+        tool_name: str = "",
+        result_status: str = "",
+    ) -> int:
+        """统计 MCP 审计记录数（支持筛选）。"""
+        sql = "SELECT COUNT(*) AS c FROM mcp_audit WHERE 1=1"
+        params: list = []
+        if client_name:
+            sql += " AND client_name = ?"
+            params.append(client_name)
+        if tool_name:
+            sql += " AND tool_name = ?"
+            params.append(tool_name)
+        if result_status:
+            sql += " AND result_status = ?"
+            params.append(result_status)
+        row = self.conn.execute(sql, params).fetchone()
+        return row[0] if row else 0
+
+    def list_mcp_audit(
+        self,
+        offset: int = 0,
+        limit: int = 50,
+        client_name: str = "",
+        tool_name: str = "",
+        result_status: str = "",
+    ) -> list[dict]:
+        """分页获取 MCP 审计记录。"""
+        sql = (
+            "SELECT id, ts, client_name, tool_name, arguments_json, "
+            "result_status, error_message "
+            "FROM mcp_audit WHERE 1=1"
+        )
+        params: list = []
+        if client_name:
+            sql += " AND client_name = ?"
+            params.append(client_name)
+        if tool_name:
+            sql += " AND tool_name = ?"
+            params.append(tool_name)
+        if result_status:
+            sql += " AND result_status = ?"
+            params.append(result_status)
+        sql += " ORDER BY ts DESC LIMIT ? OFFSET ?"
+        params += [limit, offset]
+        rows = self.conn.execute(sql, params).fetchall()
+        cols = ["id", "ts", "client_name", "tool_name", "arguments_json", "result_status", "error_message"]
+        return [{c: r[i] for i, c in enumerate(cols)} for r in rows]
+
+    def mark_project_mcp_modified(self, project_id: int) -> None:
+        """更新项目的 mcp_modified_at 为当前时间。"""
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        self.conn.execute(
+            "UPDATE projects SET mcp_modified_at = ? WHERE id = ?",
+            (now, project_id),
+        )
+        self.conn.commit()
+
+    def list_mcp_modified_projects(self) -> list[dict]:
+        """列出被 MCP 修改过的项目（按最近修改时间倒序）。"""
+        rows = self.conn.execute(
+            "SELECT id, title, mcp_modified_at "
+            "FROM projects WHERE mcp_modified_at IS NOT NULL "
+            "ORDER BY mcp_modified_at DESC"
+        ).fetchall()
+        return [
+            {"id": r[0], "title": r[1], "mcp_modified_at": r[2]}
+            for r in rows
+        ]
+
     # ------------------------------------------------------------------ helpers
     @staticmethod
     def _row_to_project(row: sqlite3.Row) -> Project:

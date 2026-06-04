@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt
+from PySide6.QtCore import QEvent, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -233,6 +233,13 @@ class MainWindow(QMainWindow):
             self.llm_queue.suggestions_added.connect(self._on_llm_suggestions_added)
             self.llm_queue.task_failed.connect(self._on_llm_task_failed)
             self._on_llm_counts(self.llm_queue.active_count())
+
+        # 轻量轮询：检测 MCP 是否有新操作（只查 MAX(id) 开销极小）
+        self._mcp_last_audit_id: int = 0
+        self._mcp_timer = QTimer(self)
+        self._mcp_timer.timeout.connect(self._check_mcp_activity)
+        self._mcp_timer.start(10_000)  # 每 10 秒
+        self._check_mcp_activity()
 
     # ============================================================ menubar (task #08)
     def _build_menubar(self) -> None:
@@ -1350,6 +1357,17 @@ class MainWindow(QMainWindow):
 
         sb = QStatusBar()
         self.setStatusBar(sb)
+        # 状态栏右侧：MCP 操作计数（点击打开记录面板）
+        self.lbl_mcp_count = QLabel("📋 MCP 操作: 0")
+        self.lbl_mcp_count.setStyleSheet(
+            "QLabel{padding:2px 10px;border-radius:4px;}"
+            "QLabel:hover{background:rgba(77,171,247,0.15);color:#74c0fc;}"
+        )
+        self.lbl_mcp_count.setCursor(Qt.PointingHandCursor)
+        self.lbl_mcp_count.setToolTip("点击查看 MCP 操作记录")
+        self.lbl_mcp_count.mousePressEvent = lambda _ev: self.action_open_mcp_audit()
+        sb.addPermanentWidget(self.lbl_mcp_count)
+
         # 状态栏右侧：LLM 任务计数（点击打开任务面板）
         self.lbl_llm_count = QLabel("⚡ LLM 任务: 0")
         self.lbl_llm_count.setStyleSheet(
@@ -1646,6 +1664,11 @@ class MainWindow(QMainWindow):
         elif kind == "tag_prefix" and value:
             projects = self.repo.list_projects(tag_prefix=value)
             title_text = f"📁 {value} / *"
+        elif kind == "mcp":
+            mcp_pids = {p["id"] for p in self.repo.list_mcp_modified_projects()}
+            all_projects = self.repo.list_projects()
+            projects = [p for p in all_projects if p.id in mcp_pids]
+            title_text = "🤖 MCP 修改过"
         else:
             projects = self.repo.list_projects()
             title_text = "全部项目"
@@ -1677,14 +1700,12 @@ class MainWindow(QMainWindow):
             total=self.repo.count_projects_total(),
             untagged=self.repo.count_projects_untagged(),
             pending_review=self.repo.count_projects_with_pending_suggestions(),
+            mcp_modified=len(self.repo.list_mcp_modified_projects()),
         )
 
     def _on_tag_filter_changed(self, kind: str, value: str) -> None:
         self._current_filter_kind = kind
         self._current_filter_value = value
-        # 不重建标签树（避免选中跳掉），只刷新项目区
-        # 但因为 refresh_projects 会调 _refresh_tag_tree，会重建——
-        # populate 内部会保留当前选中，所以没问题
         self.refresh_projects()
 
     def _on_project_selected(self, cur, _prev) -> None:
@@ -1832,6 +1853,24 @@ class MainWindow(QMainWindow):
         app = QApplication.instance()
         if app is not None:
             apply_theme(app, name)
+
+    # ============================================================ MCP audit
+
+    def action_open_mcp_audit(self) -> None:
+        from .mcp_audit_dialog import MCPAuditDialog
+        dlg = MCPAuditDialog(self.repo, parent=self)
+        dlg.exec()
+        self._update_mcp_count()
+
+    def _check_mcp_activity(self) -> None:
+        """轻量轮询：只查 audit 最新 id，有变化才完整刷新。"""
+        row = self.repo.conn.execute("SELECT MAX(id) FROM mcp_audit").fetchone()
+        latest = row[0] or 0
+        if latest > self._mcp_last_audit_id:
+            self._mcp_last_audit_id = latest
+            total = self.repo.count_mcp_audit()
+            self.lbl_mcp_count.setText(f"📋 MCP 操作: {total}")
+            self.refresh_projects()  # 刷新项目列表 + 标签树（更新 MCP 计数）
 
     # ============================================================ LLM
     def action_open_llm_tasks(self) -> None:

@@ -124,7 +124,7 @@ def make_mcp_server(ctx: LibraryContext) -> FastMCP:
         description=(
             "对项目文件的 CRUD 操作。通过 action 参数选择子操作：\n"
             "  action=\"list\": 必传 project_id；可选 kind 过滤（document / image / video / audio / archive / other）。返回该项目下的文件清单。\n"
-            "  action=\"add\": 必传 project_id 和 path；storage_mode 选 link（链接，默认）或 copy（复制到库内）；可选 label。返回新 file_id。\n"
+            "  action=\"add\": 必传 project_id 和 path；建议传 label（一句中文文件描述）；storage_mode 选 link（引用原路径）或 copy（路径记录为库内相对路径）。返回新 file_id。注：copy 模式仅改变路径记录方式，不实际搬移文件。用户未指定时，先通过 cabinet://library/info 查看 default_storage_mode 作为依据，添加后向用户说明使用了哪种方式。\n"
             "  action=\"remove\": 必传 file_id。此操作不可逆，建议执行前先与用户确认。\n"
             "add/remove 需要写权限。"
         ),

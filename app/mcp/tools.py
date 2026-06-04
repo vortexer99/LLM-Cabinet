@@ -247,6 +247,7 @@ async def create_project(
                 log.warning("create_project: field_values JSON 解析失败")
 
         pid = ctx.repo.save_project(p)
+        ctx.repo.mark_project_mcp_modified(pid)
         _audit_log(ctx, "create_project", {"title": title, "tags": tags}, "success")
         return {"ok": True, "project_id": pid}
     except Exception as e:
@@ -303,7 +304,14 @@ async def update_project(
                 log.warning("update_project #%d: field_values JSON 解析失败", project_id)
 
         ctx.repo.save_project(p)
-        _audit_log(ctx, "update_project", {"project_id": project_id}, "success")
+        ctx.repo.mark_project_mcp_modified(project_id)
+        _audit_log(ctx, "update_project", {
+            "project_id": project_id,
+            "title": title or "(不变)",
+            "description": description or "(不变)",
+            "tags": tags or "(不变)",
+            "field_values": field_values or "(不变)",
+        }, "success")
         return {"ok": True, "project_id": project_id}
     except Exception as e:
         _audit_log(ctx, "update_project", {"project_id": project_id}, "error", str(e))
@@ -329,6 +337,7 @@ async def add_tag(ctx: LibraryContext, project_id: int, tag: str) -> dict[str, A
         if tag not in p.tags:
             p.tags.append(tag)
             ctx.repo.save_project(p)
+        ctx.repo.mark_project_mcp_modified(project_id)
         _audit_log(ctx, "add_tag", {"project_id": project_id, "tag": tag}, "success")
         return {"ok": True}
     except Exception as e:
@@ -352,6 +361,7 @@ async def remove_tag(ctx: LibraryContext, project_id: int, tag: str) -> dict[str
         if tag in p.tags:
             p.tags.remove(tag)
             ctx.repo.save_project(p)
+        ctx.repo.mark_project_mcp_modified(project_id)
         _audit_log(ctx, "remove_tag", {"project_id": project_id, "tag": tag}, "success")
         return {"ok": True}
     except Exception as e:
@@ -392,6 +402,7 @@ async def add_file(
             kind=kind,
         )
         fid = ctx.repo.add_file(f)
+        ctx.repo.mark_project_mcp_modified(project_id)
         _audit_log(ctx, "add_file", {"project_id": project_id, "path": path}, "success")
         return {"ok": True, "file_id": fid}
     except Exception as e:
@@ -412,7 +423,10 @@ async def remove_file(ctx: LibraryContext, file_id: int) -> dict[str, Any]:
         f = ctx.repo.get_file(file_id)
         if f is None:
             return {"ok": False, "error": f"文件 {file_id} 不存在"}
+        pid = f.project_id  # capture before deletion
         ctx.repo.delete_file(file_id)
+        if pid:
+            ctx.repo.mark_project_mcp_modified(pid)
         _audit_log(ctx, "remove_file", {"file_id": file_id}, "success")
         return {"ok": True}
     except Exception as e:
@@ -445,6 +459,7 @@ async def export_project(
         target = _Path(target_dir)
         options = ExportOptions(target_root=target, copy_link_files=True)
         result = _export(ctx.repo, ctx.library, p, options)
+        ctx.repo.mark_project_mcp_modified(project_id)
         _audit_log(ctx, "export_project", {"project_id": project_id, "target_dir": target_dir}, "success")
         return {
             "ok": True,

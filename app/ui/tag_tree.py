@@ -95,6 +95,7 @@ class TagTree(QTreeWidget):
         total: int,
         untagged: int,
         pending_review: int = 0,
+        mcp_modified: int = 0,
     ) -> None:
         """重建整棵树，尽量保留当前选中项。"""
         cur_kind, cur_value = self.current_filter()
@@ -109,6 +110,9 @@ class TagTree(QTreeWidget):
 
         item_review = self._make_item("⚡  待审阅 LLM 建议", pending_review, "review", "")
         self.addTopLevelItem(item_review)
+
+        item_mcp = self._make_item("🤖  MCP 修改过", mcp_modified, "mcp", "")
+        self.addTopLevelItem(item_mcp)
 
         # 标签分组节点
         if tag_counts:
@@ -148,6 +152,8 @@ class TagTree(QTreeWidget):
             target = item_untagged
         elif cur_kind == "review":
             target = item_review
+        elif cur_kind == "mcp":
+            target = item_mcp
         elif cur_kind == "tag":
             target = self._find_tag_item(cur_value) or root_all
         elif cur_kind == "tag_prefix":
