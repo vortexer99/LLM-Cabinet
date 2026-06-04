@@ -18,8 +18,10 @@ import logging
 from typing import Any
 
 from mcp.server.fastmcp import FastMCP
+from mcp.types import PromptMessage
 
 from ..__init__ import __version__
+from . import prompts as pr
 from . import resources as res
 from . import tools
 from .context import LibraryContext
@@ -149,12 +151,52 @@ def make_mcp_server(ctx: LibraryContext) -> FastMCP:
         # Default: file content reading is disabled
         return _json_result(await res.read_file_content(ctx, file_id, allow=False))
 
+    # ---- Prompts ------------------------------------------------------------
+
+    for entry in pr.PROMPT_REGISTRY:
+        _register_prompt(mcp, entry)
+
     return mcp
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _register_prompt(mcp: FastMCP, entry: dict) -> None:
+    """Register a single Prompt from the registry entry.
+
+    We build the handler function dynamically with the right function name
+    so that the FastMCP decorator introspects it correctly.
+    """
+    handler = entry["handler"]
+    name = entry["name"]
+
+    # Build a function with the exact signature the handler expects.
+    # Most handlers take no args; some take `project_id` or `directory`.
+    import inspect
+
+    sig = inspect.signature(handler)
+    param_names = list(sig.parameters.keys())
+
+    # Create a closure that matches the handler's signature
+    ns: dict[str, Any] = {"_handler": handler}
+    args_str = ", ".join(p for p in param_names if p != "return")
+
+    if args_str:
+        code = f"def {name}({args_str}):\n    return _handler({args_str})"
+    else:
+        code = f"def {name}():\n    return _handler()"
+
+    exec(code, ns)
+    fn = ns[name]
+
+    mcp.prompt(
+        name=name,
+        title=entry.get("title"),
+        description=entry["description"],
+    )(fn)
 
 
 def _json_result(obj: Any) -> str:

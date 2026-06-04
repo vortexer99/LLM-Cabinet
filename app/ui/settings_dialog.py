@@ -68,7 +68,7 @@ class SettingsDialog(QDialog):
         self.cat_list.setObjectName("SettingsCategories")
         self.cat_list.setFixedWidth(160)
         self.cat_list.setSpacing(2)
-        self._categories: list[str] = ["通用", "项目库", "视图", "字段", "API", "关于"]
+        self._categories: list[str] = ["通用", "项目库", "视图", "字段", "API", "MCP", "关于"]
         for name in self._categories:
             QListWidgetItem(name, self.cat_list)
         self.cat_list.setCurrentRow(0)
@@ -80,6 +80,7 @@ class SettingsDialog(QDialog):
         self.stack.addWidget(self._build_view_page())
         self.stack.addWidget(self._build_fields_page())
         self.stack.addWidget(self._build_api_page())
+        self.stack.addWidget(self._build_mcp_page())
         self.stack.addWidget(self._build_about_page())
 
         self.cat_list.currentRowChanged.connect(self.stack.setCurrentIndex)
@@ -954,6 +955,205 @@ class SettingsDialog(QDialog):
             self._ping_threads: list = []
         self._ping_threads.append((thread, worker))
         thread.start()
+
+    # =================================================================
+    # MCP 集成
+    # =================================================================
+    def _build_mcp_page(self) -> QWidget:
+        w = QWidget()
+        lay = QVBoxLayout(w)
+        lay.setContentsMargins(20, 18, 20, 18)
+        lay.setSpacing(14)
+
+        title = QLabel("MCP 集成")
+        title.setProperty("h1", True)
+        lay.addWidget(title)
+
+        desc = QLabel(
+            "通过 MCP 协议把项目库暴露给外部 AI agent（Claude Desktop / Cursor / Cline 等），"
+            "让 agent 可以搜索、浏览和管理你的项目。独立进程通过 stdio 通信，不开放网络端口。"
+        )
+        desc.setWordWrap(True)
+        lay.addWidget(desc)
+
+        # ---- 配置状态 ----
+        gb_status = QGroupBox("配置状态")
+        form = QFormLayout(gb_status)
+        form.setLabelAlignment(Qt.AlignLeft)
+
+        self._mcp_status_label = QLabel()
+        self._mcp_status_label.setWordWrap(True)
+        form.addRow(self._mcp_status_label)
+
+        self._mcp_detail_label = QLabel()
+        self._mcp_detail_label.setWordWrap(True)
+        self._mcp_detail_label.setStyleSheet("color: gray; font-size: 11px;")
+        form.addRow(self._mcp_detail_label)
+        lay.addWidget(gb_status)
+
+        # ---- 模式选择 ----
+        gb_mode = QGroupBox("启动模式")
+        mode_form = QFormLayout(gb_mode)
+        mode_form.setLabelAlignment(Qt.AlignLeft)
+
+        self._mcp_radio_multi = QRadioButton("多库模式（推荐）")
+        self._mcp_radio_single = QRadioButton("仅当前库（安全锁定）")
+        self._mcp_radio_multi.setChecked(True)
+
+        self._mcp_mode_hint = QLabel(
+            "多库模式：agent 自动发现所有注册的库，可用自然语言切换。\n"
+            "单库模式：agent 只能访问当前打开的这一个库。"
+        )
+        self._mcp_mode_hint.setWordWrap(True)
+        self._mcp_mode_hint.setStyleSheet("color: gray; font-size: 11px;")
+
+        def _on_mode_changed():
+            is_multi = self._mcp_radio_multi.isChecked()
+            self._mcp_mode_hint.setText(
+                "多库模式：agent 自动发现所有注册的库，可用自然语言切换。\n"
+                "单库模式：agent 只能访问当前打开的这一个库。"
+                if is_multi
+                else "单库模式：agent 只能访问当前库，无法切换。适合敏感资料。"
+            )
+
+        self._mcp_radio_multi.toggled.connect(_on_mode_changed)
+
+        mode_form.addRow(self._mcp_radio_multi)
+        mode_form.addRow(self._mcp_radio_single)
+        mode_form.addRow(self._mcp_mode_hint)
+        lay.addWidget(gb_mode)
+
+        # ---- 操作按钮 ----
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self._btn_config_claude = QPushButton("配置 Claude Desktop")
+        self._btn_config_claude.clicked.connect(self._mcp_write_claude_config)
+        btn_row.addWidget(self._btn_config_claude)
+
+        self._btn_copy_json = QPushButton("复制配置 JSON")
+        self._btn_copy_json.clicked.connect(self._mcp_copy_json)
+        btn_row.addWidget(self._btn_copy_json)
+
+        btn_row.addStretch(1)
+        lay.addLayout(btn_row)
+
+        # ---- Cursor 提示 ----
+        cursor_note = QLabel(
+            "Cursor 用户请将 JSON 粘贴到项目根目录的 <code>.cursor/mcp.json</code> 文件中。"
+        )
+        cursor_note.setWordWrap(True)
+        cursor_note.setStyleSheet("color: gray; font-size: 11px;")
+        lay.addWidget(cursor_note)
+
+        lay.addStretch(1)
+
+        # 初始检测
+        self._mcp_refresh_status()
+        return w
+
+    def _mcp_refresh_status(self) -> None:
+        """检测 Claude Desktop 配置状态并更新 UI。"""
+        claude_config_path = self._claude_config_path()
+        if claude_config_path and claude_config_path.exists():
+            try:
+                import json
+                data = json.loads(claude_config_path.read_text(encoding="utf-8"))
+                servers = data.get("mcpServers", {})
+                if "llm-cabinet" in servers:
+                    self._mcp_status_label.setText("已配置 Claude Desktop")
+                    self._mcp_detail_label.setText(str(claude_config_path))
+                    self._btn_config_claude.setText("更新配置")
+                    self._btn_config_claude.setEnabled(True)
+                    return
+            except Exception:
+                pass
+            self._mcp_status_label.setText("检测到 Claude Desktop（未配置 Cabinet）")
+            self._mcp_detail_label.setText(str(claude_config_path))
+            self._btn_config_claude.setText("配置 Claude Desktop")
+            self._btn_config_claude.setEnabled(True)
+        else:
+            self._mcp_status_label.setText("未检测到 Claude Desktop")
+            self._mcp_detail_label.setText(
+                "安装 Claude Desktop 后点击按钮自动配置"
+                if claude_config_path
+                else "当前系统不支持自动检测 Claude Desktop"
+            )
+            self._btn_config_claude.setEnabled(claude_config_path is not None)
+
+    def _build_mcp_config(self) -> dict:
+        """根据用户选择的模式构建 MCP server 配置。"""
+        args: list[str] = ["-m", "app.mcp.standalone"]
+        if self._mcp_radio_single.isChecked():
+            args.extend(["--db", str(self.db_path)])
+        return {
+            "command": "python",
+            "args": args,
+        }
+
+    def _mcp_write_claude_config(self) -> None:
+        """自动写入或更新 Claude Desktop 配置文件。"""
+        config_path = self._claude_config_path()
+        if config_path is None:
+            QMessageBox.warning(self, "不支持",
+                "当前系统无法自动检测 Claude Desktop 配置文件路径。\n"
+                '请用"复制配置 JSON"按钮手动粘贴。')
+            return
+
+        import json
+        try:
+            if config_path.exists():
+                data = json.loads(config_path.read_text(encoding="utf-8"))
+            else:
+                data = {}
+            if not isinstance(data, dict):
+                data = {}
+            if "mcpServers" not in data or not isinstance(data["mcpServers"], dict):
+                data["mcpServers"] = {}
+
+            entry = self._build_mcp_config()
+            existing = "llm-cabinet" in data["mcpServers"]
+            data["mcpServers"]["llm-cabinet"] = entry
+
+            config_path.parent.mkdir(parents=True, exist_ok=True)
+            config_path.write_text(
+                json.dumps(data, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+
+            self._mcp_refresh_status()
+            action = "已更新" if existing else "已配置"
+            QMessageBox.information(self, "完成",
+                f"{action} Claude Desktop MCP 配置。\n重启 Claude Desktop 后生效。")
+        except Exception as e:
+            QMessageBox.warning(self, "配置失败", f"写入配置文件时出错：{e}")
+
+    def _mcp_copy_json(self) -> None:
+        """将当前 MCP 配置 JSON 复制到剪贴板。"""
+        import json
+        from PySide6.QtGui import QGuiApplication
+
+        entry = self._build_mcp_config()
+        full = {
+            "mcpServers": {
+                "llm-cabinet": entry,
+            },
+        }
+        text = json.dumps(full, ensure_ascii=False, indent=2)
+        QGuiApplication.clipboard().setText(text)
+        QMessageBox.information(self, "已复制",
+            "MCP 配置 JSON 已复制到剪贴板。\n请粘贴到 Claude Desktop / Cursor 的配置文件中。")
+
+    @staticmethod
+    def _claude_config_path() -> Path | None:
+        """返回 Claude Desktop 配置文件的路径，不支持则返回 None。"""
+        import sys
+        from pathlib import Path as _Path
+        if sys.platform == "win32":
+            return _Path.home() / "AppData" / "Roaming" / "Claude" / "claude_desktop_config.json"
+        elif sys.platform == "darwin":
+            return _Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"
+        return None
 
     # =================================================================
     # 关于

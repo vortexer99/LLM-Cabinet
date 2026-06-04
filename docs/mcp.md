@@ -157,6 +157,17 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器：
 | `cabinet://project/{id}/files` | 项目文件清单 |
 | `cabinet://file/{id}` | 文件内容（需开启 `--allow-file-read`） |
 
+### 技能（Prompts）
+
+Prompts 是给 agent 的结构化任务指令，告诉它调哪些 Tool、按什么顺序。用户只需说"帮我整理新论文"，agent 就会按技能里的 SOP 执行。
+
+| Prompt | 说明 |
+|--------|------|
+| `organize_new_files` | 整理新入库文件：发现 → 匹配项目 → 导入 → 补元数据 |
+| `audit_metadata` | 审核元数据质量：查缺失描述/标签/字段值，生成报告 |
+| `summarize_library` | 库概览：统计项目数、标签分布、近期活动 |
+| `suggest_tags` | 推荐标签：分析项目内容，推荐已有或新建标签 |
+
 ---
 
 ## 注意事项
