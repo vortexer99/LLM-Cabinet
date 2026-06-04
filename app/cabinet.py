@@ -53,12 +53,14 @@ class LibraryHandle:
 
     path: Path
     label: str = ""
+    description: str = ""
     last_opened: Optional[str] = None    # ISO 时间戳
 
     def to_dict(self) -> dict:
         return {
             "path": str(self.path),
             "label": self.label,
+            "description": self.description,
             "last_opened": self.last_opened or "",
         }
 
@@ -67,6 +69,7 @@ class LibraryHandle:
         return cls(
             path=Path(str(d.get("path", ""))),
             label=str(d.get("label", "") or ""),
+            description=str(d.get("description", "") or ""),
             last_opened=(d.get("last_opened") or None),
         )
 
@@ -163,7 +166,11 @@ class CabinetConfig:
         )
 
     # ---- 列表维护 ----
-    def touch(self, lib_path: Path, label: Optional[str] = None) -> None:
+    def touch(
+        self, lib_path: Path,
+        label: Optional[str] = None,
+        description: Optional[str] = None,
+    ) -> None:
         """登记 / 刷新一个库的 last_opened；保持上限 MAX_RECENT。"""
         lib_path = Path(lib_path).resolve()
         # 找现有
@@ -176,6 +183,8 @@ class CabinetConfig:
             existing.last_opened = _now_iso()
             if label is not None:
                 existing.label = label
+            if description is not None:
+                existing.description = description
             # 提到列表头部
             self.recent_libraries.remove(existing)
             self.recent_libraries.insert(0, existing)
@@ -183,6 +192,7 @@ class CabinetConfig:
             new = LibraryHandle(
                 path=lib_path,
                 label=(label or lib_path.name),
+                description=(description or ""),
                 last_opened=_now_iso(),
             )
             self.recent_libraries.insert(0, new)

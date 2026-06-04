@@ -491,6 +491,9 @@ class MainWindow(QMainWindow):
         new_desc = ed_desc.toPlainText().strip()
         if new_desc != cur_desc:
             self.repo.set_setting("library_description", new_desc)
+            # Sync to cabinet.json so MCP can see it via list_libraries()
+            self.cabinet_config.touch(self.library_root, description=new_desc)
+            self.cabinet_config.save()
 
     def _lib_import_api(self) -> None:
         """从其它库读 llm_config 等设置写入当前库。

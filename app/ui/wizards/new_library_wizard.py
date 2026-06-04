@@ -579,7 +579,7 @@ class NewLibraryWizard(QDialog):
 
             # Step 7: 注册到 cabinet_config（不在 try 里 rmtree 范围内—— 走到这里
             # 已经是写盘成功，只剩内存配置注册）
-            self.cabinet_config.touch(root, label=s.label)
+            self.cabinet_config.touch(root, label=s.label, description=s.description)
             self.cabinet_config.save()
             self.created_root = root
             return True

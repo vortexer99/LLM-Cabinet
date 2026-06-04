@@ -42,6 +42,8 @@ def main() -> None:
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         stream=sys.stderr,  # stdio transport uses stdout for MCP protocol
     )
+    # Suppress verbose per-request INFO logs from the MCP SDK's lowlevel server
+    logging.getLogger("mcp.server.lowlevel.server").setLevel(logging.WARNING)
     log = logging.getLogger("app.mcp.standalone")
     log.info("LLM Cabinet MCP server starting (v%s)", _get_version())
 
