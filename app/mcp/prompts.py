@@ -16,12 +16,20 @@ from typing import Any
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
-def _load_skill(name: str) -> str:
-    """Load a skill's full markdown content from the skills directory."""
-    path = _SKILLS_DIR / f"{name}.md"
+def _load_skill(dir_name: str) -> str:
+    """Load skill content from ``skills/<dir_name>/SKILL.md``, stripping YAML frontmatter."""
+    path = _SKILLS_DIR / dir_name / "SKILL.md"
     if not path.is_file():
         raise FileNotFoundError(f"Skill file not found: {path}")
-    return path.read_text(encoding="utf-8")
+    raw = path.read_text(encoding="utf-8")
+
+    # Strip YAML frontmatter (between --- markers)
+    if raw.startswith("---\n"):
+        end = raw.find("\n---\n", 4)
+        if end != -1:
+            raw = raw[end + 5:]
+
+    return raw.strip() + "\n"
 
 
 def _msg(text: str) -> dict[str, Any]:
@@ -35,7 +43,7 @@ def _msg(text: str) -> dict[str, Any]:
 
 
 def organize_new_files(directory: str = "") -> list[dict[str, Any]]:
-    content = _load_skill("organize_new_files")
+    content = _load_skill("organize-new-files")
 
     if directory:
         content = content.replace(
@@ -53,7 +61,7 @@ def organize_new_files(directory: str = "") -> list[dict[str, Any]]:
 
 
 def audit_metadata() -> list[dict[str, Any]]:
-    return [_msg(_load_skill("audit_metadata"))]
+    return [_msg(_load_skill("audit-metadata"))]
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +70,7 @@ def audit_metadata() -> list[dict[str, Any]]:
 
 
 def summarize_library() -> list[dict[str, Any]]:
-    return [_msg(_load_skill("summarize_library"))]
+    return [_msg(_load_skill("summarize-library"))]
 
 
 # ---------------------------------------------------------------------------
@@ -71,7 +79,7 @@ def summarize_library() -> list[dict[str, Any]]:
 
 
 def suggest_tags(project_id: int = 0) -> list[dict[str, Any]]:
-    content = _load_skill("suggest_tags")
+    content = _load_skill("suggest-tags")
 
     if project_id:
         content = content.replace(
