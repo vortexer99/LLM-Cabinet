@@ -92,11 +92,26 @@ jobs:
           Move-Item -LiteralPath $src -Destination $dst -Force
           Get-Item -LiteralPath $dst | Select-Object Name,Length
 
+      # 单独打包 Agent 技能（Markdown 文件，用户安装到 AI 客户端用）
+      - name: Package skills
+        shell: pwsh
+        run: |
+          Compress-Archive -Path "app/mcp/skills/*" -DestinationPath "dist/llm-cabinet-skills.zip"
+          Get-Item "dist/llm-cabinet-skills.zip" | Select-Object Name,Length
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: LLM-Cabinet-${{ steps.ver.outputs.version }}-windows
           path: dist/LLM Cabinet-*.exe
+          if-no-files-found: error
+          retention-days: 90
+
+      - name: Upload skills artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llm-cabinet-skills-${{ steps.ver.outputs.version }}
+          path: dist/llm-cabinet-skills.zip
           if-no-files-found: error
           retention-days: 90
 
@@ -110,4 +125,6 @@ jobs:
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
-          files: dist/LLM Cabinet-*.exe
+          files: |
+            dist/LLM Cabinet-*.exe
+            dist/llm-cabinet-skills.zip

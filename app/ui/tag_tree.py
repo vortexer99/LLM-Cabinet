@@ -117,8 +117,6 @@ class TagTree(QTreeWidget):
         # 标签分组节点
         if tag_counts:
             used = [(n, c) for n, c in tag_counts if c > 0]
-            unused = [(n, c) for n, c in tag_counts if c <= 0]
-
             if used:
                 grp = QTreeWidgetItem([f"标签    {len(used)}"])
                 grp.setFlags(grp.flags() & ~Qt.ItemIsSelectable)
@@ -130,21 +128,8 @@ class TagTree(QTreeWidget):
                 self._populate_used_tags(grp, used)
                 grp.setExpanded(True)
 
-            if unused:
-                grp2 = QTreeWidgetItem([f"未使用的标签    {len(unused)}"])
-                grp2.setFlags(grp2.flags() & ~Qt.ItemIsSelectable)
-                f2 = grp2.font(0)
-                f2.setBold(True)
-                grp2.setFont(0, f2)
-                grp2.setForeground(0, self.palette().mid())
-                self.addTopLevelItem(grp2)
-                # 未使用区不做层级展开（清单功能：用户只想看"哪些标签没人用"），
-                # 与"used"区分开避免视觉混乱
-                for name, count in unused:
-                    child = self._make_item(f"#{name}", count, "tag", name)
-                    child.setForeground(0, self.palette().mid())
-                    grp2.addChild(child)
-                grp2.setExpanded(False)
+            # NOTE: 未使用的标签不再显示（2026-06-04）
+            # 用户很少关心孤立标签，且占用侧边栏空间
 
         # 恢复选中
         target = root_all

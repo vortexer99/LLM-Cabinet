@@ -215,9 +215,17 @@ class SettingsDialog(QDialog):
 
         lay.addWidget(gb)
 
-        # LLM 助手对话轮数曾在此页（task #11 T3 决策 2b）；2026-06-02 起搬到「API」页，
-        # 与 LLM 平台/默认 provider/默认语言归在一起，语义更聚焦。
-        # 见 `_build_api_page` 末尾的「对话/重试」分组。
+        # 应用数据目录（软件层级属性，与库无关）
+        gb_data = QGroupBox("数据位置")
+        row = QHBoxLayout(gb_data)
+        lbl = QLabel(f"应用数据目录：{app_data_dir()}")
+        lbl.setWordWrap(True)
+        row.addWidget(lbl, 1)
+        b_open = QPushButton("📂")
+        b_open.setFixedWidth(40)
+        b_open.clicked.connect(lambda: reveal_in_explorer(app_data_dir()))
+        row.addWidget(b_open)
+        lay.addWidget(gb_data)
 
         lay.addStretch(1)
         return w
@@ -294,7 +302,6 @@ class SettingsDialog(QDialog):
         gv = QVBoxLayout(gb3)
         for label, path in (
             ("数据库", self.db_path),
-            ("应用数据目录", app_data_dir()),
         ):
             row = QHBoxLayout()
             lbl = QLabel(f"{label}：")
@@ -1017,7 +1024,19 @@ class SettingsDialog(QDialog):
         desc.setWordWrap(True)
         lay.addWidget(desc)
 
-        gb = QGroupBox("导出配置")
+        # 使用提示
+        tip = QLabel(
+            "💡 启动方法：<code>python -m app.mcp.standalone</code>（或通过下方导出 JSON 后由客户端自动启动）\n"
+            "💡 建议安装 Agent 技能：将 <code>app/mcp/skills/llm-cabinet/</code> 目录下的四个技能添加到你的 AI 客户端（或从 Release 页面下载 <code>llm-cabinet-skills.zip</code>），"
+            "可获得文件整理、元数据审核、库概览和标签推荐等自动化能力。详见 <a href='https://github.com/vortexer99/LLM-Cabinet'>项目文档</a>。"
+        )
+        tip.setWordWrap(True)
+        tip.setStyleSheet("color: gray; font-size: 11px;")
+        tip.setTextFormat(Qt.RichText)
+        tip.setOpenExternalLinks(True)
+        lay.addWidget(tip)
+
+        gb = QGroupBox("导出 MCP 配置")
         gv = QVBoxLayout(gb)
         gv.setSpacing(8)
 
