@@ -11,8 +11,7 @@ the instructions without touching Python code.
 from __future__ import annotations
 
 from pathlib import Path
-
-from mcp.types import PromptMessage, TextContent
+from typing import Any
 
 _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
@@ -25,19 +24,17 @@ def _load_skill(name: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
+def _msg(text: str) -> dict[str, Any]:
+    """Build a standard MCP user message dict with plain-text content."""
+    return {"role": "user", "content": text}
+
+
 # ---------------------------------------------------------------------------
 # Prompt: organize_new_files
 # ---------------------------------------------------------------------------
 
 
-def organize_new_files(directory: str = "") -> list[PromptMessage]:
-    """Task: organize newly downloaded files into the library.
-
-    This prompt guides the agent through a workflow of:
-    1. Discovering unorganized files
-    2. Matching them to existing projects (or creating new ones)
-    3. Importing them with appropriate metadata
-    """
+def organize_new_files(directory: str = "") -> list[dict[str, Any]]:
     content = _load_skill("organize_new_files")
 
     if directory:
@@ -47,12 +44,7 @@ def organize_new_files(directory: str = "") -> list[PromptMessage]:
             f"**当前 directory = `{directory}`**，请直接从该目录读取待整理的文件。",
         )
 
-    return [
-        PromptMessage(
-            role="user",
-            content=TextContent(type="text", text=content),
-        ),
-    ]
+    return [_msg(content)]
 
 
 # ---------------------------------------------------------------------------
@@ -60,14 +52,8 @@ def organize_new_files(directory: str = "") -> list[PromptMessage]:
 # ---------------------------------------------------------------------------
 
 
-def audit_metadata() -> list[PromptMessage]:
-    """Task: audit metadata quality across the library."""
-    return [
-        PromptMessage(
-            role="user",
-            content=TextContent(type="text", text=_load_skill("audit_metadata")),
-        ),
-    ]
+def audit_metadata() -> list[dict[str, Any]]:
+    return [_msg(_load_skill("audit_metadata"))]
 
 
 # ---------------------------------------------------------------------------
@@ -75,14 +61,8 @@ def audit_metadata() -> list[PromptMessage]:
 # ---------------------------------------------------------------------------
 
 
-def summarize_library() -> list[PromptMessage]:
-    """Task: generate a human-readable summary of the entire library."""
-    return [
-        PromptMessage(
-            role="user",
-            content=TextContent(type="text", text=_load_skill("summarize_library")),
-        ),
-    ]
+def summarize_library() -> list[dict[str, Any]]:
+    return [_msg(_load_skill("summarize_library"))]
 
 
 # ---------------------------------------------------------------------------
@@ -90,25 +70,17 @@ def summarize_library() -> list[PromptMessage]:
 # ---------------------------------------------------------------------------
 
 
-def suggest_tags(project_id: int = 0) -> list[PromptMessage]:
-    """Task: suggest tags for untagged or poorly tagged projects."""
+def suggest_tags(project_id: int = 0) -> list[dict[str, Any]]:
     content = _load_skill("suggest_tags")
 
     if project_id:
-        # Replace the generic "列出全部缺少标签的项目" instruction with
-        # a targeted one for the specific project
         content = content.replace(
             "**如果未指定（`project_id` 为 0 或空）**：",
             f"**当前指定了 `project_id={project_id}`**，请直接分析该项目。\n\n"
             "**如果未指定（`project_id` 为 0 或空）**：",
         )
 
-    return [
-        PromptMessage(
-            role="user",
-            content=TextContent(type="text", text=content),
-        ),
-    ]
+    return [_msg(content)]
 
 
 # ---------------------------------------------------------------------------
