@@ -1860,7 +1860,7 @@ class MainWindow(QMainWindow):
         from .mcp_audit_dialog import MCPAuditDialog
         dlg = MCPAuditDialog(self.repo, parent=self)
         dlg.exec()
-        self._update_mcp_count()
+        self._check_mcp_activity()
 
     def _check_mcp_activity(self) -> None:
         """轻量轮询：只查 audit 最新 id，有变化才完整刷新。"""
