@@ -7,7 +7,7 @@
 
 详情见 ``docs/migrations.md``。
 """
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 
 # 项目主页（GitHub）。在「关于」页、README、打包元信息里统一引用此常量。
 HOMEPAGE_URL = "https://github.com/vortexer99/llm-cabinet"

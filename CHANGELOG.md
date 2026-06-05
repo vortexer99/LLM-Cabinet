@@ -6,7 +6,7 @@
 `__version__`（应用版本）和 `SCHEMA_VERSION`（数据库 schema 版本）独立递增。
 schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并附迁移说明。
 
-## [Unreleased]
+## [0.4.1] - 2026-06-05
 
 ### Added
 - MCP 集成截图（Agent 端 + Cabinet 端），放入 `gallery/` 并在 README 中引用。
@@ -127,7 +127,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 📦 schema v1 — 初始 schema。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.3.0
 [0.2.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.2.0
