@@ -6,6 +6,11 @@
 `__version__`（应用版本）和 `SCHEMA_VERSION`（数据库 schema 版本）独立递增。
 schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并附迁移说明。
 
+## [Unreleased]
+
+### Changed
+- README 中新增 1.0.0 前尝鲜提醒（英文/中文），不建议投入重度使用。
+
 ## [0.4.1] - 2026-06-05
 
 ### Added

@@ -28,6 +28,7 @@
 | [23-mcp-tools-consolidation.md](./23-mcp-tools-consolidation.md) | MCP 工具收敛（17 → 5 个聚合工具：`query_projects` / `manage_project` / `manage_files` / `manage_libraries` / `export_project`）；下线 AI 套 AI 的 `trigger_llm_suggestion` / `apply_suggestion` / `list_pending_suggestions` 与冗余的 `import_folder`；修正 `switch_library` 过时描述 | S+XS | P1 | ✅ 2026-06-04 |
 | [24-mcp-audit-log-viewer.md](./24-mcp-audit-log-viewer.md) | MCP 操作记录查看面板：状态栏入口 + 双 Tab 对话框（审计日志 + MCP 修改项目）+ schema v5→v6 + 侧边栏 MCP 筛选 | S | P1 | ✅ 2026-06-04 |
 | [25-project-list-batch-and-dnd.md](./25-project-list-batch-and-dnd.md) | 项目列表多选 + 批量操作适配 + 标签拖放赋值 | S+M | P1 | 待做 |
+| [26-file-mode-library.md](./26-file-mode-library.md) | 文件模式库：每个文件 = 一个项目，隐藏文件表，标签做交叉分组 | S+S+S | P1 | 待做 |
 
 ## 约定
 

@@ -17,6 +17,8 @@ English · [简体中文](README.zh-CN.md)
 
 **This is a personal hobby project; stability is not guaranteed. The author only provides ideas — almost all code is AI-generated. No quality guarantees.**
 
+**Pre-1.0 notice**: versions before 1.0.0 are for early adopters and testing. We do not recommend putting them into heavy daily use — expect breaking changes, rough edges, and occasional data quirks.
+
 **Disclaimer**: The maintainer will continue to support this software, but **assumes no responsibility for any file loss, data corruption, or other damages arising from its use** — including but not limited to abnormal usage, misoperation, system failures, or third-party LLM service issues. Please **keep regular backups** of important data. The software is provided "AS IS", see [MIT License](LICENSE).
 
 ## Inspiration
