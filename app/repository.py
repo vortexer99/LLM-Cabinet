@@ -214,6 +214,10 @@ class Repository:
                 "INSERT OR IGNORE INTO project_tags(project_id, tag_id) VALUES(?,?)",
                 (pid, tag_id),
             )
+        # 清理不再被任何项目引用的孤儿标签
+        cur.execute(
+            "DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM project_tags)"
+        )
 
     # ------------------------------------------------------------------ fields (schema)
     # task #20 schema v4 起：移除 SYSTEM_FIELD_COLUMNS dict。
