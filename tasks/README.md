@@ -6,7 +6,7 @@
 |---|---|---|---|---|
 | [01-files-table-customization.md](./01-files-table-customization.md) | 文件表列可见性 + 列宽自定义 + 存储方式列 | S+XS | P1 | ✅ 2026-05-31 |
 | [02-files-table-detach-window.md](./02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
-| [03-search-calibre-like.md](./03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔）；已拆 Phase A 基础版 (XS~S) + Phase B Calibre 级 (M) | M | P0 | 待做（Phase A 可先开工） |
+| [03-search-calibre-like.md](./03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔 + 搜索历史 + 收藏表达式）；已拆 Phase A (XS~S) + Phase B (M) + Phase C (XS) | M | P0 | 待做（Phase A 可先开工） |
 | [04-project-system-files-folding.md](./04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
 | [05-data-paths-migration-and-export.md](./05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖，归档保留） |
 | [06-tags-hierarchy-folding.md](./06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
@@ -27,6 +27,7 @@
 | [22-wizard-status-column-redesign.md](./22-wizard-status-column-redesign.md) | 字段助手 Step 1/Step 2 列语义重组（"LLM 建议"列改成普通用户能读懂的"新增/删除/修改 (字段名,类型,提示)"动作描述；新增 `llm_pending_type_change` 让"改名+改类型"被吞场景可见；Step 2 删冗余状态列） | S+S | P2 | ✅ 2026-06-03 |
 | [23-mcp-tools-consolidation.md](./23-mcp-tools-consolidation.md) | MCP 工具收敛（17 → 5 个聚合工具：`query_projects` / `manage_project` / `manage_files` / `manage_libraries` / `export_project`）；下线 AI 套 AI 的 `trigger_llm_suggestion` / `apply_suggestion` / `list_pending_suggestions` 与冗余的 `import_folder`；修正 `switch_library` 过时描述 | S+XS | P1 | ✅ 2026-06-04 |
 | [24-mcp-audit-log-viewer.md](./24-mcp-audit-log-viewer.md) | MCP 操作记录查看面板：状态栏入口 + 双 Tab 对话框（审计日志 + MCP 修改项目）+ schema v5→v6 + 侧边栏 MCP 筛选 | S | P1 | ✅ 2026-06-04 |
+| [25-project-list-batch-and-dnd.md](./25-project-list-batch-and-dnd.md) | 项目列表多选 + 批量操作适配 + 标签拖放赋值 | S+M | P1 | 待做 |
 
 ## 约定
 
