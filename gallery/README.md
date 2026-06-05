@@ -9,3 +9,9 @@ Github showcase screenshots, `NN-keyword_中文名.png`.
 | 03 | `03-library-field-wizard_库字段设计助手.jpg` | Library field design wizard — Step 1 review LLM suggestions |
 | 04 | `04-mcp-agent-side_MCP-Agent端.png` | MCP integration — agent side: agent creates a project with full metadata via MCP |
 | 05 | `05-mcp-cabinet-side_MCP-Cabinet端.png` | MCP integration — cabinet side: audit log dialog + imported project in main window |
+
+## Concept artwork
+
+| File | Content |
+|------|---------|
+| `AI-Team-Workspace-Concep.jpg` | Vision artwork — Cabinet as an AI Team Workspace: a project as the shared context (current status / key findings / open questions / next action) across Human + Research / Planning / Experiment / Review / Writing agents. Used in the README "Looking Further" section. |

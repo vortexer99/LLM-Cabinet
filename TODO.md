@@ -44,6 +44,7 @@
 [#13 · ✅ 2026-06-03] MCP Server：通过 Model Context Protocol 把库暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端，agent 可读元数据/检索/写入项目（受权限控制）
 [#23 · ✅ 2026-06-04] MCP 工具收敛：17 个细粒度 tool → 5 个聚合 tool（query_projects / manage_project / manage_files / manage_libraries / export_project）；下线 AI 套 AI 的 trigger_llm_suggestion / apply_suggestion / list_pending_suggestions 和冗余的 import_folder；修正 switch_library 过时描述
 [#24 · ✅ 2026-06-04] MCP 操作记录查看面板：状态栏入口 + 双 tab 对话框（审计日志 + MCP 修改项目） + schema v5→v6 mcp_modified_at 列 + 主界面筛选 MCP 修改过的项目
+[#27 · ⚪] Provenance 来源链：MCP 写入可附带 source（依据文件 + 备注），UI 显示「来源」入口；把 Cabinet 推向 AI Team Workspace 定位的第一步
 -
 
 ## ⚙️ 设置 / 配置 / 持久化

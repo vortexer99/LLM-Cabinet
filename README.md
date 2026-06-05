@@ -33,6 +33,18 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
 
 - **File preprocessing pipeline**: to further reduce token consumption — and to make non-multimodal models actually useful — there may be a pluggable preprocessing layer that distills raw files into compact "key-information summaries" before sending them to the LLM. Typical forms: extract a few keyframes from videos and treat them as images, run a lightweight local vision model on images to pre-extract tags/captions, run embeddings on very long texts for semantic compression or key-section extraction, and so on.
 
+## Looking Further: AI Team Workspace
+
+As more people connect Cabinet to multiple AI agents (Claude Code, Cursor, custom MCP clients), Cabinet naturally evolves into something bigger than a personal file manager — a **shared memory hub** where Human + multiple Agents collaborate around the same project, reading and writing the same files and metadata even when they cannot talk to each other directly.
+
+<div align="center">
+  <img src="gallery/AI-Team-Workspace-Concep.jpg" alt="AI Team Workspace concept — a project as the shared context across Human, Research / Planning / Experiment / Review / Writing agents" width="720" />
+  <br/>
+  <sub>A project becomes the <b>shared context</b> (current status · key findings · open questions · next action) — every team member, human or agent, reads from and writes to it. Files are the carrier; metadata is the memory.</sub>
+</div>
+
+This is a **direction**, not a finished story — Cabinet today is already a usable file manager; the workspace narrative is the path we are gradually building toward (e.g. MCP integration, audit log, provenance tracking are early steps).
+
 ## Screenshots
 
 <table>
