@@ -36,18 +36,28 @@ Compared to LLM-Wiki, **you don't always need the LLM to digest every file** —
 <table>
   <tr>
     <td align="center" colspan="2">
-      <img src="docs/screenshots/main-window.png" alt="Main window" />
+      <img src="gallery/01-main-window_主界面.png" alt="Main window" />
       <br/><sub>Main window — tag tree · project list · preview &amp; file table</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/screenshots/project-edit-llm-suggest.png" alt="Project edit dialog with LLM suggestions" />
+      <img src="gallery/02-project-edit_项目编辑.png" alt="Project edit dialog with LLM suggestions" />
       <br/><sub>Project edit dialog with inline LLM suggestions (✓ Apply / ✗ Reject)</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/screenshots/setup-wizard.jpg" alt="Library field design wizard" />
+      <img src="gallery/03-library-field-wizard_库字段设计助手.jpg" alt="Library field design wizard" />
       <br/><sub>Library field design wizard — Step 1 review LLM suggestions ↔ Step 2 hand-edit the resulting field table</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="gallery/04-mcp-agent-side_MCP-Agent端.png" alt="MCP agent side" />
+      <br/><sub>MCP integration — agent creates a project with full metadata in one shot</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="gallery/05-mcp-cabinet-side_MCP-Cabinet端.png" alt="MCP cabinet side" />
+      <br/><sub>MCP audit log &amp; imported project in Cabinet</sub>
     </td>
   </tr>
 </table>

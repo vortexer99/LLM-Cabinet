@@ -34,18 +34,28 @@
 <table>
   <tr>
     <td align="center" colspan="2">
-      <img src="docs/screenshots/main-window.png" alt="主界面" />
+      <img src="gallery/01-main-window_主界面.png" alt="主界面" />
       <br/><sub>主界面：标签筛选 · 项目列表 · 预览与文件表</sub>
     </td>
   </tr>
   <tr>
     <td align="center" width="50%">
-      <img src="docs/screenshots/project-edit-llm-suggest.png" alt="项目元数据编辑对话框含 LLM 建议" />
+      <img src="gallery/02-project-edit_项目编辑.png" alt="项目元数据编辑对话框含 LLM 建议" />
       <br/><sub>项目编辑对话框，逐字段展示 LLM 建议（✓ 应用 / ✗ 驳回）</sub>
     </td>
     <td align="center" width="50%">
-      <img src="docs/screenshots/setup-wizard.jpg" alt="库字段设计助手" />
+      <img src="gallery/03-library-field-wizard_库字段设计助手.jpg" alt="库字段设计助手" />
       <br/><sub>库字段设计助手：Step 1 审阅 LLM 建议 ↔ Step 2 编辑应用后的字段表</sub>
+    </td>
+  </tr>
+  <tr>
+    <td align="center" width="50%">
+      <img src="gallery/04-mcp-agent-side_MCP-Agent端.png" alt="MCP Agent 端" />
+      <br/><sub>MCP 集成 — Agent 端：一句话让 agent 自动创建项目并填写完整元数据</sub>
+    </td>
+    <td align="center" width="50%">
+      <img src="gallery/05-mcp-cabinet-side_MCP-Cabinet端.png" alt="MCP Cabinet 端" />
+      <br/><sub>MCP 集成 — Cabinet 端：操作记录对话框 + 已入库的项目</sub>
     </td>
   </tr>
 </table>
