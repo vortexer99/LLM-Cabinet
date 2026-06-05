@@ -111,7 +111,7 @@ class TagTree(QTreeWidget):
         item_review = self._make_item("⚡  待审阅 LLM 建议", pending_review, "review", "")
         self.addTopLevelItem(item_review)
 
-        item_mcp = self._make_item("🤖  MCP 修改过", mcp_modified, "mcp", "")
+        item_mcp = self._make_item("🤖  未读MCP修改", mcp_modified, "mcp", "")
         self.addTopLevelItem(item_mcp)
 
         # 标签分组节点

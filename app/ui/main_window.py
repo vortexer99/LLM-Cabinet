@@ -1668,7 +1668,7 @@ class MainWindow(QMainWindow):
             mcp_pids = {p["id"] for p in self.repo.list_mcp_modified_projects()}
             all_projects = self.repo.list_projects()
             projects = [p for p in all_projects if p.id in mcp_pids]
-            title_text = "🤖 MCP 修改过"
+            title_text = "🤖 未读MCP修改"
         else:
             projects = self.repo.list_projects()
             title_text = "全部项目"
@@ -1871,6 +1871,14 @@ class MainWindow(QMainWindow):
             total = self.repo.count_mcp_audit()
             self.lbl_mcp_count.setText(f"📋 MCP 操作: {total}")
             self.refresh_projects()  # 刷新项目列表 + 标签树（更新 MCP 计数）
+
+    def _on_mark_mcp_seen(self) -> None:
+        """右键菜单：标记已了解该项目的 MCP 修改。"""
+        pid = self._current_project_id
+        if pid is None:
+            return
+        self.repo.clear_project_mcp_modified(pid)
+        self.refresh_projects()
 
     # ============================================================ LLM
     def action_open_llm_tasks(self) -> None:
@@ -2176,6 +2184,8 @@ class MainWindow(QMainWindow):
         act_paste_cover.setEnabled(has_img)
         if not has_img:
             act_paste_cover.setToolTip("剪切板中没有图片")
+        menu.addSeparator()
+        menu.addAction("👁  已读MCP修改", self._on_mark_mcp_seen)
         menu.addSeparator()
         menu.addAction("🗑  删除", self.action_delete_project)
         global_pos = view.viewport().mapToGlobal(pos) if hasattr(view, "viewport") else view.mapToGlobal(pos)

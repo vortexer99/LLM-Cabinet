@@ -10,13 +10,16 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ### Added
 - MCP 集成截图（Agent 端 + Cabinet 端），放入 `gallery/` 并在 README 中引用。
+- 项目右键菜单新增「已读MCP修改」选项：清除项目的 MCP 修改标记。对所有项目常驻显示，方便以后多选批量操作。
 
 ### Changed
 - `TODO.md` 清理：修正过期状态标记、简化索引表（单一链接指向 `tasks/README.md`）、
   更新版本规划。
+- "MCP 修改过"标签改为「未读 MCP 修改」，语义更准确。
 
 ### Fixed
 - 标签从项目移除后仍然残留于 `tags` 表（孤儿标签）；现 `_set_tags` 末尾自动清理。
+- 关闭 MCP 审计对话框后调用不存在的方法名 `_update_mcp_count` 导致闪退；修正为 `_check_mcp_activity`。
 
 ## [0.4.0] - 2026-06-04
 

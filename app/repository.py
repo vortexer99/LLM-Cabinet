@@ -1096,6 +1096,14 @@ class Repository:
         )
         self.conn.commit()
 
+    def clear_project_mcp_modified(self, project_id: int) -> None:
+        """清除项目的 MCP 修改标记（用户已了解该修改）。"""
+        self.conn.execute(
+            "UPDATE projects SET mcp_modified_at = NULL WHERE id = ?",
+            (project_id,),
+        )
+        self.conn.commit()
+
     def list_mcp_modified_projects(self) -> list[dict]:
         """列出被 MCP 修改过的项目（按最近修改时间倒序）。"""
         rows = self.conn.execute(
