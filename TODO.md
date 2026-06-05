@@ -39,9 +39,9 @@
 [#07 · ⏳] 支持使用嵌入模型对本地大文件进行summary，发送给LLM，提高建议精准度
 [#11 · ⚪] 自定义LLM prompt模板，每个字段单独给出建议使用的格式
 [#11 · ⚪] 初始化库时，通过和LLM交流，规划项目的字段结构，标题、描述等字段的格式（形成专属的prompt模板）
-[#13 · ⚪] MCP Server：通过 Model Context Protocol 把库暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端，agent 可读元数据/检索/写入项目（受权限控制）
+[#13 · ✅ 2026-06-03] MCP Server：通过 Model Context Protocol 把库暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端，agent 可读元数据/检索/写入项目（受权限控制）
 [#23 · ✅ 2026-06-04] MCP 工具收敛：17 个细粒度 tool → 5 个聚合 tool（query_projects / manage_project / manage_files / manage_libraries / export_project）；下线 AI 套 AI 的 trigger_llm_suggestion / apply_suggestion / list_pending_suggestions 和冗余的 import_folder；修正 switch_library 过时描述
-[#24 · ⚪] MCP 操作记录查看面板：状态栏入口 + 双 tab 对话框（审计日志 + MCP 修改项目） + schema v5→v6 mcp_modified_at 列 + 主界面筛选 MCP 修改过的项目
+[#24 · ✅ 2026-06-04] MCP 操作记录查看面板：状态栏入口 + 双 tab 对话框（审计日志 + MCP 修改项目） + schema v5→v6 mcp_modified_at 列 + 主界面筛选 MCP 修改过的项目
 -
 
 ## ⚙️ 设置 / 配置 / 持久化
@@ -69,7 +69,7 @@ LLM 调用的网络异常处理打磨：超时 / 鉴权失败 / 限流 / 连接�
 [✅ 2026-06-03] 老版本备份的 zip 里夹带了 `cabinet.json`（库建在 `%APPDATA%/LLMCabinet/` 时连软件全局配置一起被打包），从此 zip 恢复到新位置 → 新库目录残留 `cabinet.json`；删除该库时被判定为"软件全局"保留下来不删。修法：restore 时跳过 `_is_app_global_entry(name)` 的项，源头丢弃孤儿。backup 端 `shutil.make_archive` 不便 exclude，未来若改成手撸 zipfile 时再对称跳过
 [✅ 2026-06-03] 新建库时，路径没有加合法性检查（已加 `validate_library_path`：绝对路径 / 非法字符 / 盘符根 / 系统保护目录 / 父目录存在 五类校验）
 [✅ 2026-06-03] 部分ui没有适配深色模式：项目元数据编辑页面仅字段编辑文本框适配深色；LLM助手页面内层容器（包括库字段设计助手）没有深色，只有启动按钮深色；确认字段类型变更页面和确认删除字段页面（统一给 ScrollArea + 内层 host 设 `AppScrollArea` / `AppScrollHost` objectName，theme.py 加对应规则）
-[#22 · ✅ 2026-06-03] 库字段设计助手，LLM给出建议后，表格表头行“LLM建议”应该是操作，“状态”才是LLM建议。“状态”一栏的描述和tooltip更加用户友好一些。这一栏抛弃目前的系统必有、现有同类型等方案，改成新增，删除或者修改，修改进一步列出是修改了字段名、类型还是LLM提示还是都有。这一步“系统必有”的提示就不要了反正改不了。step2，操作的“（受保护）”提示改成“（系统保留）”，状态列没有必要，直接删除
+[#22 · ✅ 2026-06-03] 库字段设计助手，LLM给出建议后，表格表头行"LLM建议"应该是操作，"状态"才是LLM建议。"状态"一栏的描述和tooltip更加用户友好一些。这一栏抛弃目前的系统必有、现有同类型等方案，改成新增，删除或者修改，修改进一步列出是修改了字段名、类型还是LLM提示还是都有。这一步"系统必有"的提示就不要了反正改不了。step2，操作的"（受保护）"提示改成"（系统保留）"，状态列没有必要，直接删除
 -
 
 ## 💡 长期 / 大改 / 不急
@@ -78,9 +78,9 @@ LLM 调用的网络异常处理打磨：超时 / 鉴权失败 / 限流 / 连接�
 
 ## 🧺 杂项 / 待归类
 [✅ 2026-06-02] 新建项目对话框里面去掉LLM建议按钮，这个时候肯定没什么好建议的
-设置中，目前项目库-应用数据目录挪到通用页里面，它是软件层级的属性。
-修改MCP设置UI，提示用户需要开启MCP服务器，并推荐安装skill，说明skill的地址。“导出配置”改成“导出MCP配置”
-筛选栏隐藏“未使用的标签”，或者干脆不记录这些标签了。
+[✅ 2026-06-04] 设置中，目前项目库-应用数据目录挪到通用页里面，它是软件层级的属性。
+[✅ 2026-06-04] 修改MCP设置UI，提示用户需要开启MCP服务器，并推荐安装skill，说明skill的地址。"导出配置"改成"导出MCP配置"
+[✅ 2026-06-04] 筛选栏隐藏"未使用的标签"，或者干脆不记录这些标签了。
 拆分skill到另一个repo，并提供一个skill的安装链接
 -
 
@@ -107,14 +107,7 @@ LLM 调用的网络异常处理打磨：超时 / 鉴权失败 / 限流 / 连接�
 > 状态变化时同步这一节，规划本身可灵活调整。
 > 已完成的相关 task 标 ✅ 仅作上下文，不算版本工作量。
 
-### vNext-A：MCP 深化 🤖
-让库通过 MCP 协议暴露给 Claude Desktop / Cursor / Cline 等 agent 客户端。
-
-- [#13](./tasks/13-mcp-server.md) MCP Server（AI 文件中枢接口）— **主线**
-- [#11](./tasks/11-field-prompt-and-library-wizard.md) 字段级 prompt 模板 T1/T2/T4（agent 写值的语义基础；T3 库字段设计助手已 ✅）
-- [#07](./tasks/07-local-embedding-summary.md) 本地嵌入摘要 T1/T2（远期；作为 agent "按需读单文件"的轻量替代）
-
-### vNext-B：文件列表深度优化 📂
+### v0.5：文件列表深度优化 📂
 项目内文件管理升级，从扁平表格走向树形 + 多窗口。
 
 - [#17](./tasks/17-subfolder-import-and-tree-view.md) 子文件夹导入修复 + 文件表改树形 — **主线**
@@ -146,35 +139,4 @@ LLM 调用的网络异常处理打磨：超时 / 鉴权失败 / 限流 / 连接�
 
 ## 📑 任务索引
 
-> 详细任务卡见 [`tasks/`](./tasks/README.md)。表格按当前建议执行顺序排列。
-
-| # | 任务 | 工作量 | 优先级 | 状态 |
-|---|---|---|---|---|
-| [01](./tasks/01-files-table-customization.md) | 文件表列可见性 + 列宽自定义 + 存储方式列 | S | P1 | ✅ 2026-05-31 |
-| [09](./tasks/09-project-export-basic.md) | 项目导出（基础版，T7 最小子集） | S | P1 | ✅ 2026-05-31 |
-| [03](./tasks/03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔） | M | **P0** | 待做 |
-| [10](./tasks/10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
-| [11](./tasks/11-field-prompt-and-library-wizard.md) | 字段级 prompt 模板 + 库初始化向导 | M | P1/P2 | 待做 |
-| [12](./tasks/12-selftest-infrastructure.md) | 端到端自检体系（基础设施，并行增量） | M | P1 | 🚧 进行中 |
-| [13](./tasks/13-mcp-server.md) | MCP Server（AI 文件中枢接口） | M+M | P1/P2 | 待做 |
-| [14](./tasks/14-library-management-enhancements.md) | 库管理增强（一致性检查 + 备份恢复 + 搬家指引） | S+S+XS | P1/P2 | ✅ 2026-06-01 |
-| [05](./tasks/05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖） |
-| [04](./tasks/04-project-system-files-folding.md) | 项目内系统/配置文件折叠 | S | P1 | 待澄清 |
-| [02](./tasks/02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
-| [06](./tasks/06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
-| [08](./tasks/08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | ✅ 2026-06-01 |
-| [07](./tasks/07-local-embedding-summary.md) | 文件级摘要（手动导入 + 预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
-| [15](./tasks/15-new-library-onboarding.md) | 新建库 onboarding（多步向导 + 首次引导 + Welcome + 模板） | S+S+S+M | P1/P1/P2/P3 | T1/T2/T3 ✅ 2026-06-02 · T4 远期 |
-| [16](./tasks/16-library-field-wizard-polish.md) | 库字段设计助手后续打磨 | XS+S+S | P2/P1 | ✅ 2026-06-01 |
-| [17](./tasks/17-subfolder-import-and-tree-view.md) | 子文件夹导入修复 + 文件表改树形 | S+S+S | P0/P1/P1 | 待做 |
-| [21](./tasks/21-wizard-two-step-redesign.md) | 字段助手两段式重构（Step 1 审阅 LLM + Step 2 编辑字段表） | M | P1 | ✅ 2026-06-03 |
-| [22](./tasks/22-wizard-status-column-redesign.md) | 字段助手"LLM 建议/操作"列文案重组（新增/删除/修改 + 显示改了哪些维度） + Step 2 删冗余状态列 + 收尾 task #19：rename 路径合并改类型，废弃 `llm_pending_type_change` 中转 | S+S | P2 | ✅ 2026-06-03 |
-
-### 合并理由
-- **01** 内：T1（列可见性框架）做完后 T2（存储列）自动可隐藏
-- **05** 内：T6 与 T7 共享"目录选择 + 进度条 + 失败回滚"UI 模式
-- **10** 与 **09**：导入/导出闭环，共享 `project.json` schema
-- **11** 内：T1（字段级 prompt）+ T3（库初始化向导）共享"字段定义 + LLM 调用"路径；T3 同时引入**可扩展的向导框架**，为未来"库维护向导""字段批量重生成向导"等预留入口
-
-### 不动笔的部分
-其余你以后填进 `🎨/📦/🤖` 等分类下的新行，未整理时不会出现在索引里，**你写的原文不会被改动**。
+> 详细任务卡见 [`tasks/`](./tasks/README.md)。
