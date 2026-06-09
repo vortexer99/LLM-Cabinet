@@ -22,7 +22,7 @@
 [#05 · ⚪] 项目库文件存储位置，元数据存储位置自定义与迁移
 [#10 · ✅ 2026-06-01] 批量按文件夹导入，每个文件夹作为一个项目。作为导入功能的子分支（检测到导入多个文件夹且仅有文件夹时触发）
 [#10 · ✅ 2026-06-01] 导入文件夹时创建项目时检测是否已经有导出的项目配置文件
-[#17 · ⚪] 导入文件夹时子文件夹里的文件被遗漏 / 仓储模式拍平丢失目录结构；文件表改树形展示
+[#17 · ⚪] 子文件夹导入修复 + 文件表改树形展示（数据库驱动：files.subfolder 逻辑目录 → QTreeWidget，与物理存储解耦）
 [#26 · ⚪] 文件模式库：每个文件独立为一个项目，隐藏文件表区域，用标签实现交叉分组
 -
 
@@ -45,6 +45,8 @@
 [#23 · ✅ 2026-06-04] MCP 工具收敛：17 个细粒度 tool → 5 个聚合 tool（query_projects / manage_project / manage_files / manage_libraries / export_project）；下线 AI 套 AI 的 trigger_llm_suggestion / apply_suggestion / list_pending_suggestions 和冗余的 import_folder；修正 switch_library 过时描述
 [#24 · ✅ 2026-06-04] MCP 操作记录查看面板：状态栏入口 + 双 tab 对话框（审计日志 + MCP 修改项目） + schema v5→v6 mcp_modified_at 列 + 主界面筛选 MCP 修改过的项目
 [#27 · ⚪] Provenance 来源链：MCP 写入可附带 source（依据文件 + 备注），UI 显示「来源」入口；把 Cabinet 推向 AI Team Workspace 定位的第一步
+[#28 · ⚪] 导出项目时支持按 UI 目录树建文件结构（保留 subfolder / 拍平 二选一）
+MCP manage_files 添加文件时支持指定 subfolder（#17 完成后扩展）
 -
 
 ## ⚙️ 设置 / 配置 / 持久化
