@@ -28,6 +28,8 @@ from PySide6.QtWidgets import (
     QTableView,
     QTableWidget,
     QTableWidgetItem,
+    QTreeWidget,
+    QTreeWidgetItem,
     QToolBar,
     QToolButton,
     QVBoxLayout,
@@ -1422,34 +1424,30 @@ class MainWindow(QMainWindow):
         btn_add_file.clicked.connect(self.action_add_files)
         files_header.addWidget(btn_add_file)
 
-        self.tbl_files = QTableWidget(0, len(FILES_COLUMNS))
-        self.tbl_files.setHorizontalHeaderLabels([c.label for c in FILES_COLUMNS])
+        self.tbl_files = QTreeWidget()
+        self.tbl_files.setHeaderLabels([c.label for c in FILES_COLUMNS])
         self._files_dnd = FilesTableDnD(self.tbl_files)
         self._files_dnd.files_dropped.connect(self._on_dropped_on_files_table)
-        h = self.tbl_files.horizontalHeader()
-        # 所有列都 Interactive：允许用户自由拖宽（包括文件名列右侧）。
-        # 不用 Stretch，避免 stretch 列右边缘无法拖动，以及其它列变窄时
-        # 反向被吃掉空间的怪异交互。列总宽超出视口时显示水平滚动条。
+        h = self.tbl_files.header()
+        # 所有列都 Interactive：允许用户自由拖宽
         for i, _col in enumerate(FILES_COLUMNS):
             h.setSectionResizeMode(i, QHeaderView.Interactive)
         h.setStretchLastSection(False)
         self.tbl_files.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.tbl_files.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         # 列宽偏好在 _show_project 中按项目加载
-        h.setSectionsMovable(False)   # 暂不开放调换列顺序
+        h.setSectionsMovable(False)
         # 表头右键菜单：切换列可见性
         h.setContextMenuPolicy(Qt.CustomContextMenu)
         h.customContextMenuRequested.connect(self._files_header_context_menu)
         # 列宽变化时保存到 project_settings
         h.sectionResized.connect(self._on_files_section_resized)
-        self.tbl_files.verticalHeader().setVisible(False)
         self.tbl_files.setAlternatingRowColors(True)
-        self.tbl_files.setShowGrid(False)
         # 文件名过长时直接截断显示，不显示省略号
         self.tbl_files.setTextElideMode(Qt.ElideNone)
         self._no_elide_delegate = NoElideDelegate(self.tbl_files)
         self.tbl_files.setItemDelegate(self._no_elide_delegate)
-        self.tbl_files.setSelectionBehavior(QAbstractItemView.SelectRows)
+        self.tbl_files.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.tbl_files.setEditTriggers(
             QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed
         )
@@ -1457,8 +1455,7 @@ class MainWindow(QMainWindow):
         self.tbl_files.itemSelectionChanged.connect(self._on_file_selected)
         self.tbl_files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl_files.customContextMenuRequested.connect(self._file_context_menu)
-        self.tbl_files.cellDoubleClicked.connect(self._on_file_double_clicked)
-        self.tbl_files.verticalHeader().setDefaultSectionSize(30)
+        self.tbl_files.itemDoubleClicked.connect(self._on_file_double_clicked)
         # 防止列宽信号触发时还没绑定项目导致空操作
         self._files_columns_loading = False
 
@@ -1608,7 +1605,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         act_reset = menu.addAction("↺  恢复默认列宽")
         act_reset.triggered.connect(self._reset_files_columns_to_default)
-        menu.exec(self.tbl_files.horizontalHeader().mapToGlobal(pos))
+        menu.exec(self.tbl_files.header().mapToGlobal(pos))
 
     def _toggle_file_column(self, col_index: int, visible: bool) -> None:
         col = FILES_COLUMNS[col_index]
@@ -1720,7 +1717,7 @@ class MainWindow(QMainWindow):
     def _show_project(self, p: Project | None) -> None:
         # 清空文件表 & 预览
         self.tbl_files.blockSignals(True)
-        self.tbl_files.setRowCount(0)
+        self.tbl_files.clear()
         self.tbl_files.blockSignals(False)
         self.preview.show_file(None)
 
@@ -1742,43 +1739,11 @@ class MainWindow(QMainWindow):
         desc = self._desc_plain(desc)
         self.lbl_meta_desc.setText(desc)
 
-        # 文件表
+        # 文件表（task #17：按 subfolder 建树）
         files = self.repo.list_files(p.id)  # type: ignore[arg-type]
         self.tbl_files.blockSignals(True)
-        self.tbl_files.setRowCount(len(files))
-        kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
-                      "code": "💻", "other": "📦"}
-        from .files_table_columns import INDEX_BY_KEY as _COL_IDX
-        for r, f in enumerate(files):
-            name = Path(f.path).name
-            kind_icon = kind_icons.get(f.kind, "📦")
-            # task #14 T1：missing 标记 → 文件名前加 ⚠
-            warn_prefix = "⚠ " if f.missing else ""
-            it_name = QTableWidgetItem(f"{warn_prefix}{kind_icon}  {name}")
-            if f.missing:
-                it_name.setToolTip(
-                    "此文件被标记为缺失（库一致性检查发现物理路径不存在）。\n"
-                    "再次跑「工具 → 检查库一致性」可重新评估。"
-                )
-            it_name.setFlags(it_name.flags() & ~Qt.ItemIsEditable)
-            it_name.setData(Qt.UserRole, f.id)
-            it_label = QTableWidgetItem(f.label)
-            it_kind = QTableWidgetItem(f.kind)
-            it_kind.setFlags(it_kind.flags() & ~Qt.ItemIsEditable)
-            it_kind.setTextAlignment(Qt.AlignCenter)
-            # 存储方式：is_relative=True → 仓储（统一仓库目录），False → 链接（原始路径）
-            storage_text = "📦 仓储" if f.is_relative else "🔗 链接"
-            it_storage = QTableWidgetItem(storage_text)
-            it_storage.setFlags(it_storage.flags() & ~Qt.ItemIsEditable)
-            it_storage.setTextAlignment(Qt.AlignCenter)
-            it_storage.setToolTip(
-                "文件已复制到统一仓库目录" if f.is_relative
-                else "仅记录原始路径，文件留在原位"
-            )
-            self.tbl_files.setItem(r, _COL_IDX["name"], it_name)
-            self.tbl_files.setItem(r, _COL_IDX["label"], it_label)
-            self.tbl_files.setItem(r, _COL_IDX["kind"], it_kind)
-            self.tbl_files.setItem(r, _COL_IDX["storage"], it_storage)
+        self._populate_files_tree(files)
+        self.tbl_files.expandAll()
         self.tbl_files.blockSignals(False)
 
         # 应用项目级列偏好（可见性 + 列宽）
@@ -1788,6 +1753,117 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"项目 #{p.id}  ·  {p.title}  ·  {len(files)} 文件"
         )
+
+    def _populate_files_tree(self, files: list[FileItem]) -> None:
+        """按 files.subfolder 分组建树（task #17）。
+
+        - subfolder="" → 顶层文件节点
+        - subfolder="ML" → 📁 ML/ 下挂文件
+        - subfolder="ML/NLP" → 📁 ML/ → 📁 NLP/ 下挂文件
+        - 两种模式（仓储/链接）展示方式完全一致
+        """
+        kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
+                      "code": "💻", "other": "📦"}
+
+        # dir_nodes: "a/b" → QTreeWidgetItem，逐级缓存避免重复创建
+        dir_nodes: dict[str, QTreeWidgetItem] = {}
+
+        def _get_dir_node(subfolder: str) -> QTreeWidgetItem | None:
+            """为 subfolder 路径逐级创建/复用目录节点，返回最深一级。"""
+            if not subfolder:
+                return None  # 顶层
+            if subfolder in dir_nodes:
+                return dir_nodes[subfolder]
+            parts = subfolder.split("/")
+            parent_node: QTreeWidgetItem | None = None
+            for depth in range(1, len(parts) + 1):
+                partial = "/".join(parts[:depth])
+                if partial in dir_nodes:
+                    parent_node = dir_nodes[partial]
+                    continue
+                node = QTreeWidgetItem()
+                node.setText(0, f"📁 {parts[depth - 1]}/")
+                node.setFlags(node.flags() & ~Qt.ItemIsEditable)
+                # 目录节点不可选中执行（存一个特殊标记）
+                node.setData(0, Qt.UserRole, -1)
+                if parent_node is None:
+                    self.tbl_files.addTopLevelItem(node)
+                else:
+                    parent_node.addChild(node)
+                dir_nodes[partial] = node
+                parent_node = node
+            return parent_node
+
+        for f in files:
+            name = Path(f.path).name
+            kind_icon = kind_icons.get(f.kind, "📦")
+            warn_prefix = "⚠ " if f.missing else ""
+
+            item = QTreeWidgetItem()
+            item.setText(0, f"{warn_prefix}{kind_icon}  {name}")
+            item.setText(1, f.label)
+            item.setText(2, f.kind)
+            item.setText(3, "📦 仓储" if f.is_relative else "🔗 链接")
+            item.setData(0, Qt.UserRole, f.id)
+            # 文件节点默认不可编辑（label 编辑通过 _on_file_item_changed 控制）
+            item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
+
+            if f.missing:
+                item.setToolTip(0,
+                    "此文件被标记为缺失（库一致性检查发现物理路径不存在）。\n"
+                    "再次跑「工具 → 检查库一致性」可重新评估。"
+                )
+            item.setToolTip(3,
+                "文件已复制到统一仓库目录" if f.is_relative
+                else "仅记录原始路径，文件留在原位"
+            )
+
+            parent_node = _get_dir_node(f.subfolder)
+            if parent_node is None:
+                self.tbl_files.addTopLevelItem(item)
+            else:
+                parent_node.addChild(item)
+
+        # 排序：同级内目录先（按名字），文件后（按 ord）
+        self._sort_files_tree()
+
+    def _sort_files_tree(self) -> None:
+        """对树的每一级排序：目录节点在前（按文本），文件节点在后（按 ord/文本）。"""
+        def _sort_items(parent: QTreeWidget | QTreeWidgetItem) -> None:
+            # 分离目录节点和文件节点
+            dirs: list[QTreeWidgetItem] = []
+            files: list[QTreeWidgetItem] = []
+            for i in range(parent.childCount() if isinstance(parent, QTreeWidgetItem)
+                           else parent.topLevelItemCount()):
+                child = (parent.child(i) if isinstance(parent, QTreeWidgetItem)
+                         else parent.topLevelItem(i))
+                if child.data(0, Qt.UserRole) == -1:  # 目录节点
+                    dirs.append(child)
+                else:
+                    files.append(child)
+            # 目录按文本排序，文件保持原序（由 ord 决定）
+            dirs.sort(key=lambda n: n.text(0))
+            # 重新排列
+            if isinstance(parent, QTreeWidget):
+                parent.clear()
+            else:
+                while parent.childCount():
+                    parent.removeChild(parent.child(0))
+            for n in dirs:
+                if isinstance(parent, QTreeWidget):
+                    parent.addTopLevelItem(n)
+                else:
+                    parent.addChild(n)
+            for n in files:
+                if isinstance(parent, QTreeWidget):
+                    parent.addTopLevelItem(n)
+                else:
+                    parent.addChild(n)
+            # 递归子目录
+            for n in dirs:
+                _sort_items(n)
+
+        _sort_items(self.tbl_files)
 
     @staticmethod
     def _desc_plain(md: str) -> str:
@@ -2203,6 +2279,9 @@ class MainWindow(QMainWindow):
         if not p:
             return
 
+        # task #17：若当前选中了目录节点，新文件归到该目录的 subfolder
+        target_subfolder = self._selected_tree_subfolder()
+
         # 询问本次导入要用哪种存储方式（默认 = 全局设置的「默认存储方式」）
         default_mode = self.repo.get_setting("default_storage_mode", "link") or "link"
         storage, ask_label_text = self._ask_storage_for_import(
@@ -2212,8 +2291,11 @@ class MainWindow(QMainWindow):
             return  # 用户取消
 
         # 说明已经在第一个对话框里填了（单文件场景），不再弹第二次
+        from ..models import PendingFile
+        pending = [PendingFile(src=Path(p).resolve(), subfolder=target_subfolder)
+                   for p in paths]
         added = self._import_files(
-            p, paths, ask_label=False, storage=storage,
+            p, pending, ask_label=False, storage=storage,
         )
         # 若对话框里填了说明（仅单文件路径），写到新增的最后一个文件
         if added and ask_label_text:
@@ -2364,21 +2446,43 @@ class MainWindow(QMainWindow):
         self.repo.add_file(f)
 
     def _current_file_row_id(self) -> int | None:
-        r = self.tbl_files.currentRow()
-        if r < 0:
+        it = self.tbl_files.currentItem()
+        if it is None:
             return None
-        from .files_table_columns import INDEX_BY_KEY as _COL_IDX
-        it = self.tbl_files.item(r, _COL_IDX["name"])
-        return it.data(Qt.UserRole) if it else None
+        fid = it.data(0, Qt.UserRole)
+        # 目录节点存 -1，文件节点存 file_id
+        return fid if fid is not None and fid > 0 else None
+
+    def _selected_tree_subfolder(self) -> str:
+        """返回当前选中的目录节点对应的 subfolder 路径。
+
+        - 选中目录节点 → 从节点文本反推 subfolder（去掉 📁 前缀和 / 后缀，逐级拼接）
+        - 选中文件节点或无选中 → ""（顶层）
+        """
+        it = self.tbl_files.currentItem()
+        if it is None:
+            return ""
+        fid = it.data(0, Qt.UserRole)
+        if fid is None or fid > 0:
+            return ""  # 文件节点或无效
+        # 目录节点：向上遍历拼路径
+        parts: list[str] = []
+        node = it
+        while node is not None:
+            text = node.text(0)
+            # 去掉 "📁 " 前缀和 "/" 后缀
+            name = text.replace("📁 ", "").rstrip("/")
+            parts.append(name)
+            node = node.parent()
+        parts.reverse()
+        return "/".join(parts)
 
     def _selected_file_ids(self) -> list[int]:
-        from .files_table_columns import INDEX_BY_KEY as _COL_IDX
-        rows = sorted({i.row() for i in self.tbl_files.selectedIndexes()})
         ids: list[int] = []
-        for r in rows:
-            it = self.tbl_files.item(r, _COL_IDX["name"])
-            if it:
-                ids.append(it.data(Qt.UserRole))
+        for it in self.tbl_files.selectedItems():
+            fid = it.data(0, Qt.UserRole)
+            if fid is not None and fid > 0:
+                ids.append(fid)
         return ids
 
     def _on_file_selected(self) -> None:
@@ -2394,22 +2498,33 @@ class MainWindow(QMainWindow):
         path = self._resolve(f)
         self.preview.show_file(str(path) if path.exists() else None)
 
-    def _on_file_item_changed(self, item: QTableWidgetItem) -> None:
-        from .files_table_columns import INDEX_BY_KEY as _COL_IDX
-        if item.column() != _COL_IDX["label"]:
+    def _on_file_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
+        fid = item.data(0, Qt.UserRole)
+        if fid is None or fid <= 0:
+            return  # 目录节点或无效
+        if column != 1:  # 仅 label 列可编辑；其它列还原
+            self.tbl_files.blockSignals(True)
+            f = self.repo.get_file(fid)
+            if f and column == 0:
+                name = Path(f.path).name
+                kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
+                              "code": "💻", "other": "📦"}
+                item.setText(0, f"{kind_icons.get(f.kind, '📦')}  {name}")
+            elif f and column == 2:
+                item.setText(2, f.kind)
+            elif f and column == 3:
+                item.setText(3, "📦 仓储" if f.is_relative else "🔗 链接")
+            self.tbl_files.blockSignals(False)
             return
-        name_item = self.tbl_files.item(item.row(), _COL_IDX["name"])
-        if not name_item:
-            return
-        fid = name_item.data(Qt.UserRole)
         f = self.repo.get_file(fid)
         if not f:
             return
-        f.label = item.text()
+        f.label = item.text(1)
         self.repo.update_file(f)
 
-    def _on_file_double_clicked(self, _row: int, col: int) -> None:
-        if col == 0:
+    def _on_file_double_clicked(self, item: QTreeWidgetItem, col: int) -> None:
+        fid = item.data(0, Qt.UserRole)
+        if fid is not None and fid > 0 and col == 0:
             self.action_open_current_file()
 
     def action_open_current_file(self) -> None:
