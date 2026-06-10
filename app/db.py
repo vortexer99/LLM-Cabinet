@@ -35,6 +35,7 @@ CREATE TABLE IF NOT EXISTS projects (
     description_md  TEXT,
     storage_mode    TEXT NOT NULL DEFAULT 'link',
     cover_file_id   INTEGER,
+    mcp_modified_at TEXT,                     -- task #24：MCP 修改标记
     created_at      TEXT NOT NULL DEFAULT (datetime('now')),
     updated_at      TEXT NOT NULL DEFAULT (datetime('now'))
 );

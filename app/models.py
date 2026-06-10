@@ -98,6 +98,7 @@ class Project:
     description_md: str = ""
     storage_mode: str = "link"
     cover_file_id: Optional[int] = None
+    mcp_modified_at: Optional[str] = None  # task #24：MCP 修改标记
     created_at: str = ""
     updated_at: str = ""
 

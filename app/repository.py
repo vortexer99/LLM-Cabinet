@@ -1125,6 +1125,7 @@ class Repository:
             description_md=row["description_md"] or "",
             storage_mode=row["storage_mode"] or "link",
             cover_file_id=row["cover_file_id"],
+            mcp_modified_at=row["mcp_modified_at"],  # task #24
             created_at=row["created_at"] or "",
             updated_at=row["updated_at"] or "",
         )
