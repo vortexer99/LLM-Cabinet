@@ -8,6 +8,14 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+### Changed
+- 任务规划重组（基于 `docs/file-handling.md` 评审）：
+  - 新增 `tasks/32-cross-project-file-reference.md`：跨项目链接引用最小方案（路径共享 + 多引用警告 + #14 跨项目引用报告 + Windows path `normcase` 归一化 + 文件表角标提示），零 schema 改动。
+  - 拆分 `tasks/31-...`：原卡保留为指针，新增 `tasks/31a-files-tree-interactions.md`（树形视图拖动 / 同级排序 / 新建空 subfolder / F2 重命名）+ `tasks/31b-files-table-flat-view.md`（扁平视图模式 + 大小/添加时间列 + Qt 原生列排序）。排序持久化按视图分键 `files_table_sort_tree` / `files_table_sort_flat`。
+  - 扩展 `tasks/29-file-storage-location-management.md`：原 T1/T2 之外新增 T3a 重关联到外部文件（修复 missing）/ T3b 替换链接目标（单选）/ T3c 文件夹粒度批量入口。
+  - 收尾 `tasks/04-project-system-files-folding.md`：从"待澄清"敲定为"二态视图（仅用户文件 / 显示所有）"，默认显示所有 + 无 generated 时 toggle 自动隐藏，消费 #30 origin。
+  - 同步 `docs/file-handling.md` 任务地图、推荐执行顺序、`tasks/README.md` 索引表、`TODO.md` 条目。
+
 ## [0.5.0] - 2026-06-10
 
 📦 schema v6 → v7 — `files` 表新增 `subfolder` 列（逻辑子目录路径，驱动 UI 树形展示）。

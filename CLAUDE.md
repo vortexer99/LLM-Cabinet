@@ -27,7 +27,7 @@ app/
   utils.py        # 工具函数
 tasks/            # 任务卡（编号 + 简述）
 selftests/        # 自测脚本
-docs/             # 文档（migrations.md, release.md 等）
+docs/             # 文档（file-handling.md, migrations.md, release.md 等）
 ```
 
 ## 代码风格
