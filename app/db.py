@@ -24,7 +24,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS files (
     kind        TEXT NOT NULL,
     ord         INTEGER NOT NULL DEFAULT 0,
     added_at    TEXT NOT NULL DEFAULT (datetime('now')),
-    missing     INTEGER NOT NULL DEFAULT 0  -- 一致性检查标记（task #14 T1）
+    missing     INTEGER NOT NULL DEFAULT 0,  -- 一致性检查标记（task #14 T1）
+    subfolder   TEXT NOT NULL DEFAULT ''     -- 逻辑子目录路径（task #17）：POSIX 格式，"" = 顶层
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
@@ -442,12 +443,23 @@ def _migrate_v5_to_v6(conn: sqlite3.Connection) -> None:
     conn.execute("ALTER TABLE projects ADD COLUMN mcp_modified_at TEXT")
 
 
+def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
+    """task #17：files 加 subfolder 列（逻辑子目录路径，驱动 UI 树形展示）。"""
+
+    file_cols = {r[1] for r in conn.execute("PRAGMA table_info(files)").fetchall()}
+    if "subfolder" not in file_cols:
+        conn.execute(
+            "ALTER TABLE files ADD COLUMN subfolder TEXT NOT NULL DEFAULT ''"
+        )
+
+
 MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (1, 2, _migrate_v1_to_v2),
     (2, 3, _migrate_v2_to_v3),
     (3, 4, _migrate_v3_to_v4),
     (4, 5, _migrate_v4_to_v5),
     (5, 6, _migrate_v5_to_v6),
+    (6, 7, _migrate_v6_to_v7),
 ]
 
 

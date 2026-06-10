@@ -4,7 +4,7 @@ from __future__ import annotations
 import sqlite3
 from typing import Iterable, Optional
 
-from .models import Field, FieldSuggestion, FileItem, LLMTask, Project
+from .models import Field, FieldSuggestion, FileItem, LLMTask, PendingFile, Project
 
 
 class Repository:
@@ -782,9 +782,9 @@ class Repository:
 
     def add_file(self, f: FileItem) -> int:
         cur = self.conn.execute(
-            """INSERT INTO files(project_id, path, is_relative, label, kind, ord)
-               VALUES(?,?,?,?,?,?)""",
-            (f.project_id, f.path, int(f.is_relative), f.label, f.kind, f.ord),
+            """INSERT INTO files(project_id, path, is_relative, label, kind, ord, subfolder)
+               VALUES(?,?,?,?,?,?,?)""",
+            (f.project_id, f.path, int(f.is_relative), f.label, f.kind, f.ord, f.subfolder),
         )
         self.conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -1136,6 +1136,11 @@ class Repository:
             missing_v = bool(row["missing"])
         except (IndexError, KeyError):
             missing_v = False
+        # subfolder 列在 v6 → v7 才加上
+        try:
+            subfolder_v = row["subfolder"] or ""
+        except (IndexError, KeyError):
+            subfolder_v = ""
         return FileItem(
             id=row["id"],
             project_id=row["project_id"],
@@ -1146,4 +1151,5 @@ class Repository:
             ord=row["ord"] or 0,
             added_at=row["added_at"] or "",
             missing=missing_v,
+            subfolder=subfolder_v,
         )

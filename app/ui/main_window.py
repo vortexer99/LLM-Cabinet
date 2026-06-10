@@ -2226,18 +2226,24 @@ class MainWindow(QMainWindow):
             self._show_project(self.repo.get_project(p.id))  # type: ignore[arg-type]
 
     def _ask_storage_for_import(
-        self, paths: list[str], default_mode: str,
+        self, paths: list, default_mode: str,
     ) -> tuple[str | None, str | None]:
         """弹出存储方式选择对话框。
 
+        paths: list[PendingFile] 或 list[str]。
         返回 (storage, label)：
         - storage = "link" | "copy" 或 None（取消）
         - label：仅单文件时可能携带的说明文本；None 表示对话框没收集说明
         """
+        from ..models import PendingFile
         from PySide6.QtWidgets import (
             QDialog, QDialogButtonBox, QLabel, QLineEdit,
             QRadioButton, QVBoxLayout,
         )
+
+        # 兼容 PendingFile 和 str
+        first = paths[0]
+        first_name = first.src.name if isinstance(first, PendingFile) else Path(first).name
 
         dlg = QDialog(self)
         dlg.setWindowTitle("添加文件")
@@ -2248,7 +2254,7 @@ class MainWindow(QMainWindow):
         head = QLabel(
             f"将导入 {len(paths)} 个文件，请选择存储方式："
             if len(paths) > 1
-            else f"将导入「{Path(paths[0]).name}」，请选择存储方式："
+            else f"将导入「{first_name}」，请选择存储方式："
         )
         head.setWordWrap(True)
         lay.addWidget(head)
@@ -2291,18 +2297,27 @@ class MainWindow(QMainWindow):
     def _import_files(
         self,
         project: Project,
-        paths: list[str],
+        paths: list,
         ask_label: bool = False,
         storage: str | None = None,
     ) -> int:
         """批量导入文件，返回成功数量。
 
+        paths: list[PendingFile] 或 list[str]（兼容旧调用）。
         storage: "link" | "copy" | None。None 表示按全局「默认存储方式」设置。
         """
+        from ..models import PendingFile
         added = 0
-        for src in paths:
+        for item in paths:
+            if isinstance(item, PendingFile):
+                src = str(item.src)
+                subfolder = item.subfolder
+            else:
+                src = str(item)
+                subfolder = ""
             try:
-                self._import_one(project, src, ask_label=ask_label, storage=storage)
+                self._import_one(project, src, ask_label=ask_label, storage=storage,
+                                 subfolder=subfolder)
                 added += 1
             except Exception as e:
                 QMessageBox.warning(self, "导入失败", f"{src}\n{e}")
@@ -2316,6 +2331,7 @@ class MainWindow(QMainWindow):
         src: str,
         ask_label: bool = False,
         storage: str | None = None,
+        subfolder: str = "",
     ) -> None:
         src_path = Path(src)
         if not src_path.exists():
@@ -2329,12 +2345,14 @@ class MainWindow(QMainWindow):
                 project_id=p.id,  # type: ignore[arg-type]
                 path=rel, is_relative=True, label="",
                 kind=detect_kind(src_path), ord=10_000,
+                subfolder=subfolder,
             )
         else:
             f = FileItem(
                 project_id=p.id,  # type: ignore[arg-type]
                 path=str(src_path.resolve()), is_relative=False, label="",
                 kind=detect_kind(src_path), ord=10_000,
+                subfolder=subfolder,
             )
         if ask_label:
             label, ok = QInputDialog.getText(
@@ -2849,16 +2867,25 @@ class MainWindow(QMainWindow):
         self.proj_view.viewport().update()
 
     @staticmethod
-    def _expand_paths(paths: list) -> list[str]:
-        out: list[str] = []
+    def _expand_paths(paths: list) -> list:
+        """把混合路径展开为 [PendingFile, ...]。
+
+        - 文件 → PendingFile(src=绝对路径, subfolder="")
+        - 目录 → 递归收集所有文件，subfolder = 相对该目录的 POSIX 子路径
+        """
+        from ..models import PendingFile
+        out: list[PendingFile] = []
         for raw in paths:
             p = Path(raw)
             if p.is_file():
-                out.append(str(p))
+                out.append(PendingFile(src=p.resolve(), subfolder=""))
             elif p.is_dir():
-                for sub in p.iterdir():
+                root = p.resolve()
+                for sub in sorted(root.rglob("*")):
                     if sub.is_file():
-                        out.append(str(sub))
+                        rel = sub.parent.relative_to(root)
+                        subfolder = rel.as_posix() if str(rel) != "." else ""
+                        out.append(PendingFile(src=sub.resolve(), subfolder=subfolder))
         return out
 
     # ---- 业务实现 ----
@@ -2883,6 +2910,7 @@ class MainWindow(QMainWindow):
     def _drop_create_project(
         self, files: list, source_paths: list | None = None,
     ) -> None:
+        from ..models import PendingFile
         if not files:
             return
         # 默认标题：
@@ -2896,7 +2924,8 @@ class MainWindow(QMainWindow):
                     default_title = p.name
                     break
         if not default_title:
-            default_title = Path(files[0]).stem
+            first = files[0]
+            default_title = first.src.stem if isinstance(first, PendingFile) else Path(first).stem
         title, ok = QInputDialog.getText(
             self, "新建项目",
             f"将 {len(files)} 个文件加入新项目。请输入项目标题：",

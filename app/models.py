@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Optional
 
 
@@ -107,6 +108,13 @@ class Project:
 
 
 @dataclass
+class PendingFile:
+    """待导入的文件，从用户拖入路径到写入 files 表之间的中间载体（task #17）。"""
+    src: Path           # 源文件绝对路径
+    subfolder: str = "" # 逻辑子路径，如 "ML/NLP"；"" = 顶层
+
+
+@dataclass
 class FileItem:
     id: Optional[int] = None
     project_id: int = 0
@@ -117,6 +125,7 @@ class FileItem:
     ord: int = 0
     added_at: str = ""
     missing: bool = False           # task #14 T1：库一致性检查标记
+    subfolder: str = ""             # task #17：逻辑子目录路径，如 "ML/NLP"
 
 
 # ============================================================ LLM

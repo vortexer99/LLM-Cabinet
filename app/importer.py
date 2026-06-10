@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable, Literal, Optional
 
 from .library import Library
-from .models import FIELD_TYPES, FileItem, Project
+from .models import FIELD_TYPES, FileItem, PendingFile, Project
 from .repository import Repository
 from .utils import detect_kind
 
@@ -415,11 +415,12 @@ def _import_files_for_project(
     assert project.id is not None
 
     # 收集要导入的文件：优先 files.json 列出的；否则递归扫文件夹（排除 project.json/files.json/README.md/files/ 子目录）
-    file_paths = _collect_files_to_import(plan)
+    pending_files = _collect_files_to_import(plan)
 
     n_added = 0
-    total = len(file_paths)
-    for i, src in enumerate(file_paths):
+    total = len(pending_files)
+    for i, pf in enumerate(pending_files):
+        src = pf.src
         try:
             kind = detect_kind(src.suffix)
             if options.storage_mode == "copy":
@@ -431,6 +432,7 @@ def _import_files_for_project(
                     label="",
                     kind=kind,
                     ord=n_added,
+                    subfolder=pf.subfolder,
                 )
             else:
                 fi = FileItem(
@@ -440,6 +442,7 @@ def _import_files_for_project(
                     label="",
                     kind=kind,
                     ord=n_added,
+                    subfolder=pf.subfolder,
                 )
             repo.add_file(fi)
             n_added += 1
@@ -455,20 +458,29 @@ def _import_files_for_project(
     return n_added
 
 
-def _collect_files_to_import(plan: ImportPlan) -> list[Path]:
-    """从文件夹收集待导入的文件路径。
+def _collect_files_to_import(plan: ImportPlan) -> list[PendingFile]:
+    """从文件夹收集待导入的文件路径，附带 subfolder 信息（task #17）。
 
     - 跳过导出包元数据（``project.json`` / ``files.json`` / ``README.md``）
     - 若存在 ``files/`` 子目录（task #09 导出包结构），优先用其中的文件
     - 否则递归扫整个文件夹，跳过隐藏文件
     """
     folder = plan.folder
+
+    def _make(src: Path, root: Path) -> PendingFile:
+        rel = src.parent.relative_to(root)
+        subfolder = rel.as_posix() if str(rel) != "." else ""
+        return PendingFile(src=src.resolve(), subfolder=subfolder)
+
     files_dir = folder / "files"
     if files_dir.is_dir():
-        return sorted(p for p in files_dir.rglob("*") if p.is_file())
+        return sorted(
+            (_make(p, files_dir) for p in files_dir.rglob("*") if p.is_file()),
+            key=lambda pf: pf.src,
+        )
 
     skip_names = {"project.json", "files.json", "README.md"}
-    out: list[Path] = []
+    out: list[PendingFile] = []
     for p in folder.rglob("*"):
         if not p.is_file():
             continue
@@ -479,8 +491,8 @@ def _collect_files_to_import(plan: ImportPlan) -> list[Path]:
         # 跳过隐藏文件
         if any(part.startswith(".") for part in rel.parts):
             continue
-        out.append(p)
-    return sorted(out)
+        out.append(_make(p, folder))
+    return sorted(out, key=lambda pf: pf.src)
 
 
 # =============================================================================
