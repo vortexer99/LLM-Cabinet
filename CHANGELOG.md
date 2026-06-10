@@ -15,6 +15,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - `files` 表新增 `subfolder` 字段，UI 文件表从 `QTableWidget` 改为 `QTreeWidget`，按 `subfolder` 折叠展示。
   - 物理存储与 UI 组织解耦：仓储模式继续拍平，`subfolder` 纯粹是数据库字段。
   - 删除文件后空逻辑目录自动消失；选中目录节点可连带删除整棵子树。
+- **文件列表独立窗口（task #02）**：文件区标题行新增 ⇱ 按钮，点击后文件列表脱离主窗口成为独立 700×500 窗口；关闭窗口或再次点击（变 ⇲）自动收回到主窗口。独立窗口里仍能选文件、右键菜单、拖入新文件，预览面板与主窗口同步。
 - **导入深度/文件数检查**：目录层级 ≥ 5 或文件数 ≥ 500 时弹确认对话框。
 - **空文件夹处理**：单个空文件夹拖入创建 0 文件项目；多个空文件夹弹提示告知用户。
 - README 新增 "Looking Further: AI Team Workspace" 章节（英文/中文），引入 `gallery/AI-Team-Workspace-Concep.jpg` 概念图，说明 Cabinet 作为多 Agent 共享记忆中枢的远期定位。`gallery/README.md` 增加 Concept artwork 索引段。

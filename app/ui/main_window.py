@@ -1541,7 +1541,11 @@ class MainWindow(QMainWindow):
             return
         dlg = self._files_detach_window
         self._files_detach_window = None
-        dlg.finished.disconnect(self._attach_files_panel)
+
+        try:
+            dlg.finished.disconnect(self._attach_files_panel)
+        except RuntimeError:
+            pass
 
         if self._files_detach_placeholder is not None:
             self._files_detach_placeholder.setParent(None)
@@ -1551,7 +1555,8 @@ class MainWindow(QMainWindow):
         self._right_v_split.addWidget(self._files_panel)
         self._right_v_split.setSizes([320, 480])
 
-        dlg.close()
+        if dlg.isVisible():
+            dlg.close()
         dlg.deleteLater()
 
         self._btn_detach_files.setText("⇱")
