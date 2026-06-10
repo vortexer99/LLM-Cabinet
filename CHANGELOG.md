@@ -8,6 +8,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-10
+
 📦 schema v6 → v7 — `files` 表新增 `subfolder` 列（逻辑子目录路径，驱动 UI 树形展示）。
 
 ### Added
@@ -149,7 +151,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 📦 schema v1 — 初始 schema。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.4.0
 [0.3.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.3.0
