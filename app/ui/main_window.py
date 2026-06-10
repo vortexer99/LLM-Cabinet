@@ -2848,6 +2848,36 @@ class MainWindow(QMainWindow):
         self.drop_zone.hide()
         self._set_drag_hover(None)
 
+    # ---- 导入前检查 ----
+    def _warn_if_deep_or_large(self, files: list) -> bool:
+        """检查待导入文件是否过深或过多，弹确认对话框。返回 True 表示继续。"""
+        from ..models import PendingFile
+        max_depth = 0
+        for f in files:
+            sf = f.subfolder if isinstance(f, PendingFile) else ""
+            if sf:
+                depth = sf.count("/") + 1
+                max_depth = max(max_depth, depth)
+
+        count = len(files)
+        warnings: list[str] = []
+        if max_depth >= 5:
+            warnings.append(f"目录层级较深（最深 {max_depth} 层）")
+        if count >= 500:
+            warnings.append(f"文件数量较多（共 {count} 个）")
+
+        if not warnings:
+            return True
+
+        msg = QMessageBox(self)
+        msg.setIcon(QMessageBox.Question)
+        msg.setWindowTitle("导入确认")
+        msg.setText("检测到以下情况，是否继续导入？")
+        msg.setInformativeText("\n".join(f"• {w}" for w in warnings))
+        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        msg.setDefaultButton(QMessageBox.Yes)
+        return msg.exec() == QMessageBox.Yes
+
     # ---- 信号槽：来自子组件的 drop ----
     def _on_dropped_on_project(self, pid: int, paths: list) -> None:
         if self._drop_busy:
@@ -2869,6 +2899,8 @@ class MainWindow(QMainWindow):
         try:
             files = self._expand_paths(paths)
             if not files:
+                return
+            if not self._warn_if_deep_or_large(files):
                 return
             if self._current_project_id is not None:
                 self._drop_into_project(self._current_project_id, files)
@@ -2893,6 +2925,8 @@ class MainWindow(QMainWindow):
             # 否则沿用旧路径
             files = self._expand_paths(paths)
             if files:
+                if not self._warn_if_deep_or_large(files):
+                    return
                 self._drop_create_project(files, source_paths=paths)
         finally:
             self._drop_busy = False
@@ -2911,6 +2945,8 @@ class MainWindow(QMainWindow):
             # 合并为一个新项目：沿用旧路径（_drop_create_project）
             files = self._expand_paths([str(d) for d in dirs])
             if files:
+                if not self._warn_if_deep_or_large(files):
+                    return
                 self._drop_create_project(files, source_paths=[str(d) for d in dirs])
             return
 
