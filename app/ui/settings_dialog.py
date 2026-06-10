@@ -279,6 +279,20 @@ class SettingsDialog(QDialog):
         hint.setProperty("hint", True)
         hint.setWordWrap(True)
         form.addRow("", hint)
+
+        self.chk_ignore_dotfiles = QCheckBox("忽略 . 开头的文件和文件夹")
+        cur_idf = self.repo.get_setting("import_ignore_dotfiles", "1")
+        self.chk_ignore_dotfiles.setChecked(cur_idf == "1")
+        self.chk_ignore_dotfiles.toggled.connect(self._on_ignore_dotfiles_changed)
+        form.addRow("隐藏文件：", self.chk_ignore_dotfiles)
+        idf_hint = QLabel(
+            "开启（默认）：跳过 .gitignore、.env、.git/ 等以 . 开头的文件和目录。\n"
+            "关闭：导入所有文件，包括隐藏文件。"
+        )
+        idf_hint.setProperty("hint", True)
+        idf_hint.setWordWrap(True)
+        form.addRow("", idf_hint)
+
         lay.addWidget(gb1)
 
         gb2 = QGroupBox("库目录")
@@ -359,6 +373,9 @@ class SettingsDialog(QDialog):
         v = self.cmb_storage.currentData()
         self.repo.set_setting("default_storage_mode", v)
         self.default_storage_changed.emit(v)
+
+    def _on_ignore_dotfiles_changed(self, checked: bool) -> None:
+        self.repo.set_setting("import_ignore_dotfiles", "1" if checked else "0")
 
     # =================================================================
     # 视图

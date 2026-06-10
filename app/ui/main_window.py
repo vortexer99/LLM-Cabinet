@@ -3182,24 +3182,31 @@ class MainWindow(QMainWindow):
                 self.proj_view.setCurrentIndex(idx)
         self.proj_view.viewport().update()
 
-    @staticmethod
-    def _expand_paths(paths: list) -> list:
+    def _expand_paths(self, paths: list) -> list:
         """把混合路径展开为 [PendingFile, ...]。
 
         - 文件 → PendingFile(src=绝对路径, subfolder="")
         - 目录 → 递归收集所有文件，目录名作为 subfolder 前缀
           例：拖入 myfolder/sub/a.txt → subfolder="myfolder/sub"
+        - import_ignore_dotfiles 设置为 "1" 时，跳过 . 开头的文件和目录
         """
         from ..models import PendingFile
+        ignore_dot = self.repo.get_setting("import_ignore_dotfiles", "1") == "1"
         out: list[PendingFile] = []
         for raw in paths:
             p = Path(raw)
             if p.is_file():
+                if ignore_dot and p.name.startswith("."):
+                    continue
                 out.append(PendingFile(src=p.resolve(), subfolder=""))
             elif p.is_dir():
                 root = p.resolve()
                 dir_name = root.name
                 for sub in sorted(root.rglob("*")):
+                    if ignore_dot and any(
+                        part.startswith(".") for part in sub.relative_to(root).parts
+                    ):
+                        continue
                     if sub.is_file():
                         rel = sub.parent.relative_to(root)
                         if str(rel) == ".":

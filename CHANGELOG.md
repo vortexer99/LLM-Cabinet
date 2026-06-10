@@ -18,6 +18,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - **文件列表独立窗口（task #02）**：文件区标题行新增 ⇱ 按钮，点击后文件列表脱离主窗口成为独立 700×500 窗口；关闭窗口或再次点击（变 ⇲）自动收回到主窗口。独立窗口里仍能选文件、右键菜单、拖入新文件，预览面板与主窗口同步。
 - **导入深度/文件数检查**：目录层级 ≥ 5 或文件数 ≥ 500 时弹确认对话框。
 - **空文件夹处理**：单个空文件夹拖入创建 0 文件项目；多个空文件夹弹提示告知用户。
+- **导入安全防护**：禁止导入库目录自身，防止递归导入。
+- **隐藏文件过滤**：设置项「忽略 . 开头的文件和文件夹」（默认开启），导入时跳过 `.gitignore`、`.env`、`.git/` 等隐藏文件和目录。
 - README 新增 "Looking Further: AI Team Workspace" 章节（英文/中文），引入 `gallery/AI-Team-Workspace-Concep.jpg` 概念图，说明 Cabinet 作为多 Agent 共享记忆中枢的远期定位。`gallery/README.md` 增加 Concept artwork 索引段。
 - 新增任务卡 `tasks/27-provenance-source-link.md`：MCP 写入可附带 `source`（依据文件 + 备注），UI 显示「来源」入口；作为推向 AI Team Workspace 定位的第一步。
 - 新增任务卡 `tasks/28-export-structure-option.md`：导出项目时可选保留目录结构或拍平（依赖 #17）。
