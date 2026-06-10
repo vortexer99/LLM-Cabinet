@@ -2290,14 +2290,25 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"已删除 {len(selected_ids)} 个项目", 3000)
 
     def action_export_project(self, pid: int | None = None) -> None:
-        """导出当前/指定项目到本地目录。"""
+        """导出当前/指定项目到本地目录。支持单项目和批量导出。"""
         from PySide6.QtWidgets import QProgressDialog
 
         from ..exporter import ExportOptions, export_project
         from ..utils import open_with_default_app
 
-        # QAction.triggered 会传 bool(checked) 进来。注意：Python 里 bool 是 int 的
-        # 子类，isinstance(False, int) 为 True，所以必须先把 bool 显式排除掉。
+        # task #28 T2: 检查是否是多选导出
+        selected_ids = self._selected_project_ids()
+
+        # QAction.triggered 会传 bool(checked) 进来
+        is_multi = len(selected_ids) > 1
+        is_explicit_single = isinstance(pid, int) and pid > 0
+
+        if is_multi:
+            # 批量导出模式
+            self._export_batch(selected_ids)
+            return
+
+        # 单项目导出模式
         if isinstance(pid, bool) or not isinstance(pid, int):
             pid = self._current_project_id
         if pid is None:
@@ -2334,7 +2345,6 @@ class MainWindow(QMainWindow):
             nonlocal cancelled
             if prog.wasCanceled():
                 cancelled = True
-                # 让 exporter 在下一次循环抛出
                 raise InterruptedError("用户取消导出")
             prog.setMaximum(max(total, 1))
             prog.setValue(done)
@@ -2361,6 +2371,108 @@ class MainWindow(QMainWindow):
         self.repo.set_setting("last_export_dir", str(opts.target_root))
 
         # 结果摘要
+        self._show_export_result(result)
+
+    def _export_batch(self, selected_ids: list[int]) -> None:
+        """批量导出多个项目（task #28 T2）。"""
+        from PySide6.QtWidgets import QProgressDialog
+
+        from ..exporter import ExportOptions, export_project
+        from ..utils import open_with_default_app, human_size
+
+        # 收集项目信息
+        projects_info: list[tuple[int, str, int]] = []
+        for pid in selected_ids:
+            p = self.repo.get_project(pid)
+            if p:
+                n_files = len(self.repo.list_files(pid))
+                projects_info.append((pid, p.title, n_files))
+
+        if not projects_info:
+            QMessageBox.information(self, "提示", "没有可导出的项目")
+            return
+
+        last_dir = self.repo.get_setting("last_export_dir", "") or str(Path.home())
+        dlg = ExportDialog(projects=projects_info, last_export_dir=last_dir, parent=self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+
+        target_root = dlg.target_root()
+        selected_indices = dlg.selected_projects()
+
+        # 进度对话框
+        total_projects = len(selected_indices)
+        prog = QProgressDialog(
+            f"正在批量导出 {total_projects} 个项目…", "取消", 0, total_projects, self,
+        )
+        prog.setWindowTitle("批量导出")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.setValue(0)
+
+        results: list = []
+        try:
+            for i, idx in enumerate(selected_indices):
+                if prog.wasCanceled():
+                    break
+                pid, title, n_files = projects_info[idx]
+                project = self.repo.get_project(pid)
+                if not project:
+                    continue
+
+                prog.setValue(i)
+                prog.setLabelText(f"正在导出：{title}")
+                QApplication.processEvents()
+
+                opts = ExportOptions(
+                    target_root=target_root,
+                    copy_link_files=dlg.copy_link_files(),
+                    mode=dlg.mode(),
+                    export_format=dlg.export_format(),
+                    preserve_structure=dlg.preserve_structure(),
+                    include_readme=dlg.include_readme(),
+                    include_llm_history=dlg.include_llm_history(),
+                )
+
+                try:
+                    result = export_project(
+                        self.repo, self.library, project, opts,
+                        progress=None,  # 批量导出不显示单文件进度
+                    )
+                    results.append((title, result))
+                except Exception as e:
+                    results.append((title, f"导出失败: {e}"))
+
+            prog.setValue(total_projects)
+        finally:
+            prog.close()
+
+        # 记忆下次默认目录
+        self.repo.set_setting("last_export_dir", str(target_root))
+
+        # 结果摘要
+        success_count = sum(1 for _, r in results if hasattr(r, 'n_files_copied'))
+        msg = f"批量导出完成：\n\n成功 {success_count}/{total_projects} 个项目\n\n"
+        for title, r in results:
+            if hasattr(r, 'n_files_copied'):
+                msg += f"✓ {title}: {r.n_files_copied} 文件 → {r.project_dir.name}\n"
+            else:
+                msg += f"✗ {title}: {r}\n"
+
+        box = QMessageBox(QMessageBox.Information, "批量导出完成", msg, parent=self)
+        btn_open = box.addButton("📂 打开导出目录", QMessageBox.AcceptRole)
+        box.addButton(QMessageBox.Close)
+        box.exec()
+        if box.clickedButton() is btn_open:
+            try:
+                open_with_default_app(target_root)
+            except Exception:
+                pass
+
+    def _show_export_result(self, result) -> None:
+        """显示导出结果。"""
+        from ..utils import open_with_default_app
+
         msg = (
             f"导出成功：\n\n"
             f"目录：{result.project_dir}\n"
