@@ -2552,27 +2552,39 @@ class MainWindow(QMainWindow):
             reveal_in_explorer(path)
 
     def action_delete_files(self) -> None:
-        ids = self._selected_file_ids()
-        if not ids:
+        # task #17 T3：支持删除目录节点（整棵子树）和文件节点
+        file_ids = self._selected_file_ids()
+        dir_subfolders = self._selected_dir_subfolders()
+
+        if not file_ids and not dir_subfolders:
             return
 
-        # 按存储方式分类：链接（不动原文件） vs 仓储（会删除仓库内物理文件）
-        link_files: list[FileItem] = []
-        copy_files: list[FileItem] = []
-        for fid in ids:
+        # 收集要删除的文件
+        files_to_delete: list[FileItem] = []
+
+        # 目录节点 → 递归收集该 subfolder 下所有文件
+        if dir_subfolders and self._current_project_id is not None:
+            all_files = self.repo.list_files(self._current_project_id)
+            for sf in dir_subfolders:
+                for f in all_files:
+                    if f.subfolder == sf or f.subfolder.startswith(sf + "/"):
+                        if f not in files_to_delete:
+                            files_to_delete.append(f)
+
+        # 文件节点
+        for fid in file_ids:
             f = self.repo.get_file(fid)
-            if not f:
-                continue
-            if f.is_relative:
-                copy_files.append(f)
-            else:
-                link_files.append(f)
+            if f and f not in files_to_delete:
+                files_to_delete.append(f)
 
-        if not link_files and not copy_files:
+        if not files_to_delete:
             return
+
+        # 按存储方式分类
+        link_files = [f for f in files_to_delete if not f.is_relative]
+        copy_files = [f for f in files_to_delete if f.is_relative]
 
         def _fmt_list(files: list[FileItem], max_show: int = 8) -> str:
-            from pathlib import Path
             names = [Path(f.path).name for f in files]
             if len(names) <= max_show:
                 shown = names
@@ -2581,6 +2593,9 @@ class MainWindow(QMainWindow):
             return "\n".join(f"  • {n}" for n in shown)
 
         parts: list[str] = []
+        if dir_subfolders:
+            parts.append(f"📁 目录（连带所有子文件）· {len(dir_subfolders)} 个：\n"
+                         + "\n".join(f"  • 📁 {sf}/" for sf in dir_subfolders))
         if link_files:
             parts.append(
                 f"🔗 链接（不影响原文件） · {len(link_files)} 个：\n"
@@ -2596,7 +2611,7 @@ class MainWindow(QMainWindow):
         msg.setIcon(QMessageBox.Warning)
         msg.setWindowTitle("确认移除文件")
         msg.setText(
-            f"即将从项目中移除 {len(link_files) + len(copy_files)} 个文件："
+            f"即将从项目中移除 {len(files_to_delete)} 个文件："
         )
         msg.setInformativeText("\n\n".join(parts))
         msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
@@ -2604,7 +2619,7 @@ class MainWindow(QMainWindow):
         if msg.exec() != QMessageBox.Yes:
             return
 
-        for f in link_files + copy_files:
+        for f in files_to_delete:
             if f.is_relative:
                 self.library.remove_relative(f.path)
             if f.id is not None:
@@ -2612,6 +2627,30 @@ class MainWindow(QMainWindow):
         if self._current_project_id is not None:
             self.repo.touch_project(self._current_project_id)
             self._show_project(self.repo.get_project(self._current_project_id))
+
+    def _selected_dir_subfolders(self) -> list[str]:
+        """返回当前选中的目录节点对应的 subfolder 路径列表。"""
+        subfolders: list[str] = []
+        for it in self.tbl_files.selectedItems():
+            fid = it.data(0, Qt.UserRole)
+            if fid is not None and fid < 0:  # 目录节点
+                sf = self._subfolder_from_tree_node(it)
+                if sf:
+                    subfolders.append(sf)
+        return subfolders
+
+    @staticmethod
+    def _subfolder_from_tree_node(node: QTreeWidgetItem) -> str:
+        """从目录树节点向上遍历，拼出 subfolder 路径。"""
+        parts: list[str] = []
+        n: QTreeWidgetItem | None = node
+        while n is not None:
+            text = n.text(0)
+            name = text.replace("📁 ", "").rstrip("/")
+            parts.append(name)
+            n = n.parent()
+        parts.reverse()
+        return "/".join(parts)
 
     def action_set_cover(self) -> None:
         fid = self._current_file_row_id()
