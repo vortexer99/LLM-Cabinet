@@ -23,6 +23,12 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 内容选项：包含 README.md、LLM 任务历史
   - 封面图始终复制（即使不勾选"复制链接文件"）
   - files.json 新增 subfolder / is_cover / origin 字段（schema @3）
+- **项目列表多选（task #25 Phase A/B）**：
+  - 卡片视图/表格视图支持 Ctrl+点击多选、Shift+范围选择
+  - 多选时预览区显示"已选 X 个项目"
+  - 右键菜单区分单选/多选
+  - 批量标记已读 MCP 修改
+  - 批量删除（显示项目数量和文件统计）
 
 ### Changed
 - 任务规划重组（基于 `docs/file-handling.md` 评审）：

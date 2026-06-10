@@ -29,7 +29,7 @@
 | [22-wizard-status-column-redesign.md](./22-wizard-status-column-redesign.md) | 字段助手 Step 1/Step 2 列语义重组（"LLM 建议"列改成普通用户能读懂的"新增/删除/修改 (字段名,类型,提示)"动作描述；新增 `llm_pending_type_change` 让"改名+改类型"被吞场景可见；Step 2 删冗余状态列） | S+S | P2 | ✅ 2026-06-03 |
 | [23-mcp-tools-consolidation.md](./23-mcp-tools-consolidation.md) | MCP 工具收敛（17 → 5 个聚合工具：`query_projects` / `manage_project` / `manage_files` / `manage_libraries` / `export_project`）；下线 AI 套 AI 的 `trigger_llm_suggestion` / `apply_suggestion` / `list_pending_suggestions` 与冗余的 `import_folder`；修正 `switch_library` 过时描述 | S+XS | P1 | ✅ 2026-06-04 |
 | [24-mcp-audit-log-viewer.md](./24-mcp-audit-log-viewer.md) | MCP 操作记录查看面板：状态栏入口 + 双 Tab 对话框（审计日志 + MCP 修改项目）+ schema v5→v6 + 侧边栏 MCP 筛选 | S | P1 | ✅ 2026-06-04 |
-| [25-project-list-batch-and-dnd.md](./25-project-list-batch-and-dnd.md) | 项目列表多选 + 批量操作适配 + 标签拖放赋值 | S+M | P1 | 待做 |
+| [25-project-list-batch-and-dnd.md](./25-project-list-batch-and-dnd.md) | 项目列表多选 + 批量操作适配 + 标签拖放赋值 | S+M | P1 | 🚧 Phase A/B 完成 |
 | [26-file-mode-library.md](./26-file-mode-library.md) | 文件模式库：每个文件 = 一个项目，隐藏文件表，标签做交叉分组 | S+S+S | P1 | 待做 |
 | [27-provenance-source-link.md](./27-provenance-source-link.md) | Provenance 来源链：MCP 写入可附带 source（依据文件 + 备注），UI 显示「来源」入口 | S | P1 | 待做 |
 | [28-export-structure-option.md](./28-export-structure-option.md) | 导出/导入闭环（扩展导出选项 + 批量导出 + 导入增强） | L | P1 | 🚧 部分完成（T1 导出已完成；T2/T3 待做） |

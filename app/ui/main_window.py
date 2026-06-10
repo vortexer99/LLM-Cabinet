@@ -1259,7 +1259,7 @@ class MainWindow(QMainWindow):
         self.proj_view.setViewMode(QListView.IconMode)
         self.proj_view.setResizeMode(QListView.Adjust)
         self.proj_view.setMovement(QListView.Static)
-        self.proj_view.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.proj_view.setSelectionMode(QAbstractItemView.ExtendedSelection)  # task #25: 多选
         self.proj_view.setUniformItemSizes(True)
         self.proj_view.setSpacing(4)
         self.proj_view.setMouseTracking(True)
@@ -1272,7 +1272,7 @@ class MainWindow(QMainWindow):
         self.proj_table.setObjectName("ProjectTable")
         self.proj_table.setModel(self.proj_model)
         self.proj_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self.proj_table.setSelectionMode(QAbstractItemView.SingleSelection)
+        self.proj_table.setSelectionMode(QAbstractItemView.ExtendedSelection)  # task #25: 多选
         self.proj_table.setShowGrid(False)
         self.proj_table.setAlternatingRowColors(True)
         self.proj_table.setSortingEnabled(False)
@@ -1797,7 +1797,20 @@ class MainWindow(QMainWindow):
         self._current_filter_value = value
         self.refresh_projects()
 
+    # ============================================================ project selection (task #25)
+    def _selected_project_ids(self) -> list[int]:
+        """返回当前选中的项目 id 列表（支持多选）。"""
+        rows = self.proj_view.selectionModel().selectedRows()
+        return [idx.data(ProjectModel.RoleId) for idx in rows if idx.isValid()]
+
     def _on_project_selected(self, cur, _prev) -> None:
+        # task #25: 多选模式下，若选中多个项目，显示选中数量而非单个项目
+        selected = self._selected_project_ids()
+        if len(selected) > 1:
+            self._current_project_id = None
+            self._show_multi_selection(len(selected))
+            return
+
         if not cur.isValid():
             self._current_project_id = None
             self._show_project(None)
@@ -1805,6 +1818,20 @@ class MainWindow(QMainWindow):
         pid = cur.data(ProjectModel.RoleId)
         self._current_project_id = pid
         self._show_project(self.repo.get_project(pid))
+
+    def _show_multi_selection(self, count: int) -> None:
+        """多选时显示选中数量，清空文件表和预览。"""
+        # 清空文件表 & 预览
+        self.tbl_files.blockSignals(True)
+        self.tbl_files.clear()
+        self.tbl_files.blockSignals(False)
+        self.preview.show_file(None)
+
+        # 更新预览区显示选中数量
+        self.lbl_meta_title.setText(f"已选 {count} 个项目")
+        self.lbl_meta_desc.setText("")
+        self.lbl_files_hint.setText("")
+        self.statusBar().showMessage(f"已选中 {count} 个项目")
 
     def _show_project(self, p: Project | None) -> None:
         # 清空文件表 & 预览
@@ -2053,12 +2080,14 @@ class MainWindow(QMainWindow):
             self.refresh_projects()  # 刷新项目列表 + 标签树（更新 MCP 计数）
 
     def _on_mark_mcp_seen(self) -> None:
-        """右键菜单：标记已了解该项目的 MCP 修改。"""
-        pid = self._current_project_id
-        if pid is None:
+        """右键菜单：标记已了解该项目的 MCP 修改（支持多选）。"""
+        selected_ids = self._selected_project_ids()
+        if not selected_ids:
             return
-        self.repo.clear_project_mcp_modified(pid)
+        for pid in selected_ids:
+            self.repo.clear_project_mcp_modified(pid)
         self.refresh_projects()
+        self.statusBar().showMessage(f"已标记 {len(selected_ids)} 个项目的 MCP 修改为已读", 3000)
 
     # ============================================================ LLM
     def action_open_llm_tasks(self) -> None:
@@ -2196,45 +2225,69 @@ class MainWindow(QMainWindow):
             self.refresh_projects()
 
     def action_delete_project(self) -> None:
-        if self._current_project_id is None:
-            return
-        p = self.repo.get_project(self._current_project_id)
-        if not p:
+        """删除项目（支持多选）。"""
+        selected_ids = self._selected_project_ids()
+        if not selected_ids:
             return
 
-        files = self.repo.list_files(p.id)  # type: ignore[arg-type]
-        copy_files = [f for f in files if f.is_relative]
-        link_files = [f for f in files if not f.is_relative]
+        # 收集所有选中项目的信息
+        total_copy = 0
+        total_link = 0
+        titles = []
+        for pid in selected_ids:
+            p = self.repo.get_project(pid)
+            if p:
+                titles.append(p.title)
+                files = self.repo.list_files(pid)  # type: ignore[arg-type]
+                total_copy += sum(1 for f in files if f.is_relative)
+                total_link += sum(1 for f in files if not f.is_relative)
 
-        lines = [f"确定删除项目「{p.title}」？"]
-        if not files:
-            lines.append("（该项目目前没有文件）")
+        # 构建确认消息
+        if len(titles) == 1:
+            lines = [f"确定删除项目「{titles[0]}」？"]
         else:
-            if link_files:
-                lines.append(f"🔗 链接 · {len(link_files)} 个：原文件不受影响。")
-            if copy_files:
-                lines.append(f"📦 仓储 · {len(copy_files)} 个：将从仓库目录删除。")
+            lines = [f"确定删除这 {len(selected_ids)} 个项目？"]
+            lines.append(f"项目：{', '.join(titles[:3])}" + ("..." if len(titles) > 3 else ""))
+
+        if total_copy == 0 and total_link == 0:
+            lines.append("（这些项目目前没有文件）")
+        else:
+            if total_link:
+                lines.append(f"🔗 链接 · {total_link} 个：原文件不受影响。")
+            if total_copy:
+                lines.append(f"📦 仓储 · {total_copy} 个：将从仓库目录删除。")
 
         ans = QMessageBox.question(self, "确认删除", "\n".join(lines))
         if ans != QMessageBox.Yes:
             return
 
-        # 删除仓储文件（仅 is_relative=True 的）
-        if copy_files:
-            for f in copy_files:
-                self.library.remove_relative(f.path)
-            pdir = self.library.project_dir(p.id)  # type: ignore[arg-type]
-            try:
-                for child in pdir.iterdir():
-                    try:
-                        child.unlink()
-                    except OSError:
-                        pass
-                pdir.rmdir()
-            except OSError:
-                pass
-        self.repo.delete_project(p.id)  # type: ignore[arg-type]
+        # 逐个删除
+        for pid in selected_ids:
+            p = self.repo.get_project(pid)
+            if not p:
+                continue
+
+            files = self.repo.list_files(pid)  # type: ignore[arg-type]
+            copy_files = [f for f in files if f.is_relative]
+
+            # 删除仓储文件
+            if copy_files:
+                for f in copy_files:
+                    self.library.remove_relative(f.path)
+                pdir = self.library.project_dir(pid)  # type: ignore[arg-type]
+                try:
+                    for child in pdir.iterdir():
+                        try:
+                            child.unlink()
+                        except OSError:
+                            pass
+                    pdir.rmdir()
+                except OSError:
+                    pass
+            self.repo.delete_project(pid)
+
         self.refresh_projects()
+        self.statusBar().showMessage(f"已删除 {len(selected_ids)} 个项目", 3000)
 
     def action_export_project(self, pid: int | None = None) -> None:
         """导出当前/指定项目到本地目录。"""
@@ -2342,32 +2395,52 @@ class MainWindow(QMainWindow):
         if not idx.isValid():
             return
         view.setCurrentIndex(idx)
+
+        # task #25: 检查选中数量
+        selected_ids = self._selected_project_ids()
+        is_multi = len(selected_ids) > 1
+
         menu = QMenu(self)
-        menu.addAction("✎  编辑…", self.action_edit_project)
-        menu.addSeparator()
-        menu.addAction("✨  LLM 元数据建议…", self.action_llm_suggest_for_project)
-        menu.addSeparator()
-        menu.addAction("📤  导出项目…", self.action_export_project)
-        menu.addSeparator()
-        act_paste_cover = menu.addAction(
-            "📋  从剪切板设为封面", self.action_set_cover_from_clipboard,
-        )
-        # 没有图片就禁用
-        from PySide6.QtWidgets import QApplication
-        cb = QApplication.clipboard()
-        has_img = False
-        try:
-            md = cb.mimeData()
-            has_img = md is not None and (md.hasImage() or md.hasUrls())
-        except Exception:
-            pass
-        act_paste_cover.setEnabled(has_img)
-        if not has_img:
-            act_paste_cover.setToolTip("剪切板中没有图片")
-        menu.addSeparator()
-        menu.addAction("👁  已读MCP修改", self._on_mark_mcp_seen)
-        menu.addSeparator()
-        menu.addAction("🗑  删除", self.action_delete_project)
+
+        if is_multi:
+            # 多选菜单
+            menu.addAction(f"已选 {len(selected_ids)} 个项目")
+            menu.addSeparator()
+            menu.addAction("✨  LLM 元数据建议…", self.action_llm_suggest_for_project)
+            menu.addSeparator()
+            menu.addAction("📤  导出选中项目…", self.action_export_project)
+            menu.addSeparator()
+            menu.addAction("👁  已读MCP修改", self._on_mark_mcp_seen)
+            menu.addSeparator()
+            menu.addAction("🗑  删除", self.action_delete_project)
+        else:
+            # 单选菜单
+            menu.addAction("✎  编辑…", self.action_edit_project)
+            menu.addSeparator()
+            menu.addAction("✨  LLM 元数据建议…", self.action_llm_suggest_for_project)
+            menu.addSeparator()
+            menu.addAction("📤  导出项目…", self.action_export_project)
+            menu.addSeparator()
+            act_paste_cover = menu.addAction(
+                "📋  从剪切板设为封面", self.action_set_cover_from_clipboard,
+            )
+            # 没有图片就禁用
+            from PySide6.QtWidgets import QApplication
+            cb = QApplication.clipboard()
+            has_img = False
+            try:
+                md = cb.mimeData()
+                has_img = md is not None and (md.hasImage() or md.hasUrls())
+            except Exception:
+                pass
+            act_paste_cover.setEnabled(has_img)
+            if not has_img:
+                act_paste_cover.setToolTip("剪切板中没有图片")
+            menu.addSeparator()
+            menu.addAction("👁  已读MCP修改", self._on_mark_mcp_seen)
+            menu.addSeparator()
+            menu.addAction("🗑  删除", self.action_delete_project)
+
         global_pos = view.viewport().mapToGlobal(pos) if hasattr(view, "viewport") else view.mapToGlobal(pos)
         menu.exec(global_pos)
 
