@@ -64,7 +64,7 @@ def test_schema_v7_has_subfolder(tmp: Path, t: T) -> None:
     db_path = tmp / "test_schema.db"
     repo = Repository(connect(db_path))
     try:
-        t.assert_eq("schema version", SCHEMA_VERSION, 7)
+        t.assert_eq("schema version", SCHEMA_VERSION, 8)
 
         # 检查 files 表有 subfolder 列
         cols = {r[1] for r in repo.conn.execute("PRAGMA table_info(files)").fetchall()}
@@ -142,7 +142,7 @@ def test_importer_collect_with_subfolder(tmp: Path, t: T) -> None:
     src = make_src_tree(tmp)
     plan = ImportPlan(folder=src)
 
-    pending = _collect_files_to_import(plan)
+    pending, _file_id_map = _collect_files_to_import(plan)
     t.assert_eq("collected count", len(pending), 4)
 
     sf_map = {pf.src.name: pf.subfolder for pf in pending}

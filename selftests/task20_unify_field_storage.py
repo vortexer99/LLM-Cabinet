@@ -339,8 +339,8 @@ def test_fresh_v4_db_via_connect(t: T, tmp: Path) -> None:
         )
         # SCHEMA_VERSION 应该已被打 v4
         v = repo.conn.execute("PRAGMA user_version").fetchone()[0]
-        t.assert_eq("全新库 user_version = 4", int(v), 4)
-        t.assert_eq("常量 SCHEMA_VERSION = 4", SCHEMA_VERSION, 4)
+        t.assert_eq("全新库 user_version = 8", int(v), 8)
+        t.assert_eq("常量 SCHEMA_VERSION = 8", SCHEMA_VERSION, 8)
 
 
 def test_v3_db_full_migration_via_connect(t: T, tmp: Path) -> None:
@@ -373,12 +373,12 @@ def test_v3_db_full_migration_via_connect(t: T, tmp: Path) -> None:
     conn0.commit()
     conn0.close()
 
-    # 用 connect() 打开（应走 v3→v4 迁移路径）
+    # 用 connect() 打开（应走 v3→v8 迁移路径）
     repo = Repository(connect(db))
     with closing_repos(repo):
-        # 验证 user_version 推到 4
+        # 验证 user_version 推到 8
         v = repo.conn.execute("PRAGMA user_version").fetchone()[0]
-        t.assert_eq("connect 后 user_version 推到 4", int(v), 4)
+        t.assert_eq("connect 后 user_version 推到 8", int(v), 8)
 
         # 验证 projects 表 4 列已 DROP
         cols = {

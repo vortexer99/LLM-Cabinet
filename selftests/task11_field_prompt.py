@@ -163,11 +163,11 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     )
 
     # ----------------------------------------------------------------
-    # 阶段 4：T4 导出 schema 升级到 @2 + 含 prompt_hint
+    # 阶段 4：T4 导出 schema 升级到 @3 + 含 prompt_hint
     # ----------------------------------------------------------------
-    t.assert_eq("EXPORT_SCHEMA = @2",
-                EXPORT_SCHEMA, "llm-cabinet/project-export@2")
-    t.assert_eq("SUPPORTED_SCHEMA_VERSION = 2", SUPPORTED_SCHEMA_VERSION, 2)
+    t.assert_eq("EXPORT_SCHEMA = @3",
+                EXPORT_SCHEMA, "llm-cabinet/project-export@3")
+    t.assert_eq("SUPPORTED_SCHEMA_VERSION = 3", SUPPORTED_SCHEMA_VERSION, 3)
 
     # 准备一份"复制模式"项目以走通完整导出/导入
     lib_a_root = tmp / "lib_a"
@@ -194,8 +194,8 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     )
     pj_path = res.project_dir / "project.json"
     pj_data = json.loads(pj_path.read_text(encoding="utf-8"))
-    t.assert_eq("project.json schema = @2",
-                pj_data.get("schema"), "llm-cabinet/project-export@2")
+    t.assert_eq("project.json schema = @3",
+                pj_data.get("schema"), "llm-cabinet/project-export@3")
     snap_by_name = {s["name"]: s for s in pj_data.get("fields_snapshot", [])}
     t.assert_in("fields_snapshot 含 ISBN", "ISBN", snap_by_name)
     t.assert_eq("ISBN 的 prompt_hint 被导出",
@@ -211,7 +211,7 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
 
     plans = scan_folders([res.project_dir], repo_b)
     plan = plans[0]
-    t.assert_eq("scan: schema_version 解析", plan.schema_version, 2)
+    t.assert_eq("scan: schema_version 解析", plan.schema_version, 3)
     t.assert_eq("scan: 不是 future schema", plan.is_future_schema, False)
 
     import_folder_as_project(
