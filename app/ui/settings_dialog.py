@@ -279,20 +279,6 @@ class SettingsDialog(QDialog):
         hint.setProperty("hint", True)
         hint.setWordWrap(True)
         form.addRow("", hint)
-
-        self.chk_preserve_folder = QCheckBox("拖入单个文件夹时保留文件夹名称作为目录")
-        cur_pf = self.repo.get_setting("preserve_folder_name", "0")
-        self.chk_preserve_folder.setChecked(cur_pf == "1")
-        self.chk_preserve_folder.toggled.connect(self._on_preserve_folder_changed)
-        form.addRow("目录结构：", self.chk_preserve_folder)
-        pf_hint = QLabel(
-            "关闭（默认）：拖入 myfolder/a.txt → 文件在顶层\n"
-            "开启：拖入 myfolder/a.txt → 文件在 📁 myfolder/ 下"
-        )
-        pf_hint.setProperty("hint", True)
-        pf_hint.setWordWrap(True)
-        form.addRow("", pf_hint)
-
         lay.addWidget(gb1)
 
         gb2 = QGroupBox("库目录")
@@ -373,9 +359,6 @@ class SettingsDialog(QDialog):
         v = self.cmb_storage.currentData()
         self.repo.set_setting("default_storage_mode", v)
         self.default_storage_changed.emit(v)
-
-    def _on_preserve_folder_changed(self, checked: bool) -> None:
-        self.repo.set_setting("preserve_folder_name", "1" if checked else "0")
 
     # =================================================================
     # 视图

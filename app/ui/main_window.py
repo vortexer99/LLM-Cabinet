@@ -1419,6 +1419,14 @@ class MainWindow(QMainWindow):
         self.lbl_files_hint.setProperty("hint", True)
         files_header.addWidget(self.lbl_files_hint)
         files_header.addStretch(1)
+
+        self._btn_detach_files = QPushButton("⇱")
+        self._btn_detach_files.setToolTip("弹出为独立窗口")
+        self._btn_detach_files.setFixedSize(28, 28)
+        self._btn_detach_files.setProperty("flat", True)
+        self._btn_detach_files.clicked.connect(self._toggle_files_detach)
+        files_header.addWidget(self._btn_detach_files)
+
         btn_add_file = QPushButton("＋  添加文件")
         btn_add_file.setProperty("primary", True)
         btn_add_file.clicked.connect(self.action_add_files)
@@ -1477,8 +1485,8 @@ class MainWindow(QMainWindow):
         b_del2.clicked.connect(self.action_delete_files)
         ops.addWidget(b_del2)
 
-        bottom = QWidget()
-        bl = QVBoxLayout(bottom)
+        self._files_panel = QWidget()
+        bl = QVBoxLayout(self._files_panel)
         bl.setContentsMargins(12, 6, 12, 10)
         bl.setSpacing(8)
         bl.addLayout(files_header)
@@ -1486,14 +1494,68 @@ class MainWindow(QMainWindow):
         bl.addLayout(ops)
 
         # 上下垂直 splitter
-        v_split = QSplitter(Qt.Vertical)
-        v_split.addWidget(top)
-        v_split.addWidget(bottom)
-        v_split.setStretchFactor(0, 1)
-        v_split.setStretchFactor(1, 1)
-        v_split.setSizes([320, 480])
-        v_split.setHandleWidth(1)
-        return v_split
+        self._right_v_split = QSplitter(Qt.Vertical)
+        self._right_v_split.addWidget(top)
+        self._right_v_split.addWidget(self._files_panel)
+        self._right_v_split.setStretchFactor(0, 1)
+        self._right_v_split.setStretchFactor(1, 1)
+        self._right_v_split.setSizes([320, 480])
+        self._right_v_split.setHandleWidth(1)
+
+        self._files_detach_window: QDialog | None = None
+        self._files_detach_placeholder: QLabel | None = None
+
+        return self._right_v_split
+
+    # ============================================================ files detach
+    def _toggle_files_detach(self) -> None:
+        if self._files_detach_window is not None:
+            self._attach_files_panel()
+        else:
+            self._detach_files_panel()
+
+    def _detach_files_panel(self) -> None:
+        if self._files_detach_window is not None:
+            return
+        placeholder = QLabel("文件列表已弹出为独立窗口\n关闭该窗口即可恢复")
+        placeholder.setAlignment(Qt.AlignCenter)
+        placeholder.setProperty("muted", True)
+        self._right_v_split.addWidget(placeholder)
+        self._files_detach_placeholder = placeholder
+
+        dlg = QDialog(self, Qt.Window)
+        dlg.setWindowTitle("文件列表")
+        dlg.resize(700, 500)
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addWidget(self._files_panel)
+        dlg.finished.connect(self._attach_files_panel)
+        dlg.show()
+        self._files_detach_window = dlg
+
+        self._btn_detach_files.setText("⇲")
+        self._btn_detach_files.setToolTip("收回到主窗口")
+
+    def _attach_files_panel(self) -> None:
+        if self._files_detach_window is None:
+            return
+        dlg = self._files_detach_window
+        self._files_detach_window = None
+        dlg.finished.disconnect(self._attach_files_panel)
+
+        if self._files_detach_placeholder is not None:
+            self._files_detach_placeholder.setParent(None)
+            self._files_detach_placeholder.deleteLater()
+            self._files_detach_placeholder = None
+
+        self._right_v_split.addWidget(self._files_panel)
+        self._right_v_split.setSizes([320, 480])
+
+        dlg.close()
+        dlg.deleteLater()
+
+        self._btn_detach_files.setText("⇱")
+        self._btn_detach_files.setToolTip("弹出为独立窗口")
 
     # ============================================================ view mode
     def _set_view_mode(self, mode: str) -> None:
@@ -2884,9 +2946,9 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
-            prepend = self._should_prepend_folder_name(paths)
-            files = self._expand_paths(paths, prepend_name=prepend)
+            files = self._expand_paths(paths)
             if not files:
+                self._warn_empty_import(paths)
                 return
             self._drop_into_project(pid, files)
             self._hide_drop_zone()
@@ -2898,9 +2960,12 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
-            prepend = self._should_prepend_folder_name(paths)
-            files = self._expand_paths(paths, prepend_name=prepend)
+            files = self._expand_paths(paths)
             if not files:
+                if len(paths) == 1 and Path(paths[0]).is_dir():
+                    self._create_empty_project(Path(paths[0]).name)
+                else:
+                    self._warn_empty_import(paths)
                 return
             if not self._warn_if_deep_or_large(files):
                 return
@@ -2925,14 +2990,38 @@ class MainWindow(QMainWindow):
                 self._handle_multi_folder_drop(dirs)
                 return
             # 否则沿用旧路径
-            prepend = self._should_prepend_folder_name(paths)
-            files = self._expand_paths(paths, prepend_name=prepend)
-            if files:
-                if not self._warn_if_deep_or_large(files):
-                    return
-                self._drop_create_project(files, source_paths=paths)
+            files = self._expand_paths(paths)
+            if not files:
+                # 空文件夹处理：单个空目录 → 创建 0 文件项目；否则提示
+                if len(paths) == 1 and Path(paths[0]).is_dir():
+                    self._create_empty_project(Path(paths[0]).name)
+                else:
+                    self._warn_empty_import(paths)
+                return
+            if not self._warn_if_deep_or_large(files):
+                return
+            self._drop_create_project(files, source_paths=paths)
         finally:
             self._drop_busy = False
+
+    def _create_empty_project(self, title: str) -> None:
+        """创建一个 0 文件的项目（用户拖入空文件夹时）。"""
+        p = Project(title=title)
+        self.repo.save_project(p)
+        self.refresh_projects()
+        self.statusBar().showMessage(f"已创建空项目「{title}」", 4000)
+
+    def _warn_empty_import(self, paths: list) -> None:
+        """所有路径展开后为空时提示用户。"""
+        from ..importer import split_paths_by_kind
+        dirs, _ = split_paths_by_kind(paths)
+        if dirs:
+            QMessageBox.information(
+                self, "提示",
+                f"拖入的 {len(dirs)} 个文件夹都是空的，没有文件可导入。"
+            )
+        else:
+            QMessageBox.information(self, "提示", "没有文件可导入。")
 
     # ------------------------------------------------------------------
     # 批量文件夹导入（task #10）
@@ -2947,10 +3036,12 @@ class MainWindow(QMainWindow):
         if mode_dlg.mode() == "merge":
             # 合并为一个新项目：沿用旧路径（_drop_create_project）
             files = self._expand_paths([str(d) for d in dirs])
-            if files:
-                if not self._warn_if_deep_or_large(files):
-                    return
-                self._drop_create_project(files, source_paths=[str(d) for d in dirs])
+            if not files:
+                self._warn_empty_import([str(d) for d in dirs])
+                return
+            if not self._warn_if_deep_or_large(files):
+                return
+            self._drop_create_project(files, source_paths=[str(d) for d in dirs])
             return
 
         # separate 模式：批量导入
@@ -3058,42 +3149,30 @@ class MainWindow(QMainWindow):
                 self.proj_view.setCurrentIndex(idx)
         self.proj_view.viewport().update()
 
-    def _should_prepend_folder_name(self, paths: list) -> str:
-        """如果需要保留文件夹名称，返回要前缀的名字；否则返回空串。"""
-        if self.repo.get_setting("preserve_folder_name", "0") != "1":
-            return ""
-        if len(paths) != 1:
-            return ""
-        p = Path(paths[0])
-        if p.is_dir():
-            return p.name
-        return ""
-
     @staticmethod
-    def _expand_paths(paths: list, *, prepend_name: str = "") -> list:
+    def _expand_paths(paths: list) -> list:
         """把混合路径展开为 [PendingFile, ...]。
 
         - 文件 → PendingFile(src=绝对路径, subfolder="")
-        - 目录 → 递归收集所有文件，subfolder = 相对该目录的 POSIX 子路径
-
-        prepend_name: 非空时，所有 subfolder 前加这一级目录名。
-                      用于"拖入单文件夹时保留文件夹名称"场景。
+        - 目录 → 递归收集所有文件，目录名作为 subfolder 前缀
+          例：拖入 myfolder/sub/a.txt → subfolder="myfolder/sub"
         """
         from ..models import PendingFile
         out: list[PendingFile] = []
         for raw in paths:
             p = Path(raw)
             if p.is_file():
-                sf = prepend_name or ""
-                out.append(PendingFile(src=p.resolve(), subfolder=sf))
+                out.append(PendingFile(src=p.resolve(), subfolder=""))
             elif p.is_dir():
                 root = p.resolve()
+                dir_name = root.name
                 for sub in sorted(root.rglob("*")):
                     if sub.is_file():
                         rel = sub.parent.relative_to(root)
-                        subfolder = rel.as_posix() if str(rel) != "." else ""
-                        if prepend_name:
-                            subfolder = f"{prepend_name}/{subfolder}" if subfolder else prepend_name
+                        if str(rel) == ".":
+                            subfolder = dir_name
+                        else:
+                            subfolder = f"{dir_name}/{rel.as_posix()}"
                         out.append(PendingFile(src=sub.resolve(), subfolder=subfolder))
         return out
 
