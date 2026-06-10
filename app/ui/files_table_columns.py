@@ -29,11 +29,14 @@ class FilesColumn:
 
 
 # 列定义（顺序即为表中的左→右物理顺序）
+# task #31b: 新增 size / added_at 列
 COLUMNS: list[FilesColumn] = [
-    FilesColumn(key="name",    label="文件名", default_width=320, mandatory=True),
-    FilesColumn(key="label",   label="说明",   default_width=240),
-    FilesColumn(key="kind",    label="类型",   default_width=80),
-    FilesColumn(key="storage", label="存储",   default_width=80),
+    FilesColumn(key="name",     label="文件名",   default_width=320, mandatory=True),
+    FilesColumn(key="label",    label="说明",     default_width=240),
+    FilesColumn(key="kind",     label="类型",     default_width=80),
+    FilesColumn(key="size",     label="大小",     default_width=80),
+    FilesColumn(key="added_at", label="添加时间", default_width=140),
+    FilesColumn(key="storage",  label="存储",     default_width=80),
 ]
 
 # {key: index} 反查

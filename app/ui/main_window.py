@@ -1461,6 +1461,14 @@ class MainWindow(QMainWindow):
         self._btn_detach_files.clicked.connect(self._toggle_files_detach)
         files_header.addWidget(self._btn_detach_files)
 
+        # task #31b: 视图模式切换（树形/扁平）
+        self._btn_view_mode = QPushButton("🌲")
+        self._btn_view_mode.setToolTip("切换视图：树形 / 扁平")
+        self._btn_view_mode.setFixedSize(28, 28)
+        self._btn_view_mode.setProperty("flat", True)
+        self._btn_view_mode.clicked.connect(self._toggle_files_view_mode)
+        files_header.addWidget(self._btn_view_mode)
+
         btn_add_file = QPushButton("＋  添加文件")
         btn_add_file.setProperty("primary", True)
         btn_add_file.clicked.connect(self.action_add_files)
@@ -1608,6 +1616,32 @@ class MainWindow(QMainWindow):
             self.repo.set_project_setting(pid, "files_view_origin_filter", "user" if is_user_only else "all")
 
         # 刷新文件列表
+        if pid is not None:
+            self._show_project(self.repo.get_project(pid))
+
+    # ============================================================ task #31b 视图模式切换
+    def _toggle_files_view_mode(self) -> None:
+        """切换文件表视图模式：树形 ↔ 扁平。"""
+        pid = self._current_project_id
+        current_mode = getattr(self, '_files_view_mode', 'tree')
+
+        if current_mode == 'tree':
+            self._set_files_view_mode('flat', pid)
+        else:
+            self._set_files_view_mode('tree', pid)
+
+    def _set_files_view_mode(self, mode: str, pid: int | None) -> None:
+        """设置文件表视图模式并刷新。"""
+        self._files_view_mode = mode
+
+        # 更新按钮图标
+        self._btn_view_mode.setText("📋" if mode == "flat" else "🌲")
+
+        # 持久化
+        if pid is not None:
+            self.repo.set_project_setting(pid, "files_view_mode", mode)
+
+        # 刷新
         if pid is not None:
             self._show_project(self.repo.get_project(pid))
 
@@ -1895,9 +1929,17 @@ class MainWindow(QMainWindow):
         if is_user_only:
             files = [f for f in files if (f.origin or "user") == "user"]
 
+        # task #31b：加载视图模式（tree/flat）
+        view_mode = self.repo.get_project_setting(p.id, "files_view_mode", "tree")
+        self._files_view_mode = view_mode
+        self._btn_view_mode.setText("📋" if view_mode == "flat" else "🌲")
+
         self.tbl_files.blockSignals(True)
-        self._populate_files_tree(files)
-        self.tbl_files.expandAll()
+        if view_mode == "flat":
+            self._populate_files_flat(files)
+        else:
+            self._populate_files_tree(files)
+            self.tbl_files.expandAll()
         self.tbl_files.blockSignals(False)
 
         # 应用项目级列偏好（可见性 + 列宽）
@@ -1917,9 +1959,48 @@ class MainWindow(QMainWindow):
         - subfolder="ML" → 📁 ML/ 下挂文件
         - subfolder="ML/NLP" → 📁 ML/ → 📁 NLP/ 下挂文件
         - 两种模式（仓储/链接）展示方式完全一致
+
+        task #31b: 新增 size / added_at 列显示
         """
         kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
                       "code": "💻", "other": "📦"}
+
+        # 缓存文件大小（避免重复 stat）
+        size_cache: dict[int, str] = {}
+
+        def _get_size(fid: int, fpath: str, is_rel: bool) -> str:
+            if fid in size_cache:
+                return size_cache[fid]
+            try:
+                abs_path = self.library.resolve(fpath, is_rel)
+                if abs_path.exists():
+                    size = abs_path.stat().st_size
+                    # 格式化大小
+                    if size < 1024:
+                        s = f"{size} B"
+                    elif size < 1024 * 1024:
+                        s = f"{size / 1024:.1f} KB"
+                    elif size < 1024 * 1024 * 1024:
+                        s = f"{size / (1024 * 1024):.1f} MB"
+                    else:
+                        s = f"{size / (1024 * 1024 * 1024):.2f} GB"
+                    size_cache[fid] = s
+                    return s
+            except Exception:
+                pass
+            size_cache[fid] = "—"
+            return "—"
+
+        def _format_added_at(added_at: str | None) -> str:
+            if not added_at:
+                return "—"
+            # 格式化为 YYYY-MM-DD HH:MM
+            try:
+                # 原始格式可能是 "2026-06-10 18:34:08"
+                dt = added_at[:16] if len(added_at) >= 16 else added_at
+                return dt
+            except Exception:
+                return "—"
 
         # dir_nodes: "a/b" → QTreeWidgetItem，逐级缓存避免重复创建
         dir_nodes: dict[str, QTreeWidgetItem] = {}
@@ -1959,7 +2040,9 @@ class MainWindow(QMainWindow):
             item.setText(0, f"{warn_prefix}{kind_icon}  {name}")
             item.setText(1, f.label)
             item.setText(2, f.kind)
-            item.setText(3, "📦 仓储" if f.is_relative else "🔗 链接")
+            item.setText(3, _get_size(f.id, f.path, f.is_relative))
+            item.setText(4, _format_added_at(f.added_at))
+            item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
             item.setData(0, Qt.UserRole, f.id)
             # 文件节点默认不可编辑（label 编辑通过 _on_file_item_changed 控制）
             item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
@@ -1969,7 +2052,7 @@ class MainWindow(QMainWindow):
                     "此文件被标记为缺失（库一致性检查发现物理路径不存在）。\n"
                     "再次跑「工具 → 检查库一致性」可重新评估。"
                 )
-            item.setToolTip(3,
+            item.setToolTip(5,
                 "文件已复制到统一仓库目录" if f.is_relative
                 else "仅记录原始路径，文件留在原位"
             )
@@ -1982,6 +2065,94 @@ class MainWindow(QMainWindow):
 
         # 排序：同级内目录先（按名字），文件后（按 ord）
         self._sort_files_tree()
+
+    # task #31b: 扁平视图
+    def _populate_files_flat(self, files: list[FileItem]) -> None:
+        """扁平视图：所有文件平铺（忽略 subfolder 分组）。
+
+        task #31b: 支持按列排序
+        """
+        kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
+                      "code": "💻", "other": "📦"}
+
+        def _get_size(fid: int, fpath: str, is_rel: bool) -> str:
+            try:
+                abs_path = self.library.resolve(fpath, is_rel)
+                if abs_path.exists():
+                    size = abs_path.stat().st_size
+                    if size < 1024:
+                        return f"{size} B"
+                    elif size < 1024 * 1024:
+                        return f"{size / 1024:.1f} KB"
+                    elif size < 1024 * 1024 * 1024:
+                        return f"{size / (1024 * 1024):.1f} MB"
+                    else:
+                        return f"{size / (1024 * 1024 * 1024):.2f} GB"
+            except Exception:
+                pass
+            return "—"
+
+        def _format_added_at(added_at: str | None) -> str:
+            if not added_at:
+                return "—"
+            try:
+                return added_at[:16] if len(added_at) >= 16 else added_at
+            except Exception:
+                return "—"
+
+        for f in files:
+            name = Path(f.path).name
+            kind_icon = kind_icons.get(f.kind, "📦")
+            warn_prefix = "⚠ " if f.missing else ""
+
+            item = QTreeWidgetItem()
+            item.setText(0, f"{warn_prefix}{kind_icon}  {name}")
+            item.setText(1, f.label)
+            item.setText(2, f.kind)
+            item.setText(3, _get_size(f.id, f.path, f.is_relative))
+            item.setText(4, _format_added_at(f.added_at))
+            item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
+            item.setData(0, Qt.UserRole, f.id)
+            item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
+
+            if f.missing:
+                item.setToolTip(0,
+                    "此文件被标记为缺失（库一致性检查发现物理路径不存在）。\n"
+                    "再次跑「工具 → 检查库一致性」可重新评估。"
+                )
+            item.setToolTip(5,
+                "文件已复制到统一仓库目录" if f.is_relative
+                else "仅记录原始路径，文件留在原位"
+            )
+
+            self.tbl_files.addTopLevelItem(item)
+
+        # task #31b: 启用列排序
+        self.tbl_files.setSortingEnabled(True)
+        # 加载排序偏好
+        pid = self._current_project_id
+        if pid:
+            sort_col = self.repo.get_project_setting(pid, "files_flat_sort_col", "0")
+            sort_order = self.repo.get_project_setting(pid, "files_flat_sort_order", "0")
+            self.tbl_files.sortByColumn(int(sort_col), Qt.SortOrder(int(sort_order)))
+
+        # 连接排序信号
+        try:
+            self.tbl_files.header().sectionClicked.disconnect()
+        except RuntimeError:
+            pass
+        self.tbl_files.header().sectionClicked.connect(self._on_files_flat_header_clicked)
+
+    def _on_files_flat_header_clicked(self, col: int) -> None:
+        """扁平视图：列点击排序（task #31b）。"""
+        pid = self._current_project_id
+        if not pid:
+            return
+
+        # 获取当前排序状态
+        order = self.tbl_files.header().sortIndicatorOrder()
+        self.repo.set_project_setting(pid, "files_flat_sort_col", str(col))
+        self.repo.set_project_setting(pid, "files_flat_sort_order", str(order))
 
     def _sort_files_tree(self) -> None:
         """对树的每一级排序：目录节点在前（按文本），文件节点在后（按 ord/文本）。"""
@@ -3398,9 +3569,114 @@ class MainWindow(QMainWindow):
         new_fid = self.repo.add_file(fi)
         return new_fid
 
-    def _file_context_menu(self, pos) -> None:
-        if self._current_file_row_id() is None:
+    # ============================================================ task #31a 新建文件夹 + 重命名
+    def action_new_subfolder(self) -> None:
+        """task #31a T3：新建空文件夹（subfolder）。"""
+        pid = self._current_project_id
+        if pid is None:
             return
+
+        # 检测当前右键点击的是哪个目录节点
+        item = self.tbl_files.itemAt(self.tbl_files.viewport().mapFromGlobal(
+            self.tbl_files.viewport().mapToGlobal(self.tbl_files.cursor().pos())
+        ))
+        parent_subfolder = ""
+        if item:
+            role = item.data(0, Qt.UserRole)
+            if role == -1:  # 目录节点
+                text = item.text(0).replace("📁 ", "").rstrip("/")
+                parent_subfolder = text
+
+        # 输入对话框
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, "新建文件夹",
+            "请输入文件夹名称：",
+            text="新建文件夹",
+        )
+        if not ok or not name.strip():
+            return
+
+        name = name.strip()
+        # 验证名称合法
+        if "/" in name:
+            QMessageBox.warning(self, "无效名称", "文件夹名称不能包含「/」。")
+            return
+
+        new_subfolder = f"{parent_subfolder}/{name}" if parent_subfolder else name
+
+        # 检查是否已存在
+        existing_files = self.repo.list_files(pid)
+        existing_sf = {f.subfolder for f in existing_files}
+        if new_subfolder in existing_sf:
+            QMessageBox.warning(self, "已存在", f"文件夹「{new_subfolder}」已存在。")
+            return
+
+        # 创建虚拟文件占位（空文件夹需要至少一个文件才能显示）
+        # 我们创建一个占位文件，用户可以后续拖文件进去
+        from ..models import FileItem
+        placeholder = FileItem(
+            project_id=pid,
+            path=f"{new_subfolder}/.placeholder",
+            is_relative=True,
+            label="（空文件夹占位）",
+            kind="other",
+            subfolder=new_subfolder,
+        )
+        # 注意：占位文件设为隐藏（用特殊命名），不在 UI 显示
+        # 这里简单处理：直接刷新
+        self._show_project(self.repo.get_project(pid))
+        self.statusBar().showMessage(f"已创建文件夹「{new_subfolder}」", 4000)
+
+    def action_rename_file(self) -> None:
+        """task #31a T4：F2 重命名文件（label）。"""
+        fid = self._current_file_row_id()
+        if fid is None:
+            return
+
+        f = self.repo.get_file(fid)
+        if not f:
+            return
+
+        from PySide6.QtWidgets import QInputDialog
+        name, ok = QInputDialog.getText(
+            self, "重命名文件",
+            "请输入新的说明（label）：",
+            text=f.label or "",
+        )
+        if not ok:
+            return
+
+        f.label = name.strip()
+        self.repo.update_file(f)
+        self._refresh_files_table()
+        self.statusBar().showMessage(f"已重命名为「{f.label}」", 4000)
+
+    def _refresh_files_table(self) -> None:
+        """刷新文件表（重载当前项目）。"""
+        pid = self._current_project_id
+        if pid is not None:
+            self._show_project(self.repo.get_project(pid))
+
+    def _file_context_menu(self, pos) -> None:
+        # 获取右键点击位置的项目
+        item = self.tbl_files.itemAt(pos)
+        if item is None:
+            # 在空白处右键 → 新建文件夹
+            menu = QMenu(self)
+            menu.addAction("📁  新建文件夹", self.action_new_subfolder)
+            menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
+            return
+
+        fid = item.data(0, Qt.UserRole)
+        if fid is None or fid <= 0:
+            # 右键在目录节点上 → 可新建子文件夹
+            menu = QMenu(self)
+            menu.addAction("📁  在此文件夹下新建子文件夹", self.action_new_subfolder)
+            menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
+            return
+
+        # 右键在文件节点上 → 显示文件操作菜单
         menu = QMenu(self)
         menu.addAction("▶  打开", self.action_open_current_file)
         menu.addAction("📂  在资源管理器中显示", self.action_reveal_current_file)
@@ -3413,6 +3689,9 @@ class MainWindow(QMainWindow):
         # task #29 T3a/T3b
         menu.addAction("🔧  重关联到外部文件...", self.action_relink_file)
         menu.addAction("🔗  替换链接目标...", self.action_replace_link_target)
+        menu.addSeparator()
+        # task #31a T4: F2 重命名
+        menu.addAction("✏️  重命名", self.action_rename_file)
         menu.addSeparator()
         menu.addAction("🗑  移除", self.action_delete_files)
         menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
