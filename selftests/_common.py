@@ -58,8 +58,8 @@ class T:
         if self.failed:
             print("-" * 60)
             for label, hint in self.failed:
-                print(f"  ✗ {label}")
-                print(f"      → {hint}")
+                print(f"  X {label}")
+                print(f"      -> {hint}")
         return not self.failed
 
 

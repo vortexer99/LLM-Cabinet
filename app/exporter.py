@@ -201,6 +201,7 @@ def export_project(
 
         # 拍平模式需要在 files/ 根目录；保留结构需要子目录
         files_subdir = target_dir / "files"
+        files_subdir.mkdir(parents=True, exist_ok=True)  # 确保目录存在
 
         for i, f in enumerate(files):
             original_abs = library.resolve(f.path, f.is_relative)
@@ -226,6 +227,7 @@ def export_project(
                     dst_name = f"{safe_src_name}_{f.id}{Path(f.path).suffix}"
                     dst_path = files_subdir / dst_name
 
+                # 确保父目录存在
                 dst_path.parent.mkdir(parents=True, exist_ok=True)
                 ok, size, warn = _copy_file_safely(original_abs, dst_path)
                 if ok:
