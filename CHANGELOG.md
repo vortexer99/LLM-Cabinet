@@ -8,11 +8,21 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+📦 schema v6 → v7 — `files` 表新增 `subfolder` 列（逻辑子目录路径，驱动 UI 树形展示）。
+
 ### Added
+- **子文件夹导入 + 文件树形展示（task #17）**：拖入含子目录的文件夹时，子目录文件全部导入并保留逻辑目录结构。
+  - `files` 表新增 `subfolder` 字段，UI 文件表从 `QTableWidget` 改为 `QTreeWidget`，按 `subfolder` 折叠展示。
+  - 物理存储与 UI 组织解耦：仓储模式继续拍平，`subfolder` 纯粹是数据库字段。
+  - 删除文件后空逻辑目录自动消失；选中目录节点可连带删除整棵子树。
+- **导入深度/文件数检查**：目录层级 ≥ 5 或文件数 ≥ 500 时弹确认对话框。
+- **空文件夹处理**：单个空文件夹拖入创建 0 文件项目；多个空文件夹弹提示告知用户。
 - README 新增 "Looking Further: AI Team Workspace" 章节（英文/中文），引入 `gallery/AI-Team-Workspace-Concep.jpg` 概念图，说明 Cabinet 作为多 Agent 共享记忆中枢的远期定位。`gallery/README.md` 增加 Concept artwork 索引段。
 - 新增任务卡 `tasks/27-provenance-source-link.md`：MCP 写入可附带 `source`（依据文件 + 备注），UI 显示「来源」入口；作为推向 AI Team Workspace 定位的第一步。
+- 新增任务卡 `tasks/28-export-structure-option.md`：导出项目时可选保留目录结构或拍平（依赖 #17）。
 
 ### Changed
+- 合并模式导入目录时始终保留目录名作为 `subfolder` 前缀（如拖入 `myfolder/a.txt` → `📁 myfolder/`）。
 - README 中新增 1.0.0 前尝鲜提醒（英文/中文），不建议投入重度使用。
 
 ## [0.4.1] - 2026-06-05

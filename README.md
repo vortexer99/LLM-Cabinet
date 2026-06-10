@@ -86,7 +86,8 @@ This is a **direction**, not a finished story — Cabinet today is already a usa
   - `link`: only record the original path; never touch user files
   - `copy`: import a copy into the unified library directory `library/<project_id>/`
 - **Preview**: inline image / video / PDF preview; other types open with the system default app
-- **Drag & drop**: drop files/folders onto blank area to create a new project, onto a project card to attach to it; folder drops default to the folder name as the title. **Dropping multiple folders** lets you choose between "merge into one project" and "one project per folder"; the latter recognizes each folder's `project.json` and restores its metadata.
+- **Drag & drop**: drop files/folders onto blank area to create a new project, onto a project card to attach to it; folder drops default to the folder name as the title. **Dropping multiple folders** lets you choose between "merge into one project" and "one project per folder"; the latter recognizes each folder's `project.json` and restores its metadata. Subdirectory structure is preserved as a virtual tree in the UI.
+- **File tree view**: files are organized in a collapsible tree by logical subfolder (`files.subfolder` in DB), decoupled from physical storage. Directories appear as 📁 nodes; deleting a directory node removes all files within it. Empty folders dropped in create 0-file projects; deep/large imports trigger a confirmation dialog.
 - **LLM metadata assistant** (the headline feature)
   - Built-in adapters for DeepSeek / OpenAI / Google Gemini / xAI Grok
   - One-click field suggestions based on current metadata + your selected reference files (PDF / docx / xlsx / code / images …)
