@@ -2911,6 +2911,25 @@ class MainWindow(QMainWindow):
         self._set_drag_hover(None)
 
     # ---- 导入前检查 ----
+    def _filter_library_paths(self, paths: list) -> list:
+        """过滤掉库目录自身的路径，防止递归导入。返回过滤后的路径列表。"""
+        lib_root = self.library.root.resolve()
+        filtered: list[str] = []
+        skipped = 0
+        for raw in paths:
+            p = Path(raw).resolve()
+            try:
+                p.relative_to(lib_root)
+                skipped += 1  # 在库目录内，跳过
+            except ValueError:
+                filtered.append(str(p))
+        if skipped:
+            QMessageBox.warning(
+                self, "提示",
+                f"已跳过 {skipped} 个位于库目录内的路径（不能导入库自身）。"
+            )
+        return filtered
+
     def _warn_if_deep_or_large(self, files: list) -> bool:
         """检查待导入文件是否过深或过多，弹确认对话框。返回 True 表示继续。"""
         from ..models import PendingFile
@@ -2946,6 +2965,9 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
+            paths = self._filter_library_paths(paths)
+            if not paths:
+                return
             files = self._expand_paths(paths)
             if not files:
                 self._warn_empty_import(paths)
@@ -2960,6 +2982,9 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
+            paths = self._filter_library_paths(paths)
+            if not paths:
+                return
             files = self._expand_paths(paths)
             if not files:
                 if len(paths) == 1 and Path(paths[0]).is_dir():
@@ -2983,6 +3008,9 @@ class MainWindow(QMainWindow):
         self._drop_busy = True
         try:
             self._hide_drop_zone()
+            paths = self._filter_library_paths(paths)
+            if not paths:
+                return
             # 分支：全是目录且 ≥ 2 个 → 走批量文件夹导入流程（task #10）
             from ..importer import split_paths_by_kind
             dirs, plain_files = split_paths_by_kind(paths)
