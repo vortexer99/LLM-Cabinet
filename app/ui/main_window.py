@@ -3143,6 +3143,141 @@ class MainWindow(QMainWindow):
         # 刷新文件表
         self._refresh_files_table()
 
+    def action_relink_file(self) -> None:
+        """task #29 T3a：重关联到外部文件（修复 missing 文件）。"""
+        file_ids = self._selected_file_ids()
+        if not file_ids:
+            return
+
+        files = [self.repo.get_file(fid) for fid in file_ids]
+        files = [f for f in files if f]
+
+        if not files:
+            return
+
+        # 选择外部目录
+        source_dir = QFileDialog.getExistingDirectory(
+            self, "选择文件所在目录",
+            "选择包含要关联的外部文件的目录",
+        )
+        if not source_dir:
+            return
+        source_dir = Path(source_dir)
+
+        # 收集目录中的文件（按文件名匹配）
+        available_files = {f.name: f for f in source_dir.iterdir() if f.is_file()}
+
+        # 匹配文件
+        matched = []
+        unmatched = []
+        for f in files:
+            if f.path in available_files:
+                matched.append((f, available_files[f.path]))
+            else:
+                unmatched.append(f.path)
+
+        if not matched:
+            QMessageBox.warning(
+                self, "未找到匹配文件",
+                "所选文件中没有一个能在指定目录下找到同名文件。\n\n"
+                "请确认文件是否在选择的目录中。"
+            )
+            return
+
+        # 确认对话框
+        ans = QMessageBox.question(
+            self, "确认重关联",
+            f"将为 {len(matched)} 个文件重新关联到外部文件：\n\n"
+            + "\n".join(f"  • {old.path} → {new.name}" for old, new in matched[:5])
+            + (f"\n  … 等共 {len(matched)} 个" if len(matched) > 5 else "")
+            + (f"\n\n未找到：{len(unmatched)} 个" if unmatched else "")
+        )
+        if ans != QMessageBox.Yes:
+            return
+
+        # 执行重关联
+        relinked = 0
+        errors: list[str] = []
+        for f, new_path in matched:
+            try:
+                f.path = str(new_path.resolve())
+                f.is_relative = False
+                # 清除 missing 标记
+                self.repo.set_file_missing(f.id, False)
+                self.repo.update_file(f)
+                relinked += 1
+            except Exception as e:
+                errors.append(f"{f.path}：{e}")
+
+        # 结果反馈
+        lines = [f"✅ 已重关联：{relinked} 个"]
+        if errors:
+            lines.append(f"⏭ 错误：{len(errors)} 个")
+            lines.extend(f"  • {e}" for e in errors[:10])
+
+        QMessageBox.information(
+            self, "重关联完成",
+            "\n".join(lines)
+        )
+
+        # 刷新
+        self._refresh_files_table()
+
+    def action_replace_link_target(self) -> None:
+        """task #29 T3b：替换链接目标（仅单选）。"""
+        file_ids = self._selected_file_ids()
+        if len(file_ids) != 1:
+            QMessageBox.information(
+                self, "提示",
+                "请先选择一个🔗链接文件来替换目标。"
+            )
+            return
+
+        f = self.repo.get_file(file_ids[0])
+        if not f:
+            return
+
+        if f.is_relative:
+            QMessageBox.information(
+                self, "提示",
+                "该文件是仓储模式，无法替换链接目标。\n\n"
+                "如需替换，请先「转为仓储文件」后再操作。"
+            )
+            return
+
+        # 选择新文件
+        new_file, _ = QFileDialog.getOpenFileName(
+            self, "选择新文件", "",
+            "所有文件 (*)",
+        )
+        if not new_file:
+            return
+        new_file = Path(new_file)
+
+        # 确认
+        ans = QMessageBox.question(
+            self, "确认替换",
+            f"将把链接目标从：\n  {f.path}\n\n替换为：\n  {new_file}\n\n是否继续？",
+        )
+        if ans != QMessageBox.Yes:
+            return
+
+        # 执行替换
+        try:
+            f.path = str(new_file.resolve())
+            self.repo.update_file(f)
+
+            QMessageBox.information(
+                self, "完成",
+                "链接目标已替换。"
+            )
+            self._refresh_files_table()
+        except Exception as e:
+            QMessageBox.critical(
+                self, "错误",
+                f"替换失败：{e}"
+            )
+
     def action_set_cover(self) -> None:
         fid = self._current_file_row_id()
         if fid is None or self._current_project_id is None:
@@ -3272,9 +3407,12 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         menu.addAction("🖼  设为封面", self.action_set_cover)
         menu.addSeparator()
-        # task #29 T1：链接转仓储
+        # task #29 文件存储位置管理
         menu.addAction("📦  转为仓储文件", self.action_convert_to_storage)
         menu.addAction("📂  移动文件到...", self.action_move_file)
+        # task #29 T3a/T3b
+        menu.addAction("🔧  重关联到外部文件...", self.action_relink_file)
+        menu.addAction("🔗  替换链接目标...", self.action_replace_link_target)
         menu.addSeparator()
         menu.addAction("🗑  移除", self.action_delete_files)
         menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
