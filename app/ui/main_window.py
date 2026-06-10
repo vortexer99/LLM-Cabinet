@@ -1,6 +1,7 @@
 """主窗口：左侧项目卡片墙 / 中间文件列表 / 右侧详情+预览。"""
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
@@ -2964,6 +2965,184 @@ class MainWindow(QMainWindow):
         parts.reverse()
         return "/".join(parts)
 
+    # ============================================================ task #29 文件存储位置管理
+    def action_convert_to_storage(self) -> None:
+        """task #29 T1：链接文件转为仓储文件（复制进库）。"""
+        file_ids = self._selected_file_ids()
+        if not file_ids:
+            return
+
+        files = [self.repo.get_file(fid) for fid in file_ids]
+        files = [f for f in files if f]
+
+        if not files:
+            return
+
+        # 分类：🔗 链接文件才需要转换，📦 仓储已在内
+        link_files = [f for f in files if not f.is_relative]
+        storage_files = [f for f in files if f.is_relative]
+
+        if not link_files:
+            QMessageBox.information(
+                self, "提示",
+                "所选文件已都是仓储模式，无需转换。"
+            )
+            return
+
+        # 确认对话框
+        ans = QMessageBox.question(
+            self, "确认转换",
+            f"将把 {len(link_files)} 个🔗链接文件复制进库：\n\n"
+            + "\n".join(f"  • {f.label or f.path}" for f in link_files[:5])
+            + (f"\n  … 等共 {len(link_files)} 个" if len(link_files) > 5 else "")
+            + f"\n\n已仓储文件 {len(storage_files)} 个将跳过。\n\n"
+            "⚠️ 原外部文件不会被删除（复制语义）。",
+        )
+        if ans != QMessageBox.Yes:
+            return
+
+        # 执行转换
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import Qt
+        prog = QProgressDialog(
+            "正在转换...", "取消", 0, len(link_files), self,
+        )
+        prog.setWindowTitle("链接转仓储")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.show()
+
+        copied = 0
+        skipped = 0
+        errors: list[str] = []
+
+        for i, f in enumerate(link_files):
+            if prog.wasCanceled():
+                break
+            prog.setValue(i)
+            prog.setLabelText(f"正在处理：{f.label or f.path}")
+
+            try:
+                # 解析外部文件的绝对路径
+                abs_src = self.library.resolve(f.path, is_relative=False)
+                if not abs_src.exists():
+                    skipped += 1
+                    errors.append(f"原文件不存在：{abs_src}")
+                    continue
+
+                # 复制进库
+                rel_path = self.library.import_copy(f.project_id, abs_src)
+                f.path = rel_path
+                f.is_relative = True
+                self.repo.update_file(f)
+                copied += 1
+            except Exception as e:
+                errors.append(f"{f.path}：{e}")
+                skipped += 1
+
+        prog.setValue(len(link_files))
+        prog.close()
+
+        # 结果反馈
+        lines = [f"✅ 已复制到库内：{copied} 个"]
+        if skipped:
+            lines.append(f"⏭ 跳过：{skipped} 个")
+        if errors:
+            lines.append("\n错误详情：")
+            lines.extend(f"  • {e}" for e in errors[:10])
+
+        QMessageBox.information(
+            self, "转换完成",
+            "\n".join(lines)
+        )
+
+        # 刷新文件表
+        self._refresh_files_table()
+
+    def action_move_file(self) -> None:
+        """task #29 T2：移动文件到新位置。"""
+        file_ids = self._selected_file_ids()
+        if not file_ids:
+            return
+
+        files = [self.repo.get_file(fid) for fid in file_ids]
+        files = [f for f in files if f]
+
+        if not files:
+            return
+
+        # 选择目标目录
+        target_dir = QFileDialog.getExistingDirectory(
+            self, "选择目标目录",
+        )
+        if not target_dir:
+            return
+        target_dir = Path(target_dir)
+
+        # 执行移动
+        from PySide6.QtWidgets import QProgressDialog
+        from PySide6.QtCore import Qt
+        prog = QProgressDialog(
+            "正在移动...", "取消", 0, len(files), self,
+        )
+        prog.setWindowTitle("移动文件")
+        prog.setWindowModality(Qt.WindowModal)
+        prog.setMinimumDuration(0)
+        prog.show()
+
+        moved = 0
+        errors: list[str] = []
+
+        for i, f in enumerate(files):
+            if prog.wasCanceled():
+                break
+            prog.setValue(i)
+            prog.setLabelText(f"正在处理：{f.label or f.path}")
+
+            try:
+                # 解析当前物理路径
+                abs_src = self.library.resolve(f.path, f.is_relative)
+                if not abs_src.exists():
+                    errors.append(f"{f.path}：文件不存在")
+                    continue
+
+                # 目标路径
+                dst = target_dir / abs_src.name
+                # 同名冲突处理
+                j = 1
+                while dst.exists():
+                    dst = target_dir / f"{abs_src.stem}_{j}{abs_src.suffix}"
+                    j += 1
+
+                # 物理移动
+                shutil.move(str(abs_src), str(dst))
+
+                # 更新数据库
+                f.path = str(dst.resolve())
+                f.is_relative = False  # 移动后都变成外部链接
+                self.repo.update_file(f)
+                moved += 1
+            except Exception as e:
+                errors.append(f"{f.path}：{e}")
+
+        prog.setValue(len(files))
+        prog.close()
+
+        # 结果反馈
+        lines = [f"✅ 已移动：{moved} 个"]
+        if errors:
+            lines.append(f"⏭ 跳过：{len(errors)} 个")
+            lines.append("\n错误详情：")
+            lines.extend(f"  • {e}" for e in errors[:10])
+
+        QMessageBox.information(
+            self, "移动完成",
+            "\n".join(lines)
+        )
+
+        # 刷新文件表
+        self._refresh_files_table()
+
     def action_set_cover(self) -> None:
         fid = self._current_file_row_id()
         if fid is None or self._current_project_id is None:
@@ -3092,6 +3271,10 @@ class MainWindow(QMainWindow):
         menu.addAction("📂  在资源管理器中显示", self.action_reveal_current_file)
         menu.addSeparator()
         menu.addAction("🖼  设为封面", self.action_set_cover)
+        menu.addSeparator()
+        # task #29 T1：链接转仓储
+        menu.addAction("📦  转为仓储文件", self.action_convert_to_storage)
+        menu.addAction("📂  移动文件到...", self.action_move_file)
         menu.addSeparator()
         menu.addAction("🗑  移除", self.action_delete_files)
         menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
