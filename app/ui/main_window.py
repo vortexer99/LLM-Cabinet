@@ -1830,25 +1830,23 @@ class MainWindow(QMainWindow):
     def _sort_files_tree(self) -> None:
         """对树的每一级排序：目录节点在前（按文本），文件节点在后（按 ord/文本）。"""
         def _sort_items(parent: QTreeWidget | QTreeWidgetItem) -> None:
-            # 分离目录节点和文件节点
-            dirs: list[QTreeWidgetItem] = []
-            files: list[QTreeWidgetItem] = []
-            for i in range(parent.childCount() if isinstance(parent, QTreeWidgetItem)
-                           else parent.topLevelItemCount()):
-                child = (parent.child(i) if isinstance(parent, QTreeWidgetItem)
-                         else parent.topLevelItem(i))
-                if child.data(0, Qt.UserRole) == -1:  # 目录节点
-                    dirs.append(child)
-                else:
-                    files.append(child)
-            # 目录按文本排序，文件保持原序（由 ord 决定）
-            dirs.sort(key=lambda n: n.text(0))
-            # 重新排列
+            # 用 take* 取出所有子节点（不删除）
+            children: list[QTreeWidgetItem] = []
             if isinstance(parent, QTreeWidget):
-                parent.clear()
+                while parent.topLevelItemCount():
+                    children.append(parent.takeTopLevelItem(0))
             else:
                 while parent.childCount():
-                    parent.removeChild(parent.child(0))
+                    children.append(parent.takeChild(0))
+
+            # 分离目录节点和文件节点
+            dirs = [c for c in children if c.data(0, Qt.UserRole) == -1]
+            files = [c for c in children if c.data(0, Qt.UserRole) != -1]
+
+            # 目录按文本排序，文件保持原序
+            dirs.sort(key=lambda n: n.text(0))
+
+            # 重新放回
             for n in dirs:
                 if isinstance(parent, QTreeWidget):
                     parent.addTopLevelItem(n)
@@ -1859,6 +1857,7 @@ class MainWindow(QMainWindow):
                     parent.addTopLevelItem(n)
                 else:
                     parent.addChild(n)
+
             # 递归子目录
             for n in dirs:
                 _sort_items(n)
