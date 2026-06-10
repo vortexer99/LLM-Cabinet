@@ -2884,7 +2884,8 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
-            files = self._expand_paths(paths)
+            prepend = self._should_prepend_folder_name(paths)
+            files = self._expand_paths(paths, prepend_name=prepend)
             if not files:
                 return
             self._drop_into_project(pid, files)
@@ -2897,7 +2898,8 @@ class MainWindow(QMainWindow):
             return
         self._drop_busy = True
         try:
-            files = self._expand_paths(paths)
+            prepend = self._should_prepend_folder_name(paths)
+            files = self._expand_paths(paths, prepend_name=prepend)
             if not files:
                 return
             if not self._warn_if_deep_or_large(files):
@@ -2923,7 +2925,8 @@ class MainWindow(QMainWindow):
                 self._handle_multi_folder_drop(dirs)
                 return
             # 否则沿用旧路径
-            files = self._expand_paths(paths)
+            prepend = self._should_prepend_folder_name(paths)
+            files = self._expand_paths(paths, prepend_name=prepend)
             if files:
                 if not self._warn_if_deep_or_large(files):
                     return
@@ -3055,25 +3058,42 @@ class MainWindow(QMainWindow):
                 self.proj_view.setCurrentIndex(idx)
         self.proj_view.viewport().update()
 
+    def _should_prepend_folder_name(self, paths: list) -> str:
+        """如果需要保留文件夹名称，返回要前缀的名字；否则返回空串。"""
+        if self.repo.get_setting("preserve_folder_name", "0") != "1":
+            return ""
+        if len(paths) != 1:
+            return ""
+        p = Path(paths[0])
+        if p.is_dir():
+            return p.name
+        return ""
+
     @staticmethod
-    def _expand_paths(paths: list) -> list:
+    def _expand_paths(paths: list, *, prepend_name: str = "") -> list:
         """把混合路径展开为 [PendingFile, ...]。
 
         - 文件 → PendingFile(src=绝对路径, subfolder="")
         - 目录 → 递归收集所有文件，subfolder = 相对该目录的 POSIX 子路径
+
+        prepend_name: 非空时，所有 subfolder 前加这一级目录名。
+                      用于"拖入单文件夹时保留文件夹名称"场景。
         """
         from ..models import PendingFile
         out: list[PendingFile] = []
         for raw in paths:
             p = Path(raw)
             if p.is_file():
-                out.append(PendingFile(src=p.resolve(), subfolder=""))
+                sf = prepend_name or ""
+                out.append(PendingFile(src=p.resolve(), subfolder=sf))
             elif p.is_dir():
                 root = p.resolve()
                 for sub in sorted(root.rglob("*")):
                     if sub.is_file():
                         rel = sub.parent.relative_to(root)
                         subfolder = rel.as_posix() if str(rel) != "." else ""
+                        if prepend_name:
+                            subfolder = f"{prepend_name}/{subfolder}" if subfolder else prepend_name
                         out.append(PendingFile(src=sub.resolve(), subfolder=subfolder))
         return out
 
