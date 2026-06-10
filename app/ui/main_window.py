@@ -1420,6 +1420,16 @@ class MainWindow(QMainWindow):
         files_header.addWidget(self.lbl_files_hint)
         files_header.addStretch(1)
 
+        # task #04：文件来源过滤 toggle（仅用户文件 / 显示所有）
+        self._btn_origin_filter = QToolButton()
+        self._btn_origin_filter.setText("👤")
+        self._btn_origin_filter.setToolTip("仅显示用户文件")
+        self._btn_origin_filter.setCheckable(True)
+        self._btn_origin_filter.setChecked(False)
+        self._btn_origin_filter.setVisible(False)  # 项目无 generated 文件时隐藏
+        self._btn_origin_filter.clicked.connect(self._on_origin_filter_toggled)
+        files_header.addWidget(self._btn_origin_filter)
+
         self._btn_detach_files = QPushButton("⇱")
         self._btn_detach_files.setToolTip("弹出为独立窗口")
         self._btn_detach_files.setFixedSize(28, 28)
@@ -1561,6 +1571,21 @@ class MainWindow(QMainWindow):
 
         self._btn_detach_files.setText("⇱")
         self._btn_detach_files.setToolTip("弹出为独立窗口")
+
+    # ============================================================ origin filter (task #04)
+    def _on_origin_filter_toggled(self) -> None:
+        """切换「仅用户文件」/「显示所有」过滤。"""
+        is_user_only = self._btn_origin_filter.isChecked()
+        self._btn_origin_filter.setText("👤" if is_user_only else "🌐")
+
+        # 持久化
+        pid = self._current_project_id
+        if pid is not None:
+            self.repo.set_project_setting(pid, "files_view_origin_filter", "user" if is_user_only else "all")
+
+        # 刷新文件列表
+        if pid is not None:
+            self._show_project(self.repo.get_project(pid))
 
     # ============================================================ view mode
     def _set_view_mode(self, mode: str) -> None:
@@ -1806,8 +1831,19 @@ class MainWindow(QMainWindow):
         desc = self._desc_plain(desc)
         self.lbl_meta_desc.setText(desc)
 
-        # 文件表（task #17：按 subfolder 建树）
+        # 文件表（task #17：按 subfolder 建树；task #04：按 origin 过滤）
         files = self.repo.list_files(p.id)  # type: ignore[arg-type]
+
+        # task #04：按 origin 过滤
+        has_generated = any((f.origin or "user") == "generated" for f in files)
+        self._btn_origin_filter.setVisible(has_generated)
+        origin_filter = self.repo.get_project_setting(p.id, "files_view_origin_filter", "all")
+        is_user_only = origin_filter == "user"
+        self._btn_origin_filter.setChecked(is_user_only)
+        self._btn_origin_filter.setText("👤" if is_user_only else "🌐")
+        if is_user_only:
+            files = [f for f in files if (f.origin or "user") == "user"]
+
         self.tbl_files.blockSignals(True)
         self._populate_files_tree(files)
         self.tbl_files.expandAll()
@@ -1816,7 +1852,9 @@ class MainWindow(QMainWindow):
         # 应用项目级列偏好（可见性 + 列宽）
         self._apply_files_columns_prefs(p.id)
 
-        self.lbl_files_hint.setText(f"共 {len(files)} 个文件 · 双击说明列可编辑")
+        # 显示所有文件的数量（不过滤原始数量）
+        all_files_count = len(self.repo.list_files(p.id))  # type: ignore[arg-type]
+        self.lbl_files_hint.setText(f"共 {all_files_count} 个文件 · 双击说明列可编辑")
         self.statusBar().showMessage(
             f"项目 #{p.id}  ·  {p.title}  ·  {len(files)} 文件"
         )
@@ -2833,6 +2871,7 @@ class MainWindow(QMainWindow):
             is_relative=True,
             label=label,
             kind="image",
+            origin="generated",  # task #30：封面快照是软件衍生物
         )
         new_fid = self.repo.add_file(fi)
         return new_fid

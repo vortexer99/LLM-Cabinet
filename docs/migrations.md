@@ -260,7 +260,21 @@ A：能。`shutil.copy2` 改成 `gzip.open + shutil.copyfileobj` 即可。
 
 ---
 
-## 10. 检查表（提交 PR 前自检）
+## 10. 迁移记录
+
+| 版本 | 变更说明 |
+|------|----------|
+| v1 → v2 | 删除残留的 `custom_fields` 旧表 |
+| v2 → v3 | `fields` 表新增 `prompt_hint` 列；`files` 表新增 `missing` 列 |
+| v3 → v4 | 将 `projects.{author,date,source_url,rating}` 值迁移到 `project_field_values`，然后 DROP 这 4 列 |
+| v4 → v5 | 新增 `mcp_audit` 表（MCP 审计日志） |
+| v5 → v6 | `projects` 表新增 `mcp_modified_at` 列 |
+| v6 → v7 | `files` 表新增 `subfolder` 列（逻辑子目录路径，驱动 UI 树形展示） |
+| v7 → v8 | `files` 表新增 `origin` 列（user=用户原始文件 / generated=软件衍生物），并回填历史封面快照 |
+
+---
+
+## 11. 检查表（提交 PR 前自检）
 
 - [ ] `SCHEMA_VERSION` 是否需要 +1？
 - [ ] `MIGRATIONS` 是否已注册新迁移函数？

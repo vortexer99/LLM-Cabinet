@@ -30,8 +30,9 @@ from .models import Project
 from .repository import Repository
 
 # project.json 的 schema 标识，导入端用这个匹配版本
+# @3 起 files.json 含 subfolder + is_cover + origin（task #28 / task #30）
 # @2 起 fields_snapshot 含 prompt_hint（task #11 T4）；@1 仍兼容（导入端把缺失字段视为空）
-EXPORT_SCHEMA = "llm-cabinet/project-export@2"
+EXPORT_SCHEMA = "llm-cabinet/project-export@3"
 
 
 # =============================================================================
@@ -39,17 +40,31 @@ EXPORT_SCHEMA = "llm-cabinet/project-export@2"
 # =============================================================================
 @dataclass
 class ExportOptions:
-    """导出选项。
+    """导出选项（task #28 扩展版）。
 
     Attributes:
         target_root: 用户选的"导出位置"目录；本模块会在其下创建一个以
             项目标题安全化后命名的子目录。
+        mode: 导出模式。"package"=完整包(含 files/)，"metadata_only"=仅 project.json
+        export_format: 导出格式。"directory"=目录形式，"zip"=ZIP 打包
+        preserve_structure: 是否保留项目内目录结构。False=拍平到 files/
         copy_link_files: 是否把"🔗 链接"模式的原始文件复制进导出包。
             默认 True（最安全，使导出包自包含）。
+        include_readme: 是否生成 README.md
+        include_llm_history: 是否导出 LLM 任务历史（默认 False）
+        history_limit: LLM 历史导出条数限制
         overwrite: 同名目录是否覆盖；False 时自动加 ``(2) / (3)`` 后缀。
     """
     target_root: Path
+
+    # 基本选项
+    mode: str = "package"  # "package" | "metadata_only"
+    export_format: str = "directory"  # "directory" | "zip"
+    preserve_structure: bool = True
     copy_link_files: bool = True
+    include_readme: bool = True
+    include_llm_history: bool = False
+    history_limit: int = 10
     overwrite: bool = False
 
 
@@ -159,9 +174,11 @@ def export_project(
     else:
         sub = unique_dirname(options.target_root, safe_title)
         target_dir = options.target_root / sub
-    target_dir.mkdir(parents=True, exist_ok=False)
-    files_subdir = target_dir / "files"
-    files_subdir.mkdir(exist_ok=True)
+    # metadata_only 模式不需要 files/ 子目录
+    if options.mode == "package":
+        target_dir.mkdir(parents=True, exist_ok=False)
+    else:
+        target_dir.mkdir(parents=True, exist_ok=False)
 
     result = ExportResult(project_dir=target_dir)
 
@@ -169,62 +186,104 @@ def export_project(
     files = repo.list_files(project.id)
     fields = repo.list_fields()
 
-    # ---- 写 project.json ----
+    # ---- 写 project.json（metadata_only 模式下跳过 files/ 但仍写元数据） ----
     project_blob = _build_project_blob(project, fields)
     _write_json(target_dir / "project.json", project_blob)
 
-    # ---- 复制 / 引用文件，构建 files.json ----
-    file_entries: list[dict] = []
-    total = len(files)
-    for i, f in enumerate(files):
-        original_abs = library.resolve(f.path, f.is_relative)
-        # 是否需要复制
-        should_copy = f.is_relative or options.copy_link_files
+    # ---- 仅 "package" 模式才导出文件 ----
+    if options.mode == "package":
+        # ---- 复制 / 引用文件，构建 files.json ----
+        file_entries: list[dict] = []
+        total = len(files)
 
-        exported_rel: str | None = None
-        exported_size: int | None = None
-        if should_copy:
-            # 文件名前缀 <id>__ 避免同名冲突；原扩展名保留
-            src_name = Path(f.path).name
-            safe_src_name = sanitize_filename(src_name, fallback=f"file_{f.id}")
-            dst_name = f"{f.id}__{safe_src_name}"
-            dst = files_subdir / dst_name
-            ok, size, warn = _copy_file_safely(original_abs, dst)
-            if ok:
-                exported_rel = f"files/{dst_name}"
-                exported_size = size
-                result.n_files_copied += 1
-                result.total_bytes += size
+        # 封面文件 ID（用于标记 is_cover）
+        cover_file_id = project.cover_file_id
+
+        # 拍平模式需要在 files/ 根目录；保留结构需要子目录
+        files_subdir = target_dir / "files"
+
+        for i, f in enumerate(files):
+            original_abs = library.resolve(f.path, f.is_relative)
+            # 是否需要复制：封面始终复制（即使不勾选 copy_link_files）
+            should_copy = f.is_relative or options.copy_link_files or (f.id == cover_file_id)
+
+            exported_rel: str | None = None
+            exported_size: int | None = None
+            if should_copy:
+                # 拍平模式：<name>_<id>；保留结构：<subfolder>/<name>
+                src_name = Path(f.path).name
+                safe_src_name = sanitize_filename(src_name, fallback=f"file_{f.id}")
+
+                if options.preserve_structure:
+                    # 保留目录结构
+                    dst_name = safe_src_name
+                    if f.subfolder:
+                        dst_path = files_subdir / f.subfolder / dst_name
+                    else:
+                        dst_path = files_subdir / dst_name
+                else:
+                    # 拍平：加 <id> 后缀防冲突
+                    dst_name = f"{safe_src_name}_{f.id}{Path(f.path).suffix}"
+                    dst_path = files_subdir / dst_name
+
+                dst_path.parent.mkdir(parents=True, exist_ok=True)
+                ok, size, warn = _copy_file_safely(original_abs, dst_path)
+                if ok:
+                    # 记录导出后的相对路径
+                    if options.preserve_structure and f.subfolder:
+                        exported_rel = f"files/{f.subfolder}/{dst_name}"
+                    else:
+                        exported_rel = f"files/{dst_name}"
+                    exported_size = size
+                    result.n_files_copied += 1
+                    result.total_bytes += size
+                else:
+                    if warn:
+                        result.warnings.append(warn)
+                    result.n_files_referenced += 1
             else:
-                if warn:
-                    result.warnings.append(warn)
-                # 复制失败 → 退化为"引用"
                 result.n_files_referenced += 1
-        else:
-            result.n_files_referenced += 1
 
-        file_entries.append({
-            "id": f.id,
-            "original_storage": "copy" if f.is_relative else "link",
-            "original_path": str(original_abs) if not f.is_relative else f.path,
-            "is_relative": bool(f.is_relative),
-            "label": f.label or "",
-            "kind": f.kind,
-            "ord": f.ord,
-            "added_at": f.added_at or "",
-            "exported_to": exported_rel,
-            "exported_size": exported_size,
-        })
-        if progress is not None:
-            try:
-                progress(i + 1, total, Path(f.path).name)
-            except Exception:
-                pass
+            file_entries.append({
+                "id": f.id,
+                "subfolder": f.subfolder or "",
+                "origin": f.origin or "user",
+                "is_cover": f.id == cover_file_id,
+                "original_storage": "copy" if f.is_relative else "link",
+                "original_path": str(original_abs) if not f.is_relative else f.path,
+                "is_relative": bool(f.is_relative),
+                "label": f.label or "",
+                "kind": f.kind,
+                "ord": f.ord,
+                "added_at": f.added_at or "",
+                "exported_to": exported_rel,
+                "exported_size": exported_size,
+            })
+            if progress is not None:
+                try:
+                    progress(i + 1, total, Path(f.path).name)
+                except Exception:
+                    pass
 
-    _write_json(target_dir / "files.json", {"files": file_entries})
+        _write_json(target_dir / "files.json", {"preserve_structure": options.preserve_structure, "files": file_entries})
 
     # ---- README.md（人类可读摘要） ----
-    _write_text(target_dir / "README.md", _build_readme(project, fields, result, files))
+    if options.include_readme and options.mode == "package":
+        _write_text(target_dir / "README.md", _build_readme(project, fields, result, files))
+
+    # ---- ZIP 打包 ----
+    if options.mode == "package" and options.export_format == "zip":
+        import zipfile
+        zip_name = f"{safe_title}_{datetime.now().strftime('%Y%m%d')}.zip"
+        zip_path = options.target_root / zip_name
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            for fpath in target_dir.rglob("*"):
+                if fpath.is_file():
+                    arcname = fpath.relative_to(target_dir)
+                    zf.write(fpath, arcname)
+        # 删除临时目录
+        shutil.rmtree(target_dir)
+        result.project_dir = zip_path
 
     return result
 

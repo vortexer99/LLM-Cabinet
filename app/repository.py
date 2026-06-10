@@ -782,9 +782,9 @@ class Repository:
 
     def add_file(self, f: FileItem) -> int:
         cur = self.conn.execute(
-            """INSERT INTO files(project_id, path, is_relative, label, kind, ord, subfolder)
-               VALUES(?,?,?,?,?,?,?)""",
-            (f.project_id, f.path, int(f.is_relative), f.label, f.kind, f.ord, f.subfolder),
+            """INSERT INTO files(project_id, path, is_relative, label, kind, ord, subfolder, origin)
+               VALUES(?,?,?,?,?,?,?,?)""",
+            (f.project_id, f.path, int(f.is_relative), f.label, f.kind, f.ord, f.subfolder, f.origin),
         )
         self.conn.commit()
         return cur.lastrowid  # type: ignore[return-value]
@@ -1141,6 +1141,11 @@ class Repository:
             subfolder_v = row["subfolder"] or ""
         except (IndexError, KeyError):
             subfolder_v = ""
+        # origin 列在 v7 → v8 才加上
+        try:
+            origin_v = row["origin"] or "user"
+        except (IndexError, KeyError):
+            origin_v = "user"
         return FileItem(
             id=row["id"],
             project_id=row["project_id"],
@@ -1152,4 +1157,5 @@ class Repository:
             added_at=row["added_at"] or "",
             missing=missing_v,
             subfolder=subfolder_v,
+            origin=origin_v,
         )

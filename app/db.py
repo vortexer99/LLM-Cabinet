@@ -24,7 +24,7 @@ from typing import Callable
 # =============================================================================
 # 每次需要数据库迁移时 +1，并在下方 MIGRATIONS 注册表里追加一项 (from_v, to_v, fn)。
 # 全新数据库会直接被打上当前 SCHEMA_VERSION，无需跑历史迁移。
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 SCHEMA = """
 PRAGMA foreign_keys = ON;
@@ -60,7 +60,8 @@ CREATE TABLE IF NOT EXISTS files (
     ord         INTEGER NOT NULL DEFAULT 0,
     added_at    TEXT NOT NULL DEFAULT (datetime('now')),
     missing     INTEGER NOT NULL DEFAULT 0,  -- 一致性检查标记（task #14 T1）
-    subfolder   TEXT NOT NULL DEFAULT ''     -- 逻辑子目录路径（task #17）：POSIX 格式，"" = 顶层
+    subfolder   TEXT NOT NULL DEFAULT '',    -- 逻辑子目录路径（task #17）：POSIX 格式，"" = 顶层
+    origin      TEXT NOT NULL DEFAULT 'user' -- 文件来源（task #30）：user=用户原始文件 / generated=软件衍生物
 );
 
 CREATE INDEX IF NOT EXISTS idx_files_project ON files(project_id);
@@ -453,6 +454,26 @@ def _migrate_v6_to_v7(conn: sqlite3.Connection) -> None:
         )
 
 
+def _migrate_v7_to_v8(conn: sqlite3.Connection) -> None:
+    """task #30：files 加 origin 列（用户数据 / 软件衍生物），并回填历史封面快照。
+
+    - 新增 origin 列，默认 'user'
+    - 回填：历史上 _save_cover_snapshot 生成的封面快照文件名形如
+      project_N/__cover_<ts>.png，按文件名前缀精准识别（不会误伤用户文件）
+    """
+    file_cols = {r[1] for r in conn.execute("PRAGMA table_info(files)").fetchall()}
+    if "origin" not in file_cols:
+        conn.execute(
+            "ALTER TABLE files ADD COLUMN origin TEXT NOT NULL DEFAULT 'user'"
+        )
+    # 回填：历史上 _save_cover_snapshot 生成的封面快照
+    conn.execute(
+        r"UPDATE files SET origin='generated' "
+        r"WHERE origin='user' AND (path LIKE '%/__cover\_%' ESCAPE '\' "
+        r"OR path LIKE '__cover\_%' ESCAPE '\')"
+    )
+
+
 MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (1, 2, _migrate_v1_to_v2),
     (2, 3, _migrate_v2_to_v3),
@@ -460,6 +481,7 @@ MIGRATIONS: list[tuple[int, int, Callable[[sqlite3.Connection], None]]] = [
     (4, 5, _migrate_v4_to_v5),
     (5, 6, _migrate_v5_to_v6),
     (6, 7, _migrate_v6_to_v7),
+    (7, 8, _migrate_v7_to_v8),
 ]
 
 

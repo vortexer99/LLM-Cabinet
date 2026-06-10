@@ -8,6 +8,22 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+📦 schema v7 → v8 — `files` 表新增 `origin` 列（`user`=用户原始文件 / `generated`=软件衍生物）。
+
+### Added
+- **文件来源标记（task #30）**：`files` 表新增 `origin` 列，区分用户原始文件与软件衍生物（如封面快照）。
+  - 新生成的封面快照自动标记 `origin='generated'`。
+  - 迁移时自动回填历史封面快照 `__cover_*.png` 为 `generated`。
+  - 为后续 #28 导出/导入闭环、#04 文件折叠提供数据基础。
+- **文件折叠二态视图（task #04）**：文件表上方新增 👤/🌐 toggle，切换「仅用户文件」/「显示所有」。无 generated 文件时自动隐藏，按项目持久化。
+- **导出选项扩展（task #28 T1）**：
+  - 导出模式：导出为独立包 / 仅导出项目元数据
+  - 导出格式：目录形式 / ZIP 打包
+  - 文件目录结构：保留目录结构 / 拍平到 files/
+  - 内容选项：包含 README.md、LLM 任务历史
+  - 封面图始终复制（即使不勾选"复制链接文件"）
+  - files.json 新增 subfolder / is_cover / origin 字段（schema @3）
+
 ### Changed
 - 任务规划重组（基于 `docs/file-handling.md` 评审）：
   - 新增 `tasks/32-cross-project-file-reference.md`：跨项目链接引用最小方案（路径共享 + 多引用警告 + #14 跨项目引用报告 + Windows path `normcase` 归一化 + 文件表角标提示），零 schema 改动。

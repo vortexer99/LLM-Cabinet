@@ -19,8 +19,9 @@ from .repository import Repository
 from .utils import detect_kind
 
 # 当前导入器已知的最高 project-export schema 版本
+# @3: files.json 含 subfolder + is_cover + origin（task #28 / task #30）
 # @2: fields_snapshot 含 prompt_hint（task #11 T4）；@1 仍兼容
-SUPPORTED_SCHEMA_VERSION = 2
+SUPPORTED_SCHEMA_VERSION = 3
 SCHEMA_PREFIX = "llm-cabinet/project-export@"
 
 FieldPolicy = Literal["create", "append_to_desc", "ignore"]
@@ -411,16 +412,36 @@ def _import_files_for_project(
     warnings: list[str],
     progress: Callable[[int, int, str], None] | None,
 ) -> int:
-    """复制 / 链接文件夹中的文件到 project。返回成功导入数量。"""
+    """复制 / 链接文件夹中的文件到 project。返回成功导入数量。
+
+    task #28 T3 增强：
+    - 优先使用 files.json 的 subfolder（拍平结构也能正确还原目录树）
+    - 写入 origin（user/generated）保留文件来源标记
+    - 建立旧 file_id → 新 file_id 映射，用于封面还原
+    """
     assert project.id is not None
 
     # 收集要导入的文件：优先 files.json 列出的；否则递归扫文件夹（排除 project.json/files.json/README.md/files/ 子目录）
-    pending_files = _collect_files_to_import(plan)
+    pending_files, file_id_map = _collect_files_to_import(plan)
 
     n_added = 0
     total = len(pending_files)
+
+    # 用于封面还原：旧 file_id → 新 file_id（从 file_id_map 的 key 获取）
+    old_to_new_id: dict[int, int] = {}
+
+    # 建立 PendingFile 到旧 file_id 的映射
+    old_id_by_pf: dict[int, int] = {}
+    for old_id, pf in file_id_map.items():
+        # 通过 src 路径匹配
+        for idx, p in enumerate(pending_files):
+            if p.src == pf.src:
+                old_id_by_pf[idx] = old_id
+                break
+
     for i, pf in enumerate(pending_files):
         src = pf.src
+        old_file_id = old_id_by_pf.get(i)  # 从映射获取旧 file_id
         try:
             kind = detect_kind(src.suffix)
             if options.storage_mode == "copy":
@@ -429,22 +450,33 @@ def _import_files_for_project(
                     project_id=project.id,
                     path=rel,
                     is_relative=True,
-                    label="",
+                    label=pf.label,
                     kind=kind,
                     ord=n_added,
                     subfolder=pf.subfolder,
+                    origin=pf.origin,
                 )
             else:
                 fi = FileItem(
                     project_id=project.id,
                     path=str(src.resolve()),
                     is_relative=False,
-                    label="",
+                    label=pf.label,
                     kind=kind,
                     ord=n_added,
                     subfolder=pf.subfolder,
+                    origin=pf.origin,
                 )
-            repo.add_file(fi)
+            new_id = repo.add_file(fi)
+
+            # 记录旧 file_id → 新 file_id 映射（用于封面还原）
+            if old_file_id:
+                try:
+                    old_id_int = int(old_file_id)
+                    old_to_new_id[old_id_int] = new_id
+                except (ValueError, TypeError):
+                    pass
+
             n_added += 1
         except Exception as e:
             warnings.append(f"导入文件失败 {src.name}：{e}")
@@ -455,18 +487,85 @@ def _import_files_for_project(
             except Exception:
                 pass
 
+    # task #28 T3：封面还原
+    pj = plan.project_json or {}
+    old_cover_id = pj.get("project", {}).get("cover_file_id")
+    if old_cover_id and old_cover_id in old_to_new_id:
+        new_cover_id = old_to_new_id[old_cover_id]
+        project.cover_file_id = new_cover_id
+        repo.save_project(project)
+
     return n_added
 
 
-def _collect_files_to_import(plan: ImportPlan) -> list[PendingFile]:
-    """从文件夹收集待导入的文件路径，附带 subfolder 信息（task #17）。
+def _collect_files_to_import(plan: ImportPlan) -> tuple[list[PendingFile], dict[int, PendingFile]]:
+    """从文件夹收集待导入的文件路径，附带 subfolder 信息（task #17 / task #28 T3）。
 
     - 跳过导出包元数据（``project.json`` / ``files.json`` / ``README.md``）
-    - 若存在 ``files/`` 子目录（task #09 导出包结构），优先用其中的文件
+    - 若存在 ``files.json``（task #28 @3 导出包），优先读取其中的 subfolder/label/origin
+    - 若存在 ``files/`` 子目录，优先用其中的文件
     - 否则递归扫整个文件夹，跳过隐藏文件
+
+    返回：
+    - pending_files: list[PendingFile]
+    - file_id_map: dict[int, PendingFile] 用于旧 file_id → PendingFile 映射（封面还原）
     """
     folder = plan.folder
+    file_id_map: dict[int, PendingFile] = {}
 
+    # task #28 T3：优先读取 files.json 获取 subfolder/label/origin
+    files_json_path = folder / "files.json"
+    if files_json_path.is_file():
+        try:
+            with open(files_json_path, encoding="utf-8") as f:
+                files_data = json.load(f)
+            files_list = files_data.get("files", [])
+            preserve_structure = files_data.get("preserve_structure", True)
+
+            for fe in files_list:
+                src_path = fe.get("exported_to") or fe.get("original_path", "")
+                if not src_path:
+                    continue
+                # exported_to 是相对于导出包 files/ 的路径
+                if fe.get("exported_to"):
+                    src = folder / src_path
+                else:
+                    # 可能是原文件路径
+                    src = Path(src_path)
+                if not src.exists():
+                    continue
+
+                # task #28 T3：从 files.json 读取 subfolder/label/origin
+                subfolder = fe.get("subfolder", "")
+                label = fe.get("label", "")
+                origin = fe.get("origin", "user")
+                old_id = fe.get("id")
+
+                pf = PendingFile(
+                    src=src.resolve(),
+                    subfolder=subfolder,
+                    label=label,
+                    origin=origin,
+                )
+
+                if old_id is not None:
+                    file_id_map[int(old_id)] = pf
+
+                # 拍平模式下：如果没有 subfolder 但 preserve_structure=False，
+                # 需要从 exported_to 路径反推
+                if not subfolder and not preserve_structure and fe.get("exported_to"):
+                    # exported_to 可能是 "files/xxx_123.pdf" 形式
+                    exported = fe.get("exported_to", "")
+                    if exported.startswith("files/"):
+                        # 尝试从文件名提取 id 来还原（如果需要）
+                        pass
+
+            # 返回从 files.json 收集的文件
+            return sorted(file_id_map.values(), key=lambda pf: pf.src), file_id_map
+        except Exception:
+            pass  # 文件损坏时回退到物理扫描
+
+    # 回退：物理目录结构扫描
     def _make(src: Path, root: Path) -> PendingFile:
         rel = src.parent.relative_to(root)
         subfolder = rel.as_posix() if str(rel) != "." else ""
@@ -474,10 +573,12 @@ def _collect_files_to_import(plan: ImportPlan) -> list[PendingFile]:
 
     files_dir = folder / "files"
     if files_dir.is_dir():
-        return sorted(
+        out = sorted(
             (_make(p, files_dir) for p in files_dir.rglob("*") if p.is_file()),
             key=lambda pf: pf.src,
         )
+        # 回退模式下 file_id_map 为空
+        return out, file_id_map
 
     skip_names = {"project.json", "files.json", "README.md"}
     out: list[PendingFile] = []
@@ -492,7 +593,7 @@ def _collect_files_to_import(plan: ImportPlan) -> list[PendingFile]:
         if any(part.startswith(".") for part in rel.parts):
             continue
         out.append(_make(p, folder))
-    return sorted(out, key=lambda pf: pf.src)
+    return sorted(out, key=lambda pf: pf.src), file_id_map
 
 
 # =============================================================================

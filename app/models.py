@@ -109,9 +109,14 @@ class Project:
 
 @dataclass
 class PendingFile:
-    """待导入的文件，从用户拖入路径到写入 files 表之间的中间载体（task #17）。"""
+    """待导入的文件，从用户拖入路径到写入 files 表之间的中间载体（task #17）。
+
+    task #28 T3 扩展：新增 label/origin 字段用于从 files.json 还原。
+    """
     src: Path           # 源文件绝对路径
     subfolder: str = "" # 逻辑子路径，如 "ML/NLP"；"" = 顶层
+    label: str = ""     # task #28：文件标签
+    origin: str = "user"  # task #28：文件来源（user/generated）
 
 
 @dataclass
@@ -126,6 +131,7 @@ class FileItem:
     added_at: str = ""
     missing: bool = False           # task #14 T1：库一致性检查标记
     subfolder: str = ""             # task #17：逻辑子目录路径，如 "ML/NLP"
+    origin: str = "user"            # task #30：user=用户原始文件 / generated=软件衍生物
 
 
 # ============================================================ LLM
