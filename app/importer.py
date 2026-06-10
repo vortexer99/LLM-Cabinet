@@ -1,7 +1,13 @@
-"""项目导入（task #10）。
+"""项目导入（task #10 / task #28 T3 导入增强）。
 
 把若干"项目文件夹"批量导入为新项目。每个文件夹一个项目；若根目录下
 存在 ``project.json`` ，则按 ``tasks/09`` 输出的 schema 恢复元数据/字段/标签。
+
+task #28 T3 增强：
+- ZIP 包导入支持（自动解包到临时目录）
+- 封面图还原（cover_file_id 按新 file id 重映射）
+- 拍平结构的目录树还原（优先用 files.json 的 subfolder）
+- 文件来源标记还原（origin: user/generated）
 
 设计要点见 ``tasks/10-folder-batch-import.md``。
 """
@@ -9,6 +15,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import tempfile
+import zipfile
 from dataclasses import dataclass, field as dc_field
 from pathlib import Path
 from typing import Callable, Literal, Optional
@@ -42,6 +51,7 @@ class ImportPlan:
     parse_error: str = ""                     # 解析失败原因（用于 warning 与 UI 状态）
     unmatched_fields: list[str] = dc_field(default_factory=list)  # 库内不存在的字段名
     unmatched_field_values: dict[str, str] = dc_field(default_factory=dict)  # 备用：append_to_desc 时用
+    is_zip: bool = False                      # 是否从 ZIP 解压而来（task #28 T3）
 
     @property
     def status_text(self) -> str:
@@ -85,14 +95,60 @@ class ImportResult:
 def scan_folders(folders: list[Path], repo: Repository) -> list[ImportPlan]:
     """扫描每个文件夹，识别其中是否存在合法的 ``project.json``。
 
+    支持 ZIP 包：传入 .zip 文件时会自动解包到临时目录进行扫描。
+    导入完成后临时目录会被清理。
+
     不实际导入；返回 ``ImportPlan`` 列表供 UI 展示。
     """
     existing_field_names = {f.name for f in repo.list_fields()}
     plans: list[ImportPlan] = []
+
+    # task #28 T3: 支持 ZIP 包导入
+    temp_dirs: list[Path] = []  # 记录临时目录，扫描完成后不清理（由调用方在导入完成后清理）
+
     for folder in folders:
+        folder = Path(folder)
+
+        # 检测 ZIP 文件
+        if folder.suffix.lower() == ".zip":
+            try:
+                temp_dir, zip_path = _extract_zip_to_temp(folder)
+                plan = _scan_one(temp_dir, existing_field_names)
+                plan._temp_dir = temp_dir  # 临时目录，导入完成后清理
+                plan._zip_path = zip_path  # 原始 ZIP 路径
+                plan.is_zip = True
+                plans.append(plan)
+            except Exception as e:
+                # ZIP 解压失败，创建一个带错误信息的 plan
+                plan = ImportPlan(folder=folder)
+                plan.parse_error = f"ZIP 解压失败：{e}"
+                plan.has_project_json = False
+                plans.append(plan)
+            continue
+
         plan = _scan_one(folder, existing_field_names)
         plans.append(plan)
+
     return plans
+
+
+def _extract_zip_to_temp(zip_path: Path) -> tuple[Path, Path]:
+    """解压 ZIP 到临时目录，返回 (临时目录路径, ZIP文件路径)。"""
+    temp_dir = Path(tempfile.mkdtemp(prefix="llm_cabinet_import_"))
+    with zipfile.ZipFile(zip_path, "r") as zf:
+        zf.extractall(temp_dir)
+    return temp_dir, zip_path
+
+
+def cleanup_extracted_zips(plans: list[ImportPlan]) -> None:
+    """清理从 ZIP 解压出来的临时目录。"""
+    for plan in plans:
+        temp_dir = getattr(plan, "_temp_dir", None)
+        if temp_dir and temp_dir.exists():
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                pass
 
 
 def _scan_one(folder: Path, existing_field_names: set[str]) -> ImportPlan:

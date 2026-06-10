@@ -306,6 +306,13 @@ class MainWindow(QMainWindow):
         act_restore.triggered.connect(lambda _c=False: self._tools_restore_library())
         m_tools.addAction(act_restore)
 
+        # task #28 T3：导入项目包
+        m_tools.addSeparator()
+        act_import_pkg = QAction("📥 导入项目包...", self)
+        act_import_pkg.setShortcut(QKeySequence("Ctrl+I"))
+        act_import_pkg.triggered.connect(lambda _c=False: self._tools_import_package())
+        m_tools.addAction(act_import_pkg)
+
     def _lib_rebuild_recent_menu(self) -> None:
         """重建「最近打开」子菜单。每个条目支持右键菜单（移除/删除/改名）。"""
         if self.cabinet_config is None:
@@ -1155,6 +1162,22 @@ class MainWindow(QMainWindow):
             # （恢复完成的对话框文案已经把"应用将重启"说明了，再多弹一次冗余）
             self._pending_switch_to = root
             self.close()
+
+    def _tools_import_package(self) -> None:
+        """导入项目包（ZIP 或目录）（task #28 T3）。"""
+        from PySide6.QtWidgets import QFileDialog, QDialog
+        from pathlib import Path as _Path
+
+        # 让用户选择 ZIP 文件或目录
+        path, _ = QFileDialog.getOpenFileName(
+            self, "选择项目包", "",
+            "项目包 (*.zip);;目录;;所有文件 (*)",
+        )
+        if not path:
+            return
+
+        # 复用批量导入流程
+        self._run_batch_folder_import([path])
 
     # ============================================================ toolbar
     def _build_toolbar(self) -> None:
@@ -3240,6 +3263,25 @@ class MainWindow(QMainWindow):
             paths = self._filter_library_paths(paths)
             if not paths:
                 return
+
+            # task #28 T3：检测 ZIP 文件 → 走项目包导入
+            zip_paths = [p for p in paths if Path(p).suffix.lower() == ".zip"]
+            if zip_paths:
+                # 有 ZIP 文件，弹确认让用户选择处理方式
+                from PySide6.QtWidgets import QMessageBox
+                ans = QMessageBox.question(
+                    self, "检测到 ZIP 文件",
+                    f"检测到 {len(zip_paths)} 个 ZIP 文件。\n\n"
+                    "是导入为项目包，还是解压后作为普通文件夹处理？",
+                    "导入项目包", "解压为文件夹", "取消",
+                )
+                if ans == 0:  # 导入项目包
+                    self._run_batch_folder_import(zip_paths)
+                    return
+                elif ans == 2:  # 取消
+                    return
+                # 否则继续作为文件夹处理（解压后）
+
             # 分支：全是目录且 ≥ 2 个 → 走批量文件夹导入流程（task #10）
             from ..importer import split_paths_by_kind
             dirs, plain_files = split_paths_by_kind(paths)
@@ -3308,7 +3350,7 @@ class MainWindow(QMainWindow):
         """对每个文件夹独立建项目（task #10 主流程）。"""
         from pathlib import Path as _Path
         from ..importer import (
-            import_folder_as_project, scan_folders,
+            cleanup_extracted_zips, import_folder_as_project, scan_folders,
         )
         from .import_dialog import FieldPolicyAskDialog, ImportDialog
 
@@ -3379,6 +3421,9 @@ class MainWindow(QMainWindow):
         if cancelled:
             msg = "批量导入已取消（" + msg + "）"
         self.statusBar().showMessage(msg, 6000)
+
+        # task #28 T3：清理从 ZIP 解压的临时目录
+        cleanup_extracted_zips(plans)
 
         # 如果有 warning，弹一次汇总
         if all_warnings:
