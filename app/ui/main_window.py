@@ -1169,11 +1169,14 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QFileDialog, QDialog
         from pathlib import Path as _Path
 
-        # 让用户选择 ZIP 文件或目录
         path, _ = QFileDialog.getOpenFileName(
-            self, "选择项目包", "",
-            "项目包 (*.zip);;目录;;所有文件 (*)",
+            self, "选择项目包 ZIP", "",
+            "项目包 (*.zip);;所有文件 (*)",
         )
+        if not path:
+            path = QFileDialog.getExistingDirectory(
+                self, "选择项目包目录",
+            )
         if not path:
             return
 
@@ -3955,86 +3958,86 @@ class MainWindow(QMainWindow):
         from .import_dialog import FieldPolicyAskDialog, ImportDialog
 
         plans = scan_folders([_Path(d) for d in dirs], self.repo)
-        dlg = ImportDialog(plans, parent=self)
-        if dlg.exec() != QDialog.Accepted:
-            return
-        options = dlg.options()
+        try:
+            dlg = ImportDialog(plans, parent=self)
+            if dlg.exec() != QDialog.Accepted:
+                return
+            options = dlg.options()
 
-        # 进度对话框：以"文件夹个数"为粗粒度
-        from PySide6.QtCore import Qt
-        from PySide6.QtWidgets import QProgressDialog
-        prog = QProgressDialog(
-            "正在导入项目…", "取消", 0, len(plans), self,
-        )
-        prog.setWindowTitle("批量导入文件夹")
-        prog.setWindowModality(Qt.WindowModal)
-        prog.setMinimumDuration(0)
-        prog.setAutoClose(False)
-        prog.setAutoReset(False)
-        prog.show()
+            # 进度对话框：以"文件夹个数"为粗粒度
+            from PySide6.QtCore import Qt
+            from PySide6.QtWidgets import QProgressDialog
+            prog = QProgressDialog(
+                "正在导入项目…", "取消", 0, len(plans), self,
+            )
+            prog.setWindowTitle("批量导入文件夹")
+            prog.setWindowModality(Qt.WindowModal)
+            prog.setMinimumDuration(0)
+            prog.setAutoClose(False)
+            prog.setAutoReset(False)
+            prog.show()
 
-        # 单项目级未匹配字段询问回调
-        def _ask_field_policy(folder, fields):
-            ask = FieldPolicyAskDialog(folder, fields, parent=self)
-            if ask.exec() != QDialog.Accepted:
-                return options.field_policy  # 用户取消 → 回退默认
-            return ask.policy()
+            # 单项目级未匹配字段询问回调
+            def _ask_field_policy(folder, fields):
+                ask = FieldPolicyAskDialog(folder, fields, parent=self)
+                if ask.exec() != QDialog.Accepted:
+                    return options.field_policy  # 用户取消 → 回退默认
+                return ask.policy()
 
-        results: list = []
-        all_warnings: list[str] = []
-        last_pid: int | None = None
-        cancelled = False
-        for i, plan in enumerate(plans):
-            if prog.wasCanceled():
-                cancelled = True
-                break
-            prog.setValue(i)
-            prog.setLabelText(f"导入「{plan.folder.name}」…")
-            try:
-                res = import_folder_as_project(
-                    self.repo, self.library, plan, options,
-                    progress=None,
-                    ask_field_policy=_ask_field_policy,
-                )
-                results.append(res)
-                if res.warnings:
-                    all_warnings.extend(
-                        f"[{plan.folder.name}] {w}" for w in res.warnings
+            results: list = []
+            all_warnings: list[str] = []
+            last_pid: int | None = None
+            cancelled = False
+            for i, plan in enumerate(plans):
+                if prog.wasCanceled():
+                    cancelled = True
+                    break
+                prog.setValue(i)
+                prog.setLabelText(f"导入「{plan.folder.name}」…")
+                try:
+                    res = import_folder_as_project(
+                        self.repo, self.library, plan, options,
+                        progress=None,
+                        ask_field_policy=_ask_field_policy,
                     )
-                last_pid = res.project_id
-            except Exception as e:
-                all_warnings.append(f"[{plan.folder.name}] 导入失败：{e}")
-        prog.setValue(len(plans))
-        prog.close()
+                    results.append(res)
+                    if res.warnings:
+                        all_warnings.extend(
+                            f"[{plan.folder.name}] {w}" for w in res.warnings
+                        )
+                    last_pid = res.project_id
+                except Exception as e:
+                    all_warnings.append(f"[{plan.folder.name}] 导入失败：{e}")
+            prog.setValue(len(plans))
+            prog.close()
 
-        # 刷新 UI
-        self.refresh_projects()
-        if last_pid is not None:
-            self._select_project_by_id(last_pid)
+            # 刷新 UI
+            self.refresh_projects()
+            if last_pid is not None:
+                self._select_project_by_id(last_pid)
 
-        # 统计反馈
-        n_ok = len(results)
-        n_files_total = sum(r.n_files for r in results)
-        msg = (
-            f"批量导入完成：{n_ok} / {len(plans)} 个项目，共 {n_files_total} 个文件"
-        )
-        if cancelled:
-            msg = "批量导入已取消（" + msg + "）"
-        self.statusBar().showMessage(msg, 6000)
+            # 统计反馈
+            n_ok = len(results)
+            n_files_total = sum(r.n_files for r in results)
+            msg = (
+                f"批量导入完成：{n_ok} / {len(plans)} 个项目，共 {n_files_total} 个文件"
+            )
+            if cancelled:
+                msg = "批量导入已取消（" + msg + "）"
+            self.statusBar().showMessage(msg, 6000)
 
-        # task #28 T3：清理从 ZIP 解压的临时目录
-        cleanup_extracted_zips(plans)
-
-        # 如果有 warning，弹一次汇总
-        if all_warnings:
-            from PySide6.QtWidgets import QMessageBox
-            box = QMessageBox(self)
-            box.setIcon(QMessageBox.Information)
-            box.setWindowTitle("批量导入：警告与提示")
-            head = msg + f"\n\n{len(all_warnings)} 条提示信息："
-            box.setText(head)
-            box.setDetailedText("\n".join(all_warnings))
-            box.exec()
+            # 如果有 warning，弹一次汇总
+            if all_warnings:
+                from PySide6.QtWidgets import QMessageBox
+                box = QMessageBox(self)
+                box.setIcon(QMessageBox.Information)
+                box.setWindowTitle("批量导入：警告与提示")
+                head = msg + f"\n\n{len(all_warnings)} 条提示信息："
+                box.setText(head)
+                box.setDetailedText("\n".join(all_warnings))
+                box.exec()
+        finally:
+            cleanup_extracted_zips(plans)
 
 
 

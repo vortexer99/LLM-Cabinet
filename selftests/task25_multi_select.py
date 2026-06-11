@@ -192,8 +192,7 @@ def main() -> bool:
                 return False
 
         print("\n" + "=" * 60)
-        passed = t.report()
-        return passed == len(tests)
+        return t.report()
 
 
 if __name__ == "__main__":

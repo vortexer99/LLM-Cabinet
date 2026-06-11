@@ -136,8 +136,18 @@ def _extract_zip_to_temp(zip_path: Path) -> tuple[Path, Path]:
     """解压 ZIP 到临时目录，返回 (临时目录路径, ZIP文件路径)。"""
     temp_dir = Path(tempfile.mkdtemp(prefix="llm_cabinet_import_"))
     with zipfile.ZipFile(zip_path, "r") as zf:
-        zf.extractall(temp_dir)
+        _safe_extract_zip(zf, temp_dir)
     return temp_dir, zip_path
+
+
+def _safe_extract_zip(zf: zipfile.ZipFile, target_dir: Path) -> None:
+    """安全解压 ZIP，拒绝写出目标目录的成员。"""
+    target_root = target_dir.resolve()
+    for info in zf.infolist():
+        dest = (target_root / info.filename).resolve()
+        if dest != target_root and target_root not in dest.parents:
+            raise ValueError(f"ZIP 包含非法路径：{info.filename}")
+    zf.extractall(target_root)
 
 
 def cleanup_extracted_zips(plans: list[ImportPlan]) -> None:
@@ -554,6 +564,36 @@ def _import_files_for_project(
     return n_added
 
 
+def _safe_project_subfolder(raw: object) -> str:
+    """校验并规范化项目包内的逻辑子目录。"""
+    if raw is None:
+        return ""
+    s = str(raw).replace("\\", "/").strip("/")
+    if not s:
+        return ""
+    parts = [p for p in s.split("/") if p]
+    if any(p in (".", "..") for p in parts):
+        raise ValueError(f"非法子目录路径：{raw!r}")
+    return "/".join(parts)
+
+
+def _safe_exported_file_path(folder: Path, rel_path: object) -> Path:
+    """把 files.json 的 exported_to 解析为包内文件路径。"""
+    if not isinstance(rel_path, str) or not rel_path:
+        raise ValueError("exported_to 不是有效路径")
+    p = Path(rel_path)
+    if p.is_absolute():
+        raise ValueError(f"exported_to 不能是绝对路径：{rel_path}")
+    parts = p.parts
+    if any(part in ("", ".", "..") for part in parts):
+        raise ValueError(f"exported_to 包含非法路径片段：{rel_path}")
+    root = folder.resolve()
+    resolved = (root / p).resolve()
+    if resolved != root and root not in resolved.parents:
+        raise ValueError(f"exported_to 超出项目包目录：{rel_path}")
+    return resolved
+
+
 def _collect_files_to_import(plan: ImportPlan) -> tuple[list[PendingFile], dict[int, PendingFile]]:
     """从文件夹收集待导入的文件路径，附带 subfolder 信息（task #17 / task #28 T3）。
 
@@ -577,25 +617,26 @@ def _collect_files_to_import(plan: ImportPlan) -> tuple[list[PendingFile], dict[
                 files_data = json.load(f)
             files_list = files_data.get("files", [])
             preserve_structure = files_data.get("preserve_structure", True)
+            pending_files: list[PendingFile] = []
 
             for fe in files_list:
-                src_path = fe.get("exported_to") or fe.get("original_path", "")
-                if not src_path:
-                    continue
-                # exported_to 是相对于导出包 files/ 的路径
-                if fe.get("exported_to"):
-                    src = folder / src_path
-                else:
-                    # 可能是原文件路径
-                    src = Path(src_path)
-                if not src.exists():
-                    continue
+                try:
+                    exported_to = fe.get("exported_to")
+                    if not exported_to:
+                        continue
+                    src = _safe_exported_file_path(folder, exported_to)
+                    if not src.exists():
+                        continue
 
-                # task #28 T3：从 files.json 读取 subfolder/label/origin
-                subfolder = fe.get("subfolder", "")
-                label = fe.get("label", "")
-                origin = fe.get("origin", "user")
-                old_id = fe.get("id")
+                    # task #28 T3：从 files.json 读取 subfolder/label/origin
+                    subfolder = _safe_project_subfolder(fe.get("subfolder", ""))
+                    label = fe.get("label", "")
+                    origin = fe.get("origin", "user")
+                    if origin not in ("user", "generated"):
+                        origin = "user"
+                    old_id = fe.get("id")
+                except (TypeError, ValueError, OSError):
+                    continue
 
                 pf = PendingFile(
                     src=src.resolve(),
@@ -603,6 +644,7 @@ def _collect_files_to_import(plan: ImportPlan) -> tuple[list[PendingFile], dict[
                     label=label,
                     origin=origin,
                 )
+                pending_files.append(pf)
 
                 if old_id is not None:
                     file_id_map[int(old_id)] = pf
@@ -617,7 +659,7 @@ def _collect_files_to_import(plan: ImportPlan) -> tuple[list[PendingFile], dict[
                         pass
 
             # 返回从 files.json 收集的文件
-            return sorted(file_id_map.values(), key=lambda pf: pf.src), file_id_map
+            return sorted(pending_files, key=lambda pf: pf.src), file_id_map
         except Exception:
             pass  # 文件损坏时回退到物理扫描
 

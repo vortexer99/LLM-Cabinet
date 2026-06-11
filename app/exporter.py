@@ -123,6 +123,34 @@ def unique_dirname(base: Path, name: str) -> str:
     return f"{name} ({i})"
 
 
+def unique_filename(base: Path, name: str) -> str:
+    """在 ``base`` 下寻找一个还未被占用的文件名。"""
+    candidate = Path(name)
+    stem = candidate.stem
+    suffix = candidate.suffix
+    if not (base / name).exists():
+        return name
+    i = 2
+    while (base / f"{stem} ({i}){suffix}").exists():
+        i += 1
+    return f"{stem} ({i}){suffix}"
+
+
+def safe_subfolder_path(raw: str) -> Path:
+    """把 files.subfolder 约束为安全的相对 POSIX 路径。"""
+    if not raw:
+        return Path()
+    parts = [p for p in raw.replace("\\", "/").split("/") if p]
+    safe_parts = [sanitize_filename(p, fallback="folder") for p in parts if p not in (".", "..")]
+    return Path(*safe_parts) if safe_parts else Path()
+
+
+def safe_subfolder_posix(raw: str) -> str:
+    """返回可写入 files.json 的安全 POSIX 子目录；顶层为空串。"""
+    p = safe_subfolder_path(raw)
+    return "" if str(p) == "." else p.as_posix()
+
+
 def _copy_file_safely(src: Path, dst: Path) -> tuple[bool, int, str | None]:
     """复制单个文件；不让单文件失败拖垮整个导出。
 
@@ -205,6 +233,7 @@ def export_project(
 
         for i, f in enumerate(files):
             original_abs = library.resolve(f.path, f.is_relative)
+            safe_subfolder = safe_subfolder_posix(f.subfolder)
             # 是否需要复制：封面始终复制（即使不勾选 copy_link_files）
             should_copy = f.is_relative or options.copy_link_files or (f.id == cover_file_id)
 
@@ -217,14 +246,16 @@ def export_project(
 
                 if options.preserve_structure:
                     # 保留目录结构
-                    dst_name = safe_src_name
-                    if f.subfolder:
-                        dst_path = files_subdir / f.subfolder / dst_name
+                    dst_name = f"{f.id}__{safe_src_name}"
+                    if safe_subfolder:
+                        dst_path = files_subdir / Path(safe_subfolder) / dst_name
                     else:
                         dst_path = files_subdir / dst_name
                 else:
                     # 拍平：加 <id> 后缀防冲突
-                    dst_name = f"{safe_src_name}_{f.id}{Path(f.path).suffix}"
+                    stem = Path(safe_src_name).stem
+                    suffix = Path(safe_src_name).suffix
+                    dst_name = f"{stem}_{f.id}{suffix}"
                     dst_path = files_subdir / dst_name
 
                 # 确保父目录存在
@@ -232,8 +263,8 @@ def export_project(
                 ok, size, warn = _copy_file_safely(original_abs, dst_path)
                 if ok:
                     # 记录导出后的相对路径
-                    if options.preserve_structure and f.subfolder:
-                        exported_rel = f"files/{f.subfolder}/{dst_name}"
+                    if options.preserve_structure and safe_subfolder:
+                        exported_rel = f"files/{safe_subfolder}/{dst_name}"
                     else:
                         exported_rel = f"files/{dst_name}"
                     exported_size = size
@@ -248,7 +279,7 @@ def export_project(
 
             file_entries.append({
                 "id": f.id,
-                "subfolder": f.subfolder or "",
+                "subfolder": safe_subfolder,
                 "origin": f.origin or "user",
                 "is_cover": f.id == cover_file_id,
                 "original_storage": "copy" if f.is_relative else "link",
@@ -276,7 +307,10 @@ def export_project(
     # ---- ZIP 打包 ----
     if options.mode == "package" and options.export_format == "zip":
         import zipfile
-        zip_name = f"{safe_title}_{datetime.now().strftime('%Y%m%d')}.zip"
+        zip_name = unique_filename(
+            options.target_root,
+            f"{safe_title}_{datetime.now().strftime('%Y%m%d')}.zip",
+        )
         zip_path = options.target_root / zip_name
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
             for fpath in target_dir.rglob("*"):
