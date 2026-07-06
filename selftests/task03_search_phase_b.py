@@ -1,4 +1,4 @@
-"""task #03 Phase B 自检：字段过滤、布尔逻辑与 MCP 精确搜索。"""
+"""task #03 Phase B 自检：宽关键词、字段过滤、布尔逻辑与 MCP 精确搜索。"""
 from __future__ import annotations
 
 import asyncio
@@ -13,7 +13,7 @@ from selftests._common import T, closing_repos
 
 from app.db import connect
 from app.mcp.tools import search_projects
-from app.models import Project
+from app.models import FileItem, Project
 from app.repository import Repository
 from app.search import parse_search
 
@@ -55,21 +55,21 @@ def test_repository_search_phase_b(tmp: Path, t: T) -> None:
         fid_date = _field(repo, "日期", "date", "date")
         fid_rating = _field(repo, "评分", "rating", "rating")
 
-        _save(
+        pid_santi = _save(
             repo,
             "三体 设定集",
             "黑暗森林与宇宙社会学",
             ["科幻", "翻译"],
             {fid_author: "刘慈欣", fid_date: "2024-03-01", fid_rating: "5"},
         )
-        _save(
+        pid_foundation = _save(
             repo,
             "银河帝国",
             "基地故事",
             ["科幻"],
             {fid_author: "阿西莫夫", fid_date: "2023-01-01", fid_rating: "4"},
         )
-        _save(
+        pid_kitchen = _save(
             repo,
             "厨房手册",
             "三体锅不是科幻小说",
@@ -83,11 +83,40 @@ def test_repository_search_phase_b(tmp: Path, t: T) -> None:
             ["人物"],
             {fid_author: "刘慈欣", fid_date: "2022-01-01", fid_rating: "5"},
         )
+        repo.add_file(FileItem(
+            project_id=pid_foundation,
+            path="foundation/timeline.pdf",
+            label="基地年表",
+            kind="pdf",
+            subfolder="资料/年表",
+        ))
+        repo.add_file(FileItem(
+            project_id=pid_santi,
+            path="santi/dark-forest-notes.md",
+            label="黑暗森林笔记",
+            kind="markdown",
+        ))
+        repo.add_file(FileItem(
+            project_id=pid_kitchen,
+            path="cookbook.txt",
+            label="菜谱",
+            kind="text",
+        ))
 
         t.assert_eq(
-            "pure keyword only searches title/description",
+            "plain keyword searches custom field values",
             _query(repo, "刘慈欣"),
-            [],
+            ["三体 设定集", "作者字段命中", "厨房手册"],
+        )
+        t.assert_eq(
+            "plain keyword searches tags",
+            _query(repo, "翻译"),
+            ["三体 设定集"],
+        )
+        t.assert_eq(
+            "plain keyword searches file labels and subfolders",
+            _query(repo, "年表"),
+            ["银河帝国"],
         )
         t.assert_eq(
             "author key field contains",
@@ -145,4 +174,3 @@ if __name__ == "__main__":
         test_repository_search_phase_b(Path(d), t)
     ok = t.report()
     sys.exit(0 if ok else 1)
-

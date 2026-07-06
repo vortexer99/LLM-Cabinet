@@ -71,6 +71,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ### Changed
 - 开发约定改由 `AGENTS.md` 作为单一来源，`CLAUDE.md` 仅保留到该文件的导入指针；同步修正任务卡与 `tasks/README.md` 中已完成/进行中任务状态。
+- 普通关键词搜索从标题/描述扩展为标题、描述、标签、自定义字段值、文件名/文件说明/逻辑目录名；字段表达式仍保持精确字段搜索。
 - 任务规划重组（基于 `docs/file-handling.md` 评审）：
   - 新增 `tasks/32-cross-project-file-reference.md`：跨项目链接引用最小方案（路径共享 + 多引用警告 + #14 跨项目引用报告 + Windows path `normcase` 归一化 + 文件表角标提示），零 schema 改动。
   - 拆分 `tasks/31-...`：原卡保留为指针，新增 `tasks/31a-files-tree-interactions.md`（树形视图拖动 / 同级排序 / 新建空 subfolder / F2 重命名）+ `tasks/31b-files-table-flat-view.md`（扁平视图模式 + 大小/添加时间列 + Qt 原生列排序）。排序持久化按视图分键 `files_table_sort_tree` / `files_table_sort_flat`。

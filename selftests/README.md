@@ -68,8 +68,8 @@ with closing_repos(repo_a, repo_b):
 
 | 脚本 | 验证范围 | 关联 task |
 |---|---|---|
-| [task03_search_phase_a.py](./task03_search_phase_a.py) | 基础搜索 Phase A：标题/描述 keyword、keyword + tag/tag_prefix AND、未分类 keyword、MCP `search_projects` 透传 tag_prefix | [tasks/03](../tasks/03-search-calibre-like.md) Phase A |
-| [task03_search_phase_b.py](./task03_search_phase_b.py) | 类 Calibre 搜索 Phase B：字段 key / 显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索 | [tasks/03](../tasks/03-search-calibre-like.md) Phase B |
+| [task03_search_phase_a.py](./task03_search_phase_a.py) | 基础搜索 Phase A：宽关键词、keyword + tag/tag_prefix AND、未分类 keyword、MCP `search_projects` 透传 tag_prefix | [tasks/03](../tasks/03-search-calibre-like.md) Phase A |
+| [task03_search_phase_b.py](./task03_search_phase_b.py) | 类 Calibre 搜索 Phase B：宽关键词命中字段值/标签/文件清单、字段 key / 显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索 | [tasks/03](../tasks/03-search-calibre-like.md) Phase B |
 | [task03_search_phase_c.py](./task03_search_phase_c.py) | 搜索历史与收藏表达式 Phase C：settings JSON 容错、历史去重/上限、收藏新增/覆盖/删除 | [tasks/03](../tasks/03-search-calibre-like.md) Phase C |
 | [task06_tags_hierarchy.py](./task06_tags_hierarchy.py) | `Repository.list_projects(tag, tag_prefix)` 的层级匹配语义 | [tasks/06](../tasks/06-tags-hierarchy-folding.md) |
 | [task07_extractors.py](./task07_extractors.py) | 现场内容提取（pptx / odt / odp / ods / epub / html / rtf）+ `extraction_capability` 路由表 | [tasks/07](../tasks/07-local-embedding-summary.md) T0 |

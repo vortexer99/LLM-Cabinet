@@ -1,7 +1,7 @@
 """Calibre 风格项目搜索表达式解析器（task #03 Phase B）。
 
 输入示例：
-- ``三体`` -> 纯关键词（由 Repository 解释为 title/description OR）
+- ``三体`` -> 普通关键词（由 Repository 搜项目元数据和文件清单）
 - ``author:刘慈欣 AND rating:>=4``
 - ``tag:科幻 AND (tag:翻译 OR NOT date:<2024-01-01)``
 """

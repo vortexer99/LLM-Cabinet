@@ -247,7 +247,7 @@ description 写法统一遵循下列结构（例 `manage_project` 见 A.1）：
 
 ```
 对项目库的纯查询操作。通过 action 参数选择子操作：
-  action="search": 按 keyword（标题/描述模糊匹配）和/或 tag 搜索项目，返回 id/title/tags/file_count/updated_at 摘要。两个参数都为空时返回全部项目。
+  action="search": 按 keyword（标题、描述、标签、自定义字段值、文件名/文件说明/逻辑目录名模糊匹配）和/或 tag 搜索项目，返回 id/title/tags/file_count/updated_at 摘要。两个参数都为空时返回全部项目。
   action="get": 必传 project_id，返回完整元数据（含 description/storage_mode/cover_file_id/field_values 等）。
   action="count": 统计项目总数；可传 tag 过滤。
 注意：本工具不搜索文件内容；找特定文件请先 search 定位项目，再用 manage_files action="list" 看文件清单。

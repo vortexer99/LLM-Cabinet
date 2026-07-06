@@ -1,7 +1,7 @@
 """task #03 Phase A 自检：基础搜索闭环的数据层与 MCP 入口。
 
 覆盖：
-- ``list_projects(keyword=...)`` 只搜标题 / 描述
+- ``list_projects(keyword=...)`` 搜项目可见元数据
 - keyword 与精确 tag、tag_prefix 组合为 AND
 - 未分类项目列表支持 keyword
 - MCP ``search_projects`` 与 Repository 基础搜索结果一致，并接受 ``tag_prefix``

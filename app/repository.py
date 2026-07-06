@@ -78,9 +78,9 @@ class Repository:
         """
         params: list = []
         if keyword:
-            sql += " AND (p.title LIKE ? OR p.description_md LIKE ?)"
-            kw = f"%{keyword}%"
-            params += [kw, kw]
+            where, ps = self._compile_keyword_search(keyword)
+            sql += f" AND ({where})"
+            params += ps
         if tag:
             sql += " AND t.name = ?"
             params.append(tag)
@@ -138,14 +138,41 @@ class Repository:
             return self._compile_search_term(node)
         return "1=0", []
 
+    def _compile_keyword_search(self, value: str) -> tuple[str, list]:
+        """编译普通关键词搜索。
+
+        普通关键词按用户直觉搜索项目的可见元数据与文件清单；文件正文全文搜索
+        另需索引/抽取能力，不在这里做。
+        """
+        kw = f"%{value}%"
+        return (
+            "("
+            "p.title LIKE ?"
+            " OR p.description_md LIKE ?"
+            " OR EXISTS ("
+            "  SELECT 1 FROM project_tags pt_kw"
+            "  JOIN tags t_kw ON t_kw.id = pt_kw.tag_id"
+            "  WHERE pt_kw.project_id = p.id AND t_kw.name LIKE ?"
+            " )"
+            " OR EXISTS ("
+            "  SELECT 1 FROM project_field_values pfv_kw"
+            "  WHERE pfv_kw.project_id = p.id AND pfv_kw.value LIKE ?"
+            " )"
+            " OR EXISTS ("
+            "  SELECT 1 FROM files f_kw"
+            "  WHERE f_kw.project_id = p.id"
+            "  AND (f_kw.path LIKE ? OR f_kw.label LIKE ? OR f_kw.subfolder LIKE ?)"
+            " )"
+            ")"
+        ), [kw, kw, kw, kw, kw, kw, kw]
+
     def _compile_search_term(self, term: TermNode) -> tuple[str, list]:
         value = (term.value or "").strip()
         if not value:
             return "1=0", []
 
         if term.field is None:
-            kw = f"%{value}%"
-            return "(p.title LIKE ? OR p.description_md LIKE ?)", [kw, kw]
+            return self._compile_keyword_search(value)
 
         field = self._resolve_search_field(term.field)
         kind = field["kind"]
@@ -389,9 +416,9 @@ class Repository:
         """
         params: list = []
         if keyword:
-            sql += " AND (p.title LIKE ? OR p.description_md LIKE ?)"
-            kw = f"%{keyword}%"
-            params += [kw, kw]
+            where, ps = self._compile_keyword_search(keyword)
+            sql += f" AND ({where})"
+            params += ps
         sql += " ORDER BY p.updated_at DESC, p.id DESC"
         rows = self.conn.execute(sql, params).fetchall()
         return self._attach_project_extras(

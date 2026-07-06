@@ -142,7 +142,7 @@ app/mcp/
   agent: list_files(project_id=7, kind="document") → 只拿文档类文件
 ```
 
-不做 `search_files(keyword)` 的原因：现实文件名多为 `论文.pdf`、`截图.png`，无法靠文件名搜出有效结果。真正有意义的描述在项目层（title / description / tags），因此跨文件搜索无必要。
+不做独立 `search_files(keyword)` 的原因：文件仍作为项目的组成部分管理；`search_projects` 可用文件名/文件说明辅助定位项目，文件正文全文搜索则留给后续索引任务。
 
 ### 协议层设计：`LibraryContext`
 

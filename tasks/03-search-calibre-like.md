@@ -1,7 +1,8 @@
 # 03 · 类 Calibre 的搜索
 
 > **2026-06-04 更新**：拆为两段——
-> **Phase A（基础，XS~S）**：激活灰色搜索框，连 `repo.list_projects(keyword, tag, tag_prefix)` 做标题/描述关键词 + 当前左侧筛选搜索。与 MCP `query_projects(action="search")` 共享同一后端；不实现 `field_filter`。
+> **Phase A（基础，XS~S）**：激活灰色搜索框，连 `repo.list_projects(keyword, tag, tag_prefix)` 做关键词 + 当前左侧筛选搜索。与 MCP `query_projects(action="search")` 共享同一后端；不实现 `field_filter`。
+> **2026-07-07 追补**：普通关键词已扩展为搜索项目标题、描述、标签、自定义字段值、文件名/文件说明/逻辑目录名；文件正文全文搜索仍留给后续索引任务。
 > **Phase B（Calibre 级，M）**：字段过滤 + 布尔逻辑 + 解析器 + 语法提示。agent 也可用更精确的查询。
 >
 > **2026-06-05 更新**：新增 Phase C
@@ -17,7 +18,7 @@
 ## 目标
 顶部工具栏加搜索框，支持组合查询：
 
-- **关键词搜索**：Phase A 搜标题 / 描述；Phase B 通过字段表达式搜索作者等字段
+- **关键词搜索**：普通关键词搜标题、描述、标签、自定义字段值、文件名/文件说明/逻辑目录名；字段表达式可精确搜索作者等字段
 - **标签筛选**：`tag:科幻 AND tag:翻译`
 - **字段过滤**：`author:刘慈欣`、`rating:>=4`、`date:>=2024-01-01`、`title:三体`
 - **布尔逻辑**：AND / OR / NOT、括号
@@ -28,14 +29,13 @@
 ## 实现要点
 
 ### Phase A：基础搜索闭环
-- [x] 启用主窗口顶部现有 `search_box`，placeholder 改为“搜索标题 / 描述”。
+- [x] 启用主窗口顶部现有 `search_box`。
 - [x] 200ms 防抖；按 Esc 清空搜索；清空后恢复当前左侧筛选结果。
 - [x] 搜索与左侧筛选组合为 AND：
   - 普通标签节点：`repo.list_projects(keyword=kw, tag=tag)`
   - 标签父节点：`repo.list_projects(keyword=kw, tag_prefix=prefix)`
   - 未标记 / MCP 修改过：在现有筛选逻辑基础上叠加 keyword
-- [x] 当前阶段关键词只搜 `projects.title` / `projects.description_md`。
-  “作者”等字段值已统一存入 `project_field_values`，留给 Phase B 字段过滤。
+- [x] 普通关键词搜索 `projects.title` / `projects.description_md` / 标签 / `project_field_values.value` / 文件 `path`、`label`、`subfolder`。
 - [x] 搜索结果刷新后尽量保留当前选中项目；若当前项目不在结果中，选中第一项或清空详情。
 - [x] 状态栏显示命中数量，例如“搜索命中 12 个项目”。
 - [x] MCP `query_projects(action="search")` 中 `keyword` / `field_filter` 均接入 Phase B 解析器；`tag` / `tag_prefix` 作为额外 AND 条件透传到 Repository 后端。
@@ -62,7 +62,7 @@
 - 兜底：`field:value` 中的 `field` 名解析到 system field key 或 user field id；非法字段名警告但不报错
 - 多标签 AND 必须用 `EXISTS` 子查询表达，避免单个 join 行无法同时匹配 `tag:科幻 AND tag:翻译`。
 - `NOT` 也用 `NOT EXISTS` / 参数化子句生成，避免 join 扩行后误排除。
-- 纯关键词 `三体` 等价于 `title:三体 OR description:三体`；不再把 `author` 放进 Phase A 的纯关键词范围，Phase B 若存在作者字段再通过字段查询命中。
+- 纯关键词 `三体` 走宽关键词搜索；`title:三体`、`author:刘慈欣` 等字段表达式仍保持精确字段范围。
 
 ### UI
 - [x] 主窗口顶部加搜索框 `QLineEdit`，加 placeholder 提示语法
@@ -99,14 +99,14 @@
 
 ## 验收
 - Phase A：
-  - [x] 顶部搜索框可输入，`三体` 能按标题 / 描述过滤项目
+  - [x] 顶部搜索框可输入，`三体` 能按标题 / 描述 / 标签 / 字段值 / 文件清单过滤项目
   - [x] 当前选中左侧标签时搜索，结果为“标签筛选 AND 关键词”
   - [x] 当前选中层级父标签时搜索，结果为“tag_prefix AND 关键词”
   - [x] Esc 清空搜索后仍保留左侧筛选
   - [x] `query_projects(action="search", keyword="三体")` 与 UI 基础搜索结果一致
 - Phase B：
   - [x] 复合查询：`tag:科幻 AND author:刘慈欣 AND rating:>=4` 能正确过滤
-  - [x] 纯关键词：`三体` 等价于 `title:三体 OR description:三体`
+  - [x] 纯关键词：`三体` 走宽关键词搜索；字段表达式保持精确字段范围
   - [x] 字段关键词：`author:刘慈欣` 能命中作者字段值
   - [x] 多标签：`tag:科幻 AND tag:翻译` 能命中同时拥有两个标签的项目
   - [x] 错误语法：`tag:(科幻` 显示错误提示，不清空输入，不崩溃
