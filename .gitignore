@@ -43,6 +43,7 @@ fileman.db-journal
 fileman.db-wal
 fileman.db-shm
 library/
+sample-library/
 
 # pyinstaller 临时输出（也被 build/ dist/ 覆盖）
 *.manifest

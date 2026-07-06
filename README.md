@@ -203,6 +203,14 @@ app/
 
 > Developer end-to-end self-check scripts live in [`selftests/`](./selftests/README.md) (run manually, not in CI).
 
+For manual feature testing, generate a complete sample library with:
+
+```powershell
+python tools/create_sample_library.py --target sample-library --force
+```
+
+Then open `sample-library/` from **Library → Switch Library**. See [`docs/sample-library.md`](./docs/sample-library.md) for the covered scenarios.
+
 ## Moving & Syncing Your Library
 
 Each LLM Cabinet library is **one self-contained directory** (containing `cabinet.db` + `library/` + a `.llm-cabinet` marker). **No export/import needed to relocate**:
