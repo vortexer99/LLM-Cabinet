@@ -1402,18 +1402,21 @@ class MainWindow(QMainWindow):
         # 右：上=预览 / 下=详情卡片 + 文件表
         # ============================================================
         right = self._build_right_panel()
+        center.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        right.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
 
         # ============================================================ 拼装
         splitter = QSplitter(Qt.Horizontal)
+        self._main_splitter = splitter
         splitter.addWidget(left)
         splitter.addWidget(center)
         splitter.addWidget(right)
-        # 默认宽度比 = 1 : 4 : 2（标签栏 : 项目栏 : 文件预览栏）
-        # stretchFactor 控制窗口缩放时三栏的拉伸比例；setSizes 给初始
-        # 绝对值（按窗口默认宽 1400 算 200 / 800 / 400 = 1:4:2）
-        splitter.setStretchFactor(0, 1)
-        splitter.setStretchFactor(1, 4)
-        splitter.setStretchFactor(2, 2)
+        # 默认宽度比 = 1 : 4 : 2。窗口大小变化时只让中间项目区伸缩；
+        # 右侧详情/预览栏保持用户当前拖拽出的宽度，不随选中项目内容变化。
+        splitter.setChildrenCollapsible(False)
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        splitter.setStretchFactor(2, 0)
         splitter.setSizes([200, 800, 400])
         splitter.setHandleWidth(1)
 
@@ -1455,10 +1458,12 @@ class MainWindow(QMainWindow):
         self.lbl_meta_title = QLabel("（未选择项目）")
         self.lbl_meta_title.setProperty("h1", True)
         self.lbl_meta_title.setWordWrap(True)
+        self.lbl_meta_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
 
         self.lbl_meta_desc = QLabel("")
         self.lbl_meta_desc.setProperty("muted", True)
         self.lbl_meta_desc.setWordWrap(True)
+        self.lbl_meta_desc.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
         # 限制为 2~3 行：用最大高度限制 + 文本省略
         fm = self.lbl_meta_desc.fontMetrics()
         self.lbl_meta_desc.setMaximumHeight(fm.lineSpacing() * 3 + 4)
@@ -1467,6 +1472,7 @@ class MainWindow(QMainWindow):
         self.preview = PreviewPanel()
 
         top = QWidget()
+        top.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         top_l = QVBoxLayout(top)
         top_l.setContentsMargins(12, 10, 12, 6)
         top_l.setSpacing(4)
@@ -1518,6 +1524,7 @@ class MainWindow(QMainWindow):
         files_header.addWidget(btn_add_file)
 
         self.tbl_files = QTreeWidget()
+        self.tbl_files.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.tbl_files.setHeaderLabels([c.label for c in FILES_COLUMNS])
         self._files_dnd = FilesTableDnD(self.tbl_files)
         self._files_dnd.files_dropped.connect(self._on_dropped_on_files_table)
@@ -1573,6 +1580,7 @@ class MainWindow(QMainWindow):
         ops.addWidget(b_del2)
 
         self._files_panel = QWidget()
+        self._files_panel.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         bl = QVBoxLayout(self._files_panel)
         bl.setContentsMargins(12, 6, 12, 10)
         bl.setSpacing(8)
@@ -1582,6 +1590,7 @@ class MainWindow(QMainWindow):
 
         # 上下垂直 splitter
         self._right_v_split = QSplitter(Qt.Vertical)
+        self._right_v_split.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self._right_v_split.addWidget(top)
         self._right_v_split.addWidget(self._files_panel)
         self._right_v_split.setStretchFactor(0, 1)
@@ -2119,6 +2128,7 @@ class MainWindow(QMainWindow):
 
     def _show_multi_selection(self, count: int) -> None:
         """多选时显示选中数量，清空文件表和预览。"""
+        splitter_sizes = self._main_splitter_sizes()
         # 清空文件表 & 预览
         self.tbl_files.blockSignals(True)
         self.tbl_files.clear()
@@ -2130,8 +2140,10 @@ class MainWindow(QMainWindow):
         self.lbl_meta_desc.setText("")
         self.lbl_files_hint.setText("")
         self.statusBar().showMessage(f"已选中 {count} 个项目")
+        self._restore_main_splitter_sizes(splitter_sizes)
 
     def _show_project(self, p: Project | None) -> None:
+        splitter_sizes = self._main_splitter_sizes()
         # 清空文件表 & 预览
         self.tbl_files.blockSignals(True)
         self.tbl_files.clear()
@@ -2143,6 +2155,7 @@ class MainWindow(QMainWindow):
             self.lbl_meta_desc.setText("")
             self.lbl_files_hint.setText("")
             self.statusBar().showMessage("")
+            self._restore_main_splitter_sizes(splitter_sizes)
             return
 
         # 标题
@@ -2192,6 +2205,18 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"项目 #{p.id}  ·  {p.title}  ·  {len(files)} 文件"
         )
+        self._restore_main_splitter_sizes(splitter_sizes)
+
+    def _main_splitter_sizes(self) -> list[int]:
+        splitter = getattr(self, "_main_splitter", None)
+        return splitter.sizes() if splitter is not None else []
+
+    def _restore_main_splitter_sizes(self, sizes: list[int]) -> None:
+        splitter = getattr(self, "_main_splitter", None)
+        if splitter is None or not sizes or sum(sizes) <= 0:
+            return
+        splitter.setSizes(sizes)
+        QTimer.singleShot(0, lambda s=list(sizes): splitter.setSizes(s))
 
     FILES_TREE_SORT_SETTING_KEY = "files_table_sort_tree"
     EXPLICIT_SUBFOLDERS_SETTING_KEY = "explicit_subfolders"
