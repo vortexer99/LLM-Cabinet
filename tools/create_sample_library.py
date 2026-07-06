@@ -17,10 +17,11 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import shutil
+import struct
 import sys
+import zlib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -40,9 +41,24 @@ from app.search_history import (
 )
 
 
-PNG_1X1 = base64.b64decode(
-    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/p9sAAAAASUVORK5CYII="
-)
+def _png_1x1() -> bytes:
+    """生成合法的 1x1 RGBA PNG，占位用于封面/图片测试。"""
+
+    def chunk(tag: bytes, data: bytes) -> bytes:
+        return (
+            struct.pack(">I", len(data))
+            + tag
+            + data
+            + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+        )
+
+    header = struct.pack(">IIBBBBB", 1, 1, 8, 6, 0, 0, 0)
+    # 每行以 filter byte 开头，随后是 RGBA 像素。
+    pixels = b"\x00\x4a\x90\xe2\xff"
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(pixels)) + chunk(b"IEND", b"")
+
+
+PNG_1X1 = _png_1x1()
 
 
 def main() -> int:
