@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import shutil
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QSize, Qt, QTimer
@@ -213,6 +214,8 @@ class MainWindow(QMainWindow):
         self.library_root = library_root           # Path | None；当前活动库根目录
         self._pending_switch_to = None             # 关闭后由 main() 检测的"重启切换"目标：
                                                    # Path = 切到该路径；"__welcome__" = 重启进 Welcome；None = 不重启
+        self._search_menu_open = False
+        self._search_menu_last_closed_at = 0.0
 
         # 标题栏带上当前库 label，方便用户知道在哪个库
         title = "LLM Cabinet  ·  AI 项目化文件管理器"
@@ -1851,52 +1854,59 @@ class MainWindow(QMainWindow):
 
     def _show_search_menu(self) -> None:
         """显示收藏表达式与最近搜索。"""
+        if self._search_menu_open:
+            return
+        self._search_menu_open = True
         menu = QMenu(self)
-        saved = load_saved_searches(
-            self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
-        )
-        history = load_history(self.repo.get_setting(HISTORY_SETTING_KEY, "[]"))
+        try:
+            saved = load_saved_searches(
+                self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
+            )
+            history = load_history(self.repo.get_setting(HISTORY_SETTING_KEY, "[]"))
 
-        if saved:
-            m_saved = menu.addMenu("收藏")
-            for item in saved:
-                name = item["name"]
-                query = item["query"]
-                act = m_saved.addAction(f"☆ {name}：{query}")
-                act.triggered.connect(
-                    lambda _checked=False, q=query: self._apply_search_query(q)
-                )
-            m_del_saved = menu.addMenu("删除收藏")
-            for item in saved:
-                name = item["name"]
-                act = m_del_saved.addAction(f"✕ {name}")
-                act.triggered.connect(
-                    lambda _checked=False, n=name: self._delete_saved_search(n)
-                )
-
-        if history:
             if saved:
-                menu.addSeparator()
-            m_hist = menu.addMenu("最近搜索")
-            for query in history:
-                act = m_hist.addAction(query)
-                act.triggered.connect(
-                    lambda _checked=False, q=query: self._apply_search_query(q)
-                )
-            m_del_hist = menu.addMenu("删除历史")
-            for query in history:
-                label = query if len(query) <= 48 else query[:45] + "..."
-                act = m_del_hist.addAction(f"✕ {label}")
-                act.triggered.connect(
-                    lambda _checked=False, q=query: self._delete_search_history(q)
-                )
+                m_saved = menu.addMenu("收藏")
+                for item in saved:
+                    name = item["name"]
+                    query = item["query"]
+                    act = m_saved.addAction(f"☆ {name}：{query}")
+                    act.triggered.connect(
+                        lambda _checked=False, q=query: self._apply_search_query(q)
+                    )
+                m_del_saved = menu.addMenu("删除收藏")
+                for item in saved:
+                    name = item["name"]
+                    act = m_del_saved.addAction(f"✕ {name}")
+                    act.triggered.connect(
+                        lambda _checked=False, n=name: self._delete_saved_search(n)
+                    )
 
-        if not saved and not history:
-            act = menu.addAction("暂无搜索历史")
-            act.setEnabled(False)
+            if history:
+                if saved:
+                    menu.addSeparator()
+                m_hist = menu.addMenu("最近搜索")
+                for query in history:
+                    act = m_hist.addAction(query)
+                    act.triggered.connect(
+                        lambda _checked=False, q=query: self._apply_search_query(q)
+                    )
+                m_del_hist = menu.addMenu("删除历史")
+                for query in history:
+                    label = query if len(query) <= 48 else query[:45] + "..."
+                    act = m_del_hist.addAction(f"✕ {label}")
+                    act.triggered.connect(
+                        lambda _checked=False, q=query: self._delete_search_history(q)
+                    )
 
-        anchor = self.btn_search_menu if hasattr(self, "btn_search_menu") else self.search_box
-        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+            if not saved and not history:
+                act = menu.addAction("暂无搜索历史")
+                act.setEnabled(False)
+
+            anchor = self.btn_search_menu if hasattr(self, "btn_search_menu") else self.search_box
+            menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+        finally:
+            self._search_menu_open = False
+            self._search_menu_last_closed_at = time.monotonic()
 
     def _delete_search_history(self, query: str) -> None:
         raw = self.repo.get_setting(HISTORY_SETTING_KEY, "[]")
@@ -4317,6 +4327,10 @@ class MainWindow(QMainWindow):
         """全局监听 drag 进出，控制 DropZone 显隐。"""
         et = ev.type()
         if et == QEvent.FocusIn and obj is self.search_box:
+            if self._search_menu_open:
+                return super().eventFilter(obj, ev)
+            if time.monotonic() - self._search_menu_last_closed_at < 0.4:
+                return super().eventFilter(obj, ev)
             has_saved = bool(load_saved_searches(
                 self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
             ))
