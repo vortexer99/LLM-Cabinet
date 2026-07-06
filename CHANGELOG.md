@@ -15,6 +15,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 新增 `selftests/task03_search_phase_a.py`，覆盖标题/描述关键词、keyword + tag/tag_prefix、未分类 keyword 与 MCP 搜索入口。
 - **类 Calibre 搜索（task #03 Phase B）**：新增 `app/search.py` 递归下降解析器，支持纯关键词、字段过滤、标签、`AND` / `OR` / `NOT` 与括号；Repository 新增 `list_projects_query(ast)` 参数化 SQL 后端，MCP `query_projects(action="search")` 的 `field_filter` 同步接入；主界面搜索框新增“全库”切换，可临时忽略左侧筛选范围。
 - 新增 `selftests/task03_search_phase_b.py`，覆盖字段 key / 字段显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索。
+- **搜索历史与收藏表达式（task #03 Phase C）**：成功执行的搜索自动保存到 `settings.search_history`；搜索框焦点/下拉按钮可复用最近搜索；☆ 按钮可命名收藏当前表达式并保存到 `settings.saved_searches`。
+- 新增 `app/search_history.py` 与 `selftests/task03_search_phase_c.py`，覆盖搜索历史去重/上限、坏 JSON 容错、收藏新增/覆盖/删除。
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
 - 新增 `selftests/task29_file_storage_folder_ops.py`，覆盖文件夹粒度存储操作的递归范围与 missing-only 筛选。

@@ -8,7 +8,7 @@
 |---|---|---|---|---|
 | [01-files-table-customization.md](./01-files-table-customization.md) | 文件表列可见性 + 列宽自定义 + 存储方式列 | S+XS | P1 | ✅ 2026-05-31 |
 | [02-files-table-detach-window.md](./02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | ✅ 2026-06-10 |
-| [03-search-calibre-like.md](./03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔 + 搜索历史 + 收藏表达式）；已拆 Phase A (XS~S) + Phase B (M) + Phase C (XS) | M | P0 | 🚧 Phase A/B 完成（Phase C 待做） |
+| [03-search-calibre-like.md](./03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔 + 搜索历史 + 收藏表达式）；已拆 Phase A (XS~S) + Phase B (M) + Phase C (XS) | M | P0 | ✅ 2026-07-07 |
 | [04-project-system-files-folding.md](./04-project-system-files-folding.md) | 项目内系统/衍生文件折叠（二态视图：仅用户文件 / 显示所有，消费 #30 origin） | S | P1 | ✅ 2026-06-11 |
 | [05-data-paths-migration-and-export.md](./05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖，归档保留） |
 | [06-tags-hierarchy-folding.md](./06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |

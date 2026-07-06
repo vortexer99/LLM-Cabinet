@@ -42,6 +42,16 @@ from ..library import Library
 from ..models import FileItem, Project
 from ..repository import Repository
 from ..search import combine_and, field_term, parse_search
+from ..search_history import (
+    HISTORY_SETTING_KEY,
+    SAVED_SEARCHES_SETTING_KEY,
+    add_history,
+    load_history,
+    load_saved_searches,
+    remove_history,
+    remove_saved_search,
+    upsert_saved_search,
+)
 from ..utils import detect_kind, human_size as _human_size, open_with_default_app, reveal_in_explorer
 from .dnd import FilesTableDnD, ProjectViewDnD
 from .files_table_columns import (
@@ -1251,6 +1261,16 @@ class MainWindow(QMainWindow):
         self._search_timer.timeout.connect(self.refresh_projects)
         self.search_box.textChanged.connect(lambda _text: self._search_timer.start())
 
+        self.btn_search_menu = QToolButton()
+        self.btn_search_menu.setText("⌄")
+        self.btn_search_menu.setToolTip("搜索历史与收藏")
+        self.btn_search_menu.clicked.connect(self._show_search_menu)
+
+        self.btn_save_search = QToolButton()
+        self.btn_save_search.setText("☆")
+        self.btn_save_search.setToolTip("收藏当前搜索表达式")
+        self.btn_save_search.clicked.connect(self._save_current_search)
+
         self.btn_search_all = QToolButton()
         self.btn_search_all.setText("全库")
         self.btn_search_all.setToolTip("搜索全部项目（忽略左侧筛选）")
@@ -1272,6 +1292,8 @@ class MainWindow(QMainWindow):
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.addWidget(self.search_box, 1)
+        top_row.addWidget(self.btn_search_menu)
+        top_row.addWidget(self.btn_save_search)
         top_row.addWidget(self.btn_search_all)
         top_row.addSpacing(6)
         top_row.addWidget(self.btn_view_grid)
@@ -1809,6 +1831,122 @@ class MainWindow(QMainWindow):
         pix = QPixmap(str(path))
         return pix if not pix.isNull() else None
 
+    # ============================================================ search helpers
+    def _apply_search_query(self, query: str) -> None:
+        """从历史/收藏菜单选择表达式后填入并触发搜索。"""
+        query = (query or "").strip()
+        self.search_box.setText(query)
+        self._search_timer.start()
+
+    def _record_search_history(self, query: str) -> None:
+        """保存成功执行的非空查询。语法错误路径不会调用到这里。"""
+        query = (query or "").strip()
+        if not query:
+            return
+        raw = self.repo.get_setting(HISTORY_SETTING_KEY, "[]")
+        items = load_history(raw)
+        if items and items[0] == query:
+            return
+        self.repo.set_setting(HISTORY_SETTING_KEY, add_history(raw, query))
+
+    def _show_search_menu(self) -> None:
+        """显示收藏表达式与最近搜索。"""
+        menu = QMenu(self)
+        saved = load_saved_searches(
+            self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
+        )
+        history = load_history(self.repo.get_setting(HISTORY_SETTING_KEY, "[]"))
+
+        if saved:
+            m_saved = menu.addMenu("收藏")
+            for item in saved:
+                name = item["name"]
+                query = item["query"]
+                act = m_saved.addAction(f"☆ {name}：{query}")
+                act.triggered.connect(
+                    lambda _checked=False, q=query: self._apply_search_query(q)
+                )
+            m_del_saved = menu.addMenu("删除收藏")
+            for item in saved:
+                name = item["name"]
+                act = m_del_saved.addAction(f"✕ {name}")
+                act.triggered.connect(
+                    lambda _checked=False, n=name: self._delete_saved_search(n)
+                )
+
+        if history:
+            if saved:
+                menu.addSeparator()
+            m_hist = menu.addMenu("最近搜索")
+            for query in history:
+                act = m_hist.addAction(query)
+                act.triggered.connect(
+                    lambda _checked=False, q=query: self._apply_search_query(q)
+                )
+            m_del_hist = menu.addMenu("删除历史")
+            for query in history:
+                label = query if len(query) <= 48 else query[:45] + "..."
+                act = m_del_hist.addAction(f"✕ {label}")
+                act.triggered.connect(
+                    lambda _checked=False, q=query: self._delete_search_history(q)
+                )
+
+        if not saved and not history:
+            act = menu.addAction("暂无搜索历史")
+            act.setEnabled(False)
+
+        anchor = self.btn_search_menu if hasattr(self, "btn_search_menu") else self.search_box
+        menu.exec(anchor.mapToGlobal(anchor.rect().bottomLeft()))
+
+    def _delete_search_history(self, query: str) -> None:
+        raw = self.repo.get_setting(HISTORY_SETTING_KEY, "[]")
+        self.repo.set_setting(HISTORY_SETTING_KEY, remove_history(raw, query))
+        self.statusBar().showMessage("已删除一条搜索历史", 3000)
+
+    def _delete_saved_search(self, name: str) -> None:
+        raw = self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
+        self.repo.set_setting(SAVED_SEARCHES_SETTING_KEY, remove_saved_search(raw, name))
+        self.statusBar().showMessage(f"已删除收藏「{name}」", 3000)
+
+    def _save_current_search(self) -> None:
+        query = self.search_box.text().strip()
+        if not query:
+            QMessageBox.information(self, "收藏搜索", "请先输入搜索表达式。")
+            return
+        parsed = parse_search(query)
+        if not parsed.ok:
+            err = parsed.error
+            msg = f"{err.message}（位置 {err.position + 1}）" if err else "语法错误"
+            QMessageBox.warning(self, "收藏搜索", f"当前表达式有语法错误：{msg}")
+            return
+        name, ok = QInputDialog.getText(
+            self,
+            "收藏搜索",
+            "给这条搜索起个名字：",
+            text=query[:24],
+        )
+        if not ok:
+            return
+        name = name.strip()
+        if not name:
+            QMessageBox.warning(self, "收藏搜索", "收藏名称不能为空。")
+            return
+
+        raw = self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
+        exists = any(item["name"] == name for item in load_saved_searches(raw))
+        if exists:
+            ans = QMessageBox.question(
+                self,
+                "覆盖收藏",
+                f"已存在名为「{name}」的收藏，是否覆盖？",
+            )
+            if ans != QMessageBox.Yes:
+                return
+        new_raw, overwritten = upsert_saved_search(raw, name, query)
+        self.repo.set_setting(SAVED_SEARCHES_SETTING_KEY, new_raw)
+        action = "已覆盖收藏" if overwritten else "已收藏搜索"
+        self.statusBar().showMessage(f"{action}「{name}」", 3000)
+
     # ============================================================ projects
     def refresh_projects(self) -> None:
         prev_project_id = self._current_project_id
@@ -1880,6 +2018,7 @@ class MainWindow(QMainWindow):
 
         if keyword:
             title_text = f"{title_text} · 搜索「{keyword}」"
+            self._record_search_history(keyword)
         self.lbl_filter_title.setText(title_text)
 
         covers: dict[int, QPixmap] = {}
@@ -4177,6 +4316,15 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, ev):  # noqa: D401
         """全局监听 drag 进出，控制 DropZone 显隐。"""
         et = ev.type()
+        if et == QEvent.FocusIn and obj is self.search_box:
+            has_saved = bool(load_saved_searches(
+                self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
+            ))
+            has_history = bool(load_history(
+                self.repo.get_setting(HISTORY_SETTING_KEY, "[]")
+            ))
+            if has_saved or has_history:
+                QTimer.singleShot(0, self._show_search_menu)
         if et == QEvent.KeyPress and obj is self.search_box:
             if ev.key() == Qt.Key_Escape and self.search_box.text():
                 self.search_box.clear()
