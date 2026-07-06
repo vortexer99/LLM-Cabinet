@@ -6,6 +6,7 @@
 - GUI 搜索路径应命中自定义字段值和文件说明
 - 项目右键菜单应固定本次右键目标，MCP 已读不能清错项目
 - MCP 未读筛选清除后应刷新列表
+- 目录项目包和 ZIP 项目包导入/导出 round-trip 应刷新 GUI 列表
 - 主 splitter 宽度应写入设置并可被新窗口读取
 - 主 splitter 右栏宽度不应随项目选择漂移
 
@@ -31,6 +32,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from selftests._common import T, closing_repos
 
 from app.db import connect
+from app.exporter import ExportOptions, export_project
+from app.importer import ImportOptions, cleanup_extracted_zips, import_folder_as_project, scan_folders
 from app.library import Library
 from app.models import FileItem, Project
 from app.repository import Repository
@@ -263,6 +266,132 @@ def test_table_context_targets_and_mcp_filter_refresh(tmp: Path, t: T) -> None:
             _close_window(win)
 
 
+def _make_export_source(win: MainWindow, tmp: Path, *, title: str) -> int:
+    fid_author = _field(win.repo, "作者", "text", f"author_{title}")
+    src = tmp / "source.txt"
+    src.write_text(f"{title} content", encoding="utf-8")
+    project = Project(
+        title=title,
+        description_md=f"{title} 描述",
+        tags=["导入导出/GUI", "状态/测试"],
+        field_values={fid_author: "GUI 作者"},
+    )
+    pid = win.repo.save_project(project)
+    win.repo.add_file(FileItem(
+        project_id=pid,
+        path=str(src.resolve()),
+        is_relative=False,
+        label="源文件说明",
+        kind="text",
+        subfolder="docs/manual",
+        origin="user",
+    ))
+    win.refresh_projects()
+    return pid
+
+
+def _import_exported_package(
+    win: MainWindow,
+    package_path: Path,
+) -> int:
+    plans = scan_folders([package_path], win.repo)
+    try:
+        if len(plans) != 1:
+            raise AssertionError(f"expected one import plan, got {len(plans)}")
+        result = import_folder_as_project(
+            win.repo,
+            win.library,
+            plans[0],
+            ImportOptions(
+                storage_mode="copy",
+                title_source="project_json",
+                field_policy="ignore",
+                field_policy_apply_all=True,
+            ),
+        )
+        win.refresh_projects()
+        return int(result.project_id)
+    finally:
+        cleanup_extracted_zips(plans)
+
+
+def _assert_round_trip_project(
+    win: MainWindow,
+    t: T,
+    imported_pid: int,
+    *,
+    title: str,
+    label: str,
+) -> None:
+    imported = win.repo.get_project(imported_pid)
+    t.assert_true(f"{label}: imported project exists", imported is not None)
+    if imported is None:
+        return
+    t.assert_eq(f"{label}: title restored", imported.title, title)
+    t.assert_eq(f"{label}: tags restored", sorted(imported.tags), ["导入导出/GUI", "状态/测试"])
+    t.assert_true(f"{label}: project visible after GUI refresh", title in _titles(win))
+
+    files = win.repo.list_files(imported_pid)
+    t.assert_eq(f"{label}: one file restored", len(files), 1)
+    if not files:
+        return
+    restored = files[0]
+    t.assert_true(f"{label}: file stored as relative copy", restored.is_relative)
+    t.assert_eq(f"{label}: file label restored", restored.label, "源文件说明")
+    t.assert_eq(f"{label}: file subfolder restored", restored.subfolder, "docs/manual")
+    t.assert_true(
+        f"{label}: copied file exists",
+        win.library.resolve(restored.path, restored.is_relative).is_file(),
+    )
+
+
+def test_directory_package_export_import_round_trip(tmp: Path, t: T) -> None:
+    win, repo = _window(tmp)
+    with closing_repos(repo):
+        try:
+            title = "GUI 目录包 RoundTrip"
+            pid = _make_export_source(win, tmp, title=title)
+            export_root = tmp / "export_directory"
+            export_root.mkdir()
+            result = export_project(
+                win.repo,
+                win.library,
+                win.repo.get_project(pid),
+                ExportOptions(target_root=export_root, copy_link_files=True),
+            )
+            t.assert_true("directory export project.json exists", (result.project_dir / "project.json").is_file())
+            imported_pid = _import_exported_package(win, result.project_dir)
+            _assert_round_trip_project(win, t, imported_pid, title=title, label="directory package")
+        finally:
+            _close_window(win)
+
+
+def test_zip_package_export_import_round_trip(tmp: Path, t: T) -> None:
+    win, repo = _window(tmp)
+    with closing_repos(repo):
+        try:
+            title = "GUI ZIP包 RoundTrip"
+            pid = _make_export_source(win, tmp, title=title)
+            export_root = tmp / "export_zip"
+            export_root.mkdir()
+            result = export_project(
+                win.repo,
+                win.library,
+                win.repo.get_project(pid),
+                ExportOptions(
+                    target_root=export_root,
+                    copy_link_files=True,
+                    export_format="zip",
+                ),
+            )
+            t.assert_true("zip export file exists", result.project_dir.is_file())
+            t.assert_true("zip export has zip suffix", result.project_dir.suffix.lower() == ".zip")
+            imported_pid = _import_exported_package(win, result.project_dir)
+            _assert_round_trip_project(win, t, imported_pid, title=title, label="zip package")
+        finally:
+            _close_window(win)
+
+
 def test_main_splitter_sizes_persist(tmp: Path, t: T) -> None:
     win, repo = _window(tmp)
     with closing_repos(repo):
@@ -326,6 +455,8 @@ def main() -> bool:
             ("GUI broad keyword search", test_gui_keyword_searches_fields_and_files),
             ("MCP seen context targets", test_mcp_seen_context_targets),
             ("Table targets and MCP filter", test_table_context_targets_and_mcp_filter_refresh),
+            ("Directory package export/import", test_directory_package_export_import_round_trip),
+            ("ZIP package export/import", test_zip_package_export_import_round_trip),
             ("Main splitter persistence", test_main_splitter_sizes_persist),
             ("Right panel width stable", test_right_panel_width_stable_across_selection),
         ]
