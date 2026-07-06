@@ -5,6 +5,7 @@ import sqlite3
 from typing import Iterable, Optional
 
 from .models import Field, FieldSuggestion, FileItem, LLMTask, PendingFile, Project
+from .search import AndNode, NotNode, OrNode, SearchNode, TermNode
 
 
 class Repository:
@@ -93,6 +94,210 @@ class Repository:
         return self._attach_project_extras(
             [self._row_to_project(r) for r in rows]
         )
+
+    def list_projects_query(self, ast: SearchNode | None) -> list[Project]:
+        """按 Phase B 搜索 AST 列出项目。
+
+        解析器只负责把字符串变成 AST；这里负责字段解析与参数化 SQL。
+        所有标签条件都用 EXISTS，保证 ``tag:A AND tag:B`` 能匹配同时拥有
+        两个标签的项目。
+        """
+        sql = "SELECT p.* FROM projects p"
+        params: list = []
+        if ast is not None:
+            where, params = self._compile_search_node(ast)
+            sql += f" WHERE {where}"
+        sql += " ORDER BY p.updated_at DESC, p.id DESC"
+        rows = self.conn.execute(sql, params).fetchall()
+        return self._attach_project_extras(
+            [self._row_to_project(r) for r in rows]
+        )
+
+    def _compile_search_node(self, node: SearchNode) -> tuple[str, list]:
+        """递归编译搜索 AST，返回 ``(sql片段, 参数列表)``。"""
+        if isinstance(node, AndNode):
+            parts: list[str] = []
+            params: list = []
+            for item in node.items:
+                sql, ps = self._compile_search_node(item)
+                parts.append(f"({sql})")
+                params.extend(ps)
+            return " AND ".join(parts) if parts else "1=1", params
+        if isinstance(node, OrNode):
+            parts = []
+            params = []
+            for item in node.items:
+                sql, ps = self._compile_search_node(item)
+                parts.append(f"({sql})")
+                params.extend(ps)
+            return " OR ".join(parts) if parts else "1=0", params
+        if isinstance(node, NotNode):
+            sql, params = self._compile_search_node(node.item)
+            return f"NOT ({sql})", params
+        if isinstance(node, TermNode):
+            return self._compile_search_term(node)
+        return "1=0", []
+
+    def _compile_search_term(self, term: TermNode) -> tuple[str, list]:
+        value = (term.value or "").strip()
+        if not value:
+            return "1=0", []
+
+        if term.field is None:
+            kw = f"%{value}%"
+            return "(p.title LIKE ? OR p.description_md LIKE ?)", [kw, kw]
+
+        field = self._resolve_search_field(term.field)
+        kind = field["kind"]
+        if kind == "unknown":
+            # 不抛给 UI；写错字段时返回空结果，避免误以为全库都命中。
+            return "1=0", []
+        if kind == "internal_untagged":
+            return (
+                "NOT EXISTS ("
+                " SELECT 1 FROM project_tags pt WHERE pt.project_id = p.id"
+                ")"
+            ), []
+        if kind == "tag":
+            return self._compile_tag_search(term.op, value, prefix=False)
+        if kind == "tag_prefix":
+            return self._compile_tag_search(":", value, prefix=True)
+        if kind == "project":
+            return self._compile_project_column_search(field["column"], term.op, value)
+        if kind == "field":
+            return self._compile_field_value_search(
+                int(field["field_id"]),
+                str(field.get("type") or "text"),
+                term.op,
+                value,
+            )
+        return "1=0", []
+
+    def _resolve_search_field(self, raw: str) -> dict:
+        """按 task #03 规则解析字段名。"""
+        name = (raw or "").strip()
+        folded = name.casefold()
+
+        protected = {
+            "title": {"kind": "project", "column": "title", "type": "text"},
+            "description": {"kind": "project", "column": "description_md", "type": "textarea"},
+            "tag": {"kind": "tag"},
+            "tags": {"kind": "tag"},
+            # 下面是 UI/后端组合左侧筛选用的内部字段，不暴露给用户文档。
+            "__tag_prefix": {"kind": "tag_prefix"},
+            "__untagged": {"kind": "internal_untagged"},
+        }
+        if folded in protected:
+            return protected[folded]
+
+        fields = self.list_fields()
+        for f in fields:
+            if (f.key or "").casefold() == folded:
+                if f.key == "title":
+                    return {"kind": "project", "column": "title", "type": f.type}
+                if f.key == "description":
+                    return {"kind": "project", "column": "description_md", "type": f.type}
+                if f.key == "tags":
+                    return {"kind": "tag"}
+                return {"kind": "field", "field_id": f.id, "type": f.type}
+        for f in fields:
+            if f.name == name:
+                if f.key == "title":
+                    return {"kind": "project", "column": "title", "type": f.type}
+                if f.key == "description":
+                    return {"kind": "project", "column": "description_md", "type": f.type}
+                if f.key == "tags":
+                    return {"kind": "tag"}
+                return {"kind": "field", "field_id": f.id, "type": f.type}
+        return {"kind": "unknown"}
+
+    def _compile_project_column_search(
+        self, column: str, op: str, value: str,
+    ) -> tuple[str, list]:
+        if column not in {"title", "description_md"}:
+            return "1=0", []
+        if op == ":":
+            return f"p.{column} LIKE ?", [f"%{value}%"]
+        if op == "=":
+            return f"p.{column} = ?", [value]
+        return "1=0", []
+
+    def _compile_tag_search(
+        self, op: str, value: str, *, prefix: bool,
+    ) -> tuple[str, list]:
+        if prefix:
+            return (
+                "EXISTS ("
+                " SELECT 1 FROM project_tags pt"
+                " JOIN tags t ON t.id = pt.tag_id"
+                " WHERE pt.project_id = p.id"
+                " AND (t.name = ? OR t.name LIKE ?)"
+                ")"
+            ), [value, f"{value}/%"]
+        if op == ":":
+            cmp_sql = "t.name LIKE ?"
+            params = [f"%{value}%"]
+        elif op == "=":
+            cmp_sql = "t.name = ?"
+            params = [value]
+        else:
+            return "1=0", []
+        return (
+            "EXISTS ("
+            " SELECT 1 FROM project_tags pt"
+            " JOIN tags t ON t.id = pt.tag_id"
+            " WHERE pt.project_id = p.id"
+            f" AND {cmp_sql}"
+            ")"
+        ), params
+
+    def _compile_field_value_search(
+        self, field_id: int, field_type: str, op: str, value: str,
+    ) -> tuple[str, list]:
+        if field_id <= 0:
+            return "1=0", []
+        if field_type in {"number", "rating"}:
+            sql, params = self._field_numeric_condition(op, value)
+        elif field_type == "date":
+            sql, params = self._field_date_condition(op, value)
+        else:
+            sql, params = self._field_text_condition(op, value)
+        if not sql:
+            return "1=0", []
+        return (
+            "EXISTS ("
+            " SELECT 1 FROM project_field_values pfv"
+            " WHERE pfv.project_id = p.id"
+            " AND pfv.field_id = ?"
+            f" AND {sql}"
+            ")"
+        ), [field_id, *params]
+
+    @staticmethod
+    def _field_text_condition(op: str, value: str) -> tuple[str, list]:
+        if op == ":":
+            return "pfv.value LIKE ?", [f"%{value}%"]
+        if op == "=":
+            return "pfv.value = ?", [value]
+        return "", []
+
+    @staticmethod
+    def _field_numeric_condition(op: str, value: str) -> tuple[str, list]:
+        try:
+            number = float(value)
+        except ValueError:
+            return "", []
+        sql_op = "=" if op == ":" else op
+        if sql_op not in {"=", ">", ">=", "<", "<="}:
+            return "", []
+        return f"CAST(pfv.value AS REAL) {sql_op} ?", [number]
+
+    @staticmethod
+    def _field_date_condition(op: str, value: str) -> tuple[str, list]:
+        sql_op = "=" if op == ":" else op
+        if sql_op not in {"=", ">", ">=", "<", "<="}:
+            return "", []
+        return f"pfv.value {sql_op} ?", [value]
 
 
     def get_project(self, pid: int) -> Optional[Project]:

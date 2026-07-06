@@ -41,6 +41,7 @@ from PySide6.QtWidgets import (
 from ..library import Library
 from ..models import FileItem, Project
 from ..repository import Repository
+from ..search import combine_and, field_term, parse_search
 from ..utils import detect_kind, human_size as _human_size, open_with_default_app, reveal_in_explorer
 from .dnd import FilesTableDnD, ProjectViewDnD
 from .files_table_columns import (
@@ -1241,7 +1242,7 @@ class MainWindow(QMainWindow):
         # —— 顶部搜索条 + 视图切换
         self.search_box = QLineEdit()
         self.search_box.setObjectName("SearchBox")
-        self.search_box.setPlaceholderText("🔍  搜索标题 / 描述")
+        self.search_box.setPlaceholderText("🔍  搜索：三体 / tag:科幻 AND rating:>=4")
         self.search_box.setClearButtonEnabled(True)
         self.search_box.setEnabled(True)
         self._search_timer = QTimer(self)
@@ -1249,6 +1250,12 @@ class MainWindow(QMainWindow):
         self._search_timer.setInterval(200)
         self._search_timer.timeout.connect(self.refresh_projects)
         self.search_box.textChanged.connect(lambda _text: self._search_timer.start())
+
+        self.btn_search_all = QToolButton()
+        self.btn_search_all.setText("全库")
+        self.btn_search_all.setToolTip("搜索全部项目（忽略左侧筛选）")
+        self.btn_search_all.setCheckable(True)
+        self.btn_search_all.clicked.connect(lambda _checked=False: self.refresh_projects())
 
         self.btn_view_grid = QToolButton()
         self.btn_view_grid.setText("▦")
@@ -1265,6 +1272,7 @@ class MainWindow(QMainWindow):
         top_row = QHBoxLayout()
         top_row.setContentsMargins(0, 0, 0, 0)
         top_row.addWidget(self.search_box, 1)
+        top_row.addWidget(self.btn_search_all)
         top_row.addSpacing(6)
         top_row.addWidget(self.btn_view_grid)
         top_row.addWidget(self.btn_view_list)
@@ -1813,32 +1821,61 @@ class MainWindow(QMainWindow):
         kind = self._current_filter_kind
         value = self._current_filter_value
         keyword = self.search_box.text().strip() if hasattr(self, "search_box") else ""
+        search_all = (
+            bool(keyword)
+            and hasattr(self, "btn_search_all")
+            and self.btn_search_all.isChecked()
+        )
+        if search_all:
+            kind = "all"
+            value = ""
+        query_ast = None
+        if hasattr(self, "search_box"):
+            self.search_box.setStyleSheet("")
+            self.search_box.setToolTip("")
+        if keyword:
+            parsed = parse_search(keyword)
+            if not parsed.ok:
+                err = parsed.error
+                msg = f"搜索语法错误：{err.message}（位置 {err.position + 1}）" if err else "搜索语法错误"
+                self.search_box.setStyleSheet("QLineEdit#SearchBox { color: #b00020; }")
+                self.search_box.setToolTip(msg)
+                self.statusBar().showMessage(msg, 5000)
+                return
+            query_ast = parsed.ast
+            self.search_box.setStyleSheet("")
+            self.search_box.setToolTip("")
+
+        filter_ast = None
         if kind == "untagged":
-            projects = self.repo.list_projects_untagged(keyword=keyword)
+            filter_ast = field_term("__untagged", "1", "=")
+            projects = self.repo.list_projects_query(combine_and(query_ast, filter_ast))
             title_text = "未分类"
         elif kind == "review":
-            projects = self.repo.list_projects_pending_review()
-            if keyword:
-                needle = keyword.casefold()
-                projects = [
-                    p for p in projects
-                    if needle in (p.title or "").casefold()
-                    or needle in (p.description_md or "").casefold()
-                ]
+            review_pids = {
+                p.id for p in self.repo.list_projects_pending_review()
+                if p.id is not None
+            }
+            projects = [
+                p for p in self.repo.list_projects_query(query_ast)
+                if p.id in review_pids
+            ]
             title_text = "⚡ 待审阅 LLM 建议"
         elif kind == "tag" and value:
-            projects = self.repo.list_projects(keyword=keyword, tag=value)
+            filter_ast = field_term("tag", value, "=")
+            projects = self.repo.list_projects_query(combine_and(query_ast, filter_ast))
             title_text = f"#{value}"
         elif kind == "tag_prefix" and value:
-            projects = self.repo.list_projects(keyword=keyword, tag_prefix=value)
+            filter_ast = field_term("__tag_prefix", value)
+            projects = self.repo.list_projects_query(combine_and(query_ast, filter_ast))
             title_text = f"📁 {value} / *"
         elif kind == "mcp":
             mcp_pids = {p["id"] for p in self.repo.list_mcp_modified_projects()}
-            all_projects = self.repo.list_projects(keyword=keyword)
+            all_projects = self.repo.list_projects_query(query_ast)
             projects = [p for p in all_projects if p.id in mcp_pids]
             title_text = "🤖 未读MCP修改"
         else:
-            projects = self.repo.list_projects(keyword=keyword)
+            projects = self.repo.list_projects_query(query_ast)
             title_text = "全部项目"
 
         if keyword:

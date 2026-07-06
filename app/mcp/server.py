@@ -64,7 +64,7 @@ def make_mcp_server(ctx: LibraryContext) -> FastMCP:
         name="query_projects",
         description=(
             "对项目库的纯查询操作。通过 action 参数选择子操作：\n"
-            "  action=\"search\": 按 keyword（标题/描述模糊匹配）和/或 tag/tag_prefix 搜索项目，"
+            "  action=\"search\": 按 keyword / field_filter（支持 tag:科幻、author:刘慈欣、rating:>=4、AND/OR/NOT/括号）和/或 tag/tag_prefix 搜索项目，"
             "返回 id/title/tags/file_count/updated_at 摘要。两个参数都为空时一次性返回全部项目——无需分页或逐个 get。\n"
             "  action=\"get\": 必传 project_id，返回完整元数据（含 description/storage_mode/cover_file_id/field_values 等）。\n"
             "  action=\"count\": 统计项目总数；可传 tag 过滤。\n"

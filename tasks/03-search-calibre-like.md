@@ -9,7 +9,7 @@
 
 **工作量**：M（Phase A XS~S + Phase B M + Phase C XS）
 **优先级**：P0
-**状态**：🚧 Phase A 完成（Phase B/C 待做）
+**状态**：🚧 Phase A/B 完成（Phase C 待做）
 
 ## 来源
 `TODO.md → 📦 项目 & 文件管理` 第 1 条
@@ -38,7 +38,7 @@
   “作者”等字段值已统一存入 `project_field_values`，留给 Phase B 字段过滤。
 - [x] 搜索结果刷新后尽量保留当前选中项目；若当前项目不在结果中，选中第一项或清空详情。
 - [x] 状态栏显示命中数量，例如“搜索命中 12 个项目”。
-- [x] MCP `query_projects(action="search", field_filter=...)` 中的 `field_filter` 仍接受但忽略；等 Phase B 再接入。`tag_prefix` 已透传到 Repository 后端。
+- [x] MCP `query_projects(action="search")` 中 `keyword` / `field_filter` 均接入 Phase B 解析器；`tag` / `tag_prefix` 作为额外 AND 条件透传到 Repository 后端。
 
 ### 解析器 `app/search.py`
 - 单独模块，输入字符串 → 输出查询 AST
@@ -65,10 +65,10 @@
 - 纯关键词 `三体` 等价于 `title:三体 OR description:三体`；不再把 `author` 放进 Phase A 的纯关键词范围，Phase B 若存在作者字段再通过字段查询命中。
 
 ### UI
-- 主窗口顶部加搜索框 `QLineEdit`，加 placeholder 提示语法
-- 200ms 防抖；按 Esc 清空
-- 搜索时左栏过滤可选：默认是 AND（搜索范围限定到当前标签）；右上加一个"搜索全部"切换
-- 错误的语法显示红字提示，但不阻断输入
+- [x] 主窗口顶部加搜索框 `QLineEdit`，加 placeholder 提示语法
+- [x] 200ms 防抖；按 Esc 清空
+- [x] 搜索时左栏过滤可选：默认是 AND（搜索范围限定到当前标签）；右上加一个"搜索全部"切换
+- [x] 错误的语法显示红字提示，但不阻断输入
 - **搜索历史下拉**：焦点进入搜索框时，自动弹出最近搜索列表（存储在 `settings` 表 `key='search_history'`，JSON 数组，最多 20 条）。点击历史条目直接填入并触发搜索。每条历史右侧有 ✕ 删除按钮。
 - **收藏表达式**：搜索框右侧加 ⭐ 按钮。当前搜索内容非空时点击弹出命名对话框 → 存入 `settings` 表 `key='saved_searches'`，JSON 格式 `[{"name": "高分科幻", "query": "tag:科幻 AND rating:>=4"}, ...]`。收藏在下拉列表顶部用 ⭐ 前缀区分，右侧有 ✕ 删除。
 
@@ -105,11 +105,11 @@
   - [x] Esc 清空搜索后仍保留左侧筛选
   - [x] `query_projects(action="search", keyword="三体")` 与 UI 基础搜索结果一致
 - Phase B：
-  - 复合查询：`tag:科幻 AND author:刘慈欣 AND rating:>=4` 能正确过滤
-  - 纯关键词：`三体` 等价于 `title:三体 OR description:三体`
-  - 字段关键词：`author:刘慈欣` 能命中作者字段值
-  - 多标签：`tag:科幻 AND tag:翻译` 能命中同时拥有两个标签的项目
-  - 错误语法：`tag:(科幻` 显示错误提示，不清空输入，不崩溃
+  - [x] 复合查询：`tag:科幻 AND author:刘慈欣 AND rating:>=4` 能正确过滤
+  - [x] 纯关键词：`三体` 等价于 `title:三体 OR description:三体`
+  - [x] 字段关键词：`author:刘慈欣` 能命中作者字段值
+  - [x] 多标签：`tag:科幻 AND tag:翻译` 能命中同时拥有两个标签的项目
+  - [x] 错误语法：`tag:(科幻` 显示错误提示，不清空输入，不崩溃
 - Phase C：
   - 搜索历史：执行搜索后自动保存，再次点开搜索框显示最近 5 条
   - 收藏表达式：保存"高分科幻"对应 `tag:科幻 AND rating:>=4`，下次从下拉选中直接执行

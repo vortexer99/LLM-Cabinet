@@ -13,6 +13,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 ### Added
 - **基础搜索（task #03 Phase A）**：启用主窗口顶部搜索框，按标题/描述关键词过滤项目，支持与左侧标签、标签父节点、未分类、待审阅和 MCP 修改筛选叠加为 AND；MCP `query_projects(action="search")` 同步支持 `tag_prefix`。
 - 新增 `selftests/task03_search_phase_a.py`，覆盖标题/描述关键词、keyword + tag/tag_prefix、未分类 keyword 与 MCP 搜索入口。
+- **类 Calibre 搜索（task #03 Phase B）**：新增 `app/search.py` 递归下降解析器，支持纯关键词、字段过滤、标签、`AND` / `OR` / `NOT` 与括号；Repository 新增 `list_projects_query(ast)` 参数化 SQL 后端，MCP `query_projects(action="search")` 的 `field_filter` 同步接入；主界面搜索框新增“全库”切换，可临时忽略左侧筛选范围。
+- 新增 `selftests/task03_search_phase_b.py`，覆盖字段 key / 字段显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索。
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
 - 新增 `selftests/task29_file_storage_folder_ops.py`，覆盖文件夹粒度存储操作的递归范围与 missing-only 筛选。

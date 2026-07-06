@@ -69,6 +69,7 @@ with closing_repos(repo_a, repo_b):
 | 脚本 | 验证范围 | 关联 task |
 |---|---|---|
 | [task03_search_phase_a.py](./task03_search_phase_a.py) | 基础搜索 Phase A：标题/描述 keyword、keyword + tag/tag_prefix AND、未分类 keyword、MCP `search_projects` 透传 tag_prefix | [tasks/03](../tasks/03-search-calibre-like.md) Phase A |
+| [task03_search_phase_b.py](./task03_search_phase_b.py) | 类 Calibre 搜索 Phase B：字段 key / 显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索 | [tasks/03](../tasks/03-search-calibre-like.md) Phase B |
 | [task06_tags_hierarchy.py](./task06_tags_hierarchy.py) | `Repository.list_projects(tag, tag_prefix)` 的层级匹配语义 | [tasks/06](../tasks/06-tags-hierarchy-folding.md) |
 | [task07_extractors.py](./task07_extractors.py) | 现场内容提取（pptx / odt / odp / ods / epub / html / rtf）+ `extraction_capability` 路由表 | [tasks/07](../tasks/07-local-embedding-summary.md) T0 |
 | [task08_multi_libraries.py](./task08_multi_libraries.py) | `app.cabinet` 模块：CabinetConfig 持久化、touch/remove/rename、默认库永驻、损坏 json 重建、库目录探测、import_settings_from_other_db | [tasks/08](../tasks/08-multiple-libraries-switch.md) |

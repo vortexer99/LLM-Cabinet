@@ -13,6 +13,7 @@ import logging
 from typing import Any
 
 from .context import LibraryContext
+from ..search import combine_and, field_term, parse_search
 
 log = logging.getLogger(__name__)
 
@@ -28,15 +29,23 @@ async def search_projects(
     tag_prefix: str = "",
     field_filter: str = "",
 ) -> list[dict[str, Any]]:
-    """Search projects by keyword (title / description) and/or tag.
-
-    ``field_filter`` is reserved (not yet implemented), accepted but ignored.
-    """
-    projects = ctx.repo.list_projects(
-        keyword=keyword,
-        tag=tag,
-        tag_prefix=tag_prefix,
-    )
+    """Search projects by Calibre-like query syntax and/or tag."""
+    ast_parts = []
+    for label, expr in (("keyword", keyword), ("field_filter", field_filter)):
+        expr = (expr or "").strip()
+        if not expr:
+            continue
+        parsed = parse_search(expr)
+        if not parsed.ok:
+            err = parsed.error
+            detail = f"{err.message}（位置 {err.position + 1}）" if err else "语法错误"
+            raise ValueError(f"{label} 搜索语法错误：{detail}")
+        ast_parts.append(parsed.ast)
+    if tag:
+        ast_parts.append(field_term("tag", tag, "="))
+    elif tag_prefix:
+        ast_parts.append(field_term("__tag_prefix", tag_prefix))
+    projects = ctx.repo.list_projects_query(combine_and(*ast_parts))
 
     # Bulk-fetch file counts for the result set
     file_counts: dict[int, int] = {}
