@@ -6,7 +6,7 @@ import shutil
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, QSize, Qt, QTimer
+from PySide6.QtCore import QEvent, QItemSelectionModel, QSize, Qt, QTimer
 from PySide6.QtGui import QAction, QKeySequence, QPixmap
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -2689,9 +2689,9 @@ class MainWindow(QMainWindow):
             self.lbl_mcp_count.setText(f"📋 MCP 操作: {total}")
             self.refresh_projects()  # 刷新项目列表 + 标签树（更新 MCP 计数）
 
-    def _on_mark_mcp_seen(self) -> None:
+    def _on_mark_mcp_seen(self, project_ids: list[int] | None = None) -> None:
         """右键菜单：标记已了解该项目的 MCP 修改（支持多选）。"""
-        selected_ids = self._selected_project_ids()
+        selected_ids = project_ids if project_ids is not None else self._selected_project_ids()
         if not selected_ids:
             return
         for pid in selected_ids:
@@ -3116,10 +3116,9 @@ class MainWindow(QMainWindow):
         idx = view.indexAt(pos)
         if not idx.isValid():
             return
-        view.setCurrentIndex(idx)
 
-        # task #25: 检查选中数量
-        selected_ids = self._selected_project_ids()
+        # task #25: 右键点在已有多选范围内时使用整组；点到未选项目时只操作该项目。
+        selected_ids = self._project_context_target_ids(view, idx)
         is_multi = len(selected_ids) > 1
 
         menu = QMenu(self)
@@ -3132,7 +3131,10 @@ class MainWindow(QMainWindow):
             menu.addSeparator()
             menu.addAction("📤  导出选中项目…", self.action_export_project)
             menu.addSeparator()
-            menu.addAction("👁  已读MCP修改", self._on_mark_mcp_seen)
+            menu.addAction(
+                "👁  已读MCP修改",
+                lambda _checked=False, ids=list(selected_ids): self._on_mark_mcp_seen(ids),
+            )
             menu.addSeparator()
             menu.addAction("🗑  删除", self.action_delete_project)
         else:
@@ -3159,12 +3161,37 @@ class MainWindow(QMainWindow):
             if not has_img:
                 act_paste_cover.setToolTip("剪切板中没有图片")
             menu.addSeparator()
-            menu.addAction("👁  已读MCP修改", self._on_mark_mcp_seen)
+            menu.addAction(
+                "👁  已读MCP修改",
+                lambda _checked=False, ids=list(selected_ids): self._on_mark_mcp_seen(ids),
+            )
             menu.addSeparator()
             menu.addAction("🗑  删除", self.action_delete_project)
 
         global_pos = view.viewport().mapToGlobal(pos) if hasattr(view, "viewport") else view.mapToGlobal(pos)
         menu.exec(global_pos)
+
+    def _project_context_target_ids(self, view, idx) -> list[int]:
+        """返回本次项目右键菜单实际要操作的项目 id。"""
+        clicked_id = idx.data(ProjectModel.RoleId)
+        selected_ids = self._selected_project_ids()
+        if clicked_id is None:
+            return selected_ids
+        try:
+            clicked_id = int(clicked_id)
+        except (TypeError, ValueError):
+            return selected_ids
+        if clicked_id in selected_ids:
+            return selected_ids
+
+        view.setCurrentIndex(idx)
+        selection = view.selectionModel()
+        if selection is not None:
+            selection.select(
+                idx,
+                QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows,
+            )
+        return [clicked_id]
 
     # ============================================================ file actions
     def action_add_files(self) -> None:
