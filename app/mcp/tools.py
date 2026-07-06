@@ -25,13 +25,18 @@ async def search_projects(
     ctx: LibraryContext,
     keyword: str = "",
     tag: str = "",
+    tag_prefix: str = "",
     field_filter: str = "",
 ) -> list[dict[str, Any]]:
     """Search projects by keyword (title / description) and/or tag.
 
     ``field_filter`` is reserved (not yet implemented), accepted but ignored.
     """
-    projects = ctx.repo.list_projects(keyword=keyword, tag=tag)
+    projects = ctx.repo.list_projects(
+        keyword=keyword,
+        tag=tag,
+        tag_prefix=tag_prefix,
+    )
 
     # Bulk-fetch file counts for the result set
     file_counts: dict[int, int] = {}

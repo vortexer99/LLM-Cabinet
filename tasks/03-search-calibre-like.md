@@ -9,7 +9,7 @@
 
 **工作量**：M（Phase A XS~S + Phase B M + Phase C XS）
 **优先级**：P0
-**状态**：待做
+**状态**：🚧 Phase A 完成（Phase B/C 待做）
 
 ## 来源
 `TODO.md → 📦 项目 & 文件管理` 第 1 条
@@ -28,17 +28,17 @@
 ## 实现要点
 
 ### Phase A：基础搜索闭环
-- 启用主窗口顶部现有 `search_box`，placeholder 改为“搜索标题 / 描述”。
-- 200ms 防抖；按 Esc 清空搜索；清空后恢复当前左侧筛选结果。
-- 搜索与左侧筛选组合为 AND：
+- [x] 启用主窗口顶部现有 `search_box`，placeholder 改为“搜索标题 / 描述”。
+- [x] 200ms 防抖；按 Esc 清空搜索；清空后恢复当前左侧筛选结果。
+- [x] 搜索与左侧筛选组合为 AND：
   - 普通标签节点：`repo.list_projects(keyword=kw, tag=tag)`
   - 标签父节点：`repo.list_projects(keyword=kw, tag_prefix=prefix)`
   - 未标记 / MCP 修改过：在现有筛选逻辑基础上叠加 keyword
-- 当前阶段关键词只搜 `projects.title` / `projects.description_md`。
+- [x] 当前阶段关键词只搜 `projects.title` / `projects.description_md`。
   “作者”等字段值已统一存入 `project_field_values`，留给 Phase B 字段过滤。
-- 搜索结果刷新后尽量保留当前选中项目；若当前项目不在结果中，选中第一项或清空详情。
-- 状态栏显示命中数量，例如“搜索命中 12 个项目”。
-- MCP `query_projects(action="search", field_filter=...)` 中的 `field_filter` 仍接受但忽略；等 Phase B 再接入。
+- [x] 搜索结果刷新后尽量保留当前选中项目；若当前项目不在结果中，选中第一项或清空详情。
+- [x] 状态栏显示命中数量，例如“搜索命中 12 个项目”。
+- [x] MCP `query_projects(action="search", field_filter=...)` 中的 `field_filter` 仍接受但忽略；等 Phase B 再接入。`tag_prefix` 已透传到 Repository 后端。
 
 ### 解析器 `app/search.py`
 - 单独模块，输入字符串 → 输出查询 AST
@@ -99,11 +99,11 @@
 
 ## 验收
 - Phase A：
-  - 顶部搜索框可输入，`三体` 能按标题 / 描述过滤项目
-  - 当前选中左侧标签时搜索，结果为“标签筛选 AND 关键词”
-  - 当前选中层级父标签时搜索，结果为“tag_prefix AND 关键词”
-  - Esc 清空搜索后仍保留左侧筛选
-  - `query_projects(action="search", keyword="三体")` 与 UI 基础搜索结果一致
+  - [x] 顶部搜索框可输入，`三体` 能按标题 / 描述过滤项目
+  - [x] 当前选中左侧标签时搜索，结果为“标签筛选 AND 关键词”
+  - [x] 当前选中层级父标签时搜索，结果为“tag_prefix AND 关键词”
+  - [x] Esc 清空搜索后仍保留左侧筛选
+  - [x] `query_projects(action="search", keyword="三体")` 与 UI 基础搜索结果一致
 - Phase B：
   - 复合查询：`tag:科幻 AND author:刘慈欣 AND rating:>=4` 能正确过滤
   - 纯关键词：`三体` 等价于 `title:三体 OR description:三体`

@@ -1240,9 +1240,14 @@ class MainWindow(QMainWindow):
         # —— 顶部搜索条 + 视图切换
         self.search_box = QLineEdit()
         self.search_box.setObjectName("SearchBox")
-        self.search_box.setPlaceholderText("🔍  搜索（暂未实现）")
+        self.search_box.setPlaceholderText("🔍  搜索标题 / 描述")
         self.search_box.setClearButtonEnabled(True)
-        self.search_box.setEnabled(False)  # 搜索功能后续再实现
+        self.search_box.setEnabled(True)
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(200)
+        self._search_timer.timeout.connect(self.refresh_projects)
+        self.search_box.textChanged.connect(lambda _text: self._search_timer.start())
 
         self.btn_view_grid = QToolButton()
         self.btn_view_grid.setText("▦")
@@ -1797,6 +1802,7 @@ class MainWindow(QMainWindow):
 
     # ============================================================ projects
     def refresh_projects(self) -> None:
+        prev_project_id = self._current_project_id
         # 0) 同步列定义（字段可能改了）
         self._rebuild_columns()
         # 1) 重建标签树（计数会变）
@@ -1805,27 +1811,37 @@ class MainWindow(QMainWindow):
         # 2) 根据当前过滤条件取项目
         kind = self._current_filter_kind
         value = self._current_filter_value
+        keyword = self.search_box.text().strip() if hasattr(self, "search_box") else ""
         if kind == "untagged":
-            projects = self.repo.list_projects_untagged()
+            projects = self.repo.list_projects_untagged(keyword=keyword)
             title_text = "未分类"
         elif kind == "review":
             projects = self.repo.list_projects_pending_review()
+            if keyword:
+                needle = keyword.casefold()
+                projects = [
+                    p for p in projects
+                    if needle in (p.title or "").casefold()
+                    or needle in (p.description_md or "").casefold()
+                ]
             title_text = "⚡ 待审阅 LLM 建议"
         elif kind == "tag" and value:
-            projects = self.repo.list_projects(tag=value)
+            projects = self.repo.list_projects(keyword=keyword, tag=value)
             title_text = f"#{value}"
         elif kind == "tag_prefix" and value:
-            projects = self.repo.list_projects(tag_prefix=value)
+            projects = self.repo.list_projects(keyword=keyword, tag_prefix=value)
             title_text = f"📁 {value} / *"
         elif kind == "mcp":
             mcp_pids = {p["id"] for p in self.repo.list_mcp_modified_projects()}
-            all_projects = self.repo.list_projects()
+            all_projects = self.repo.list_projects(keyword=keyword)
             projects = [p for p in all_projects if p.id in mcp_pids]
             title_text = "🤖 未读MCP修改"
         else:
-            projects = self.repo.list_projects()
+            projects = self.repo.list_projects(keyword=keyword)
             title_text = "全部项目"
 
+        if keyword:
+            title_text = f"{title_text} · 搜索「{keyword}」"
         self.lbl_filter_title.setText(title_text)
 
         covers: dict[int, QPixmap] = {}
@@ -1840,12 +1856,21 @@ class MainWindow(QMainWindow):
         self.lbl_count.setText(f"{len(projects)} 个项目")
 
         if projects:
-            self.proj_view.setCurrentIndex(self.proj_model.index(0, 0))
+            target_idx = self.proj_model.index(0, 0)
+            if prev_project_id is not None:
+                idx = self.proj_model.index_of_id(prev_project_id)
+                if idx.isValid():
+                    target_idx = idx
+            self.proj_view.setCurrentIndex(target_idx)
             # task #15 T2 D4：库里有项目 → 永久隐藏首次引导横幅
             self._on_user_action_dismiss_banner()
+            if keyword:
+                self.statusBar().showMessage(f"搜索命中 {len(projects)} 个项目", 3000)
         else:
             self._current_project_id = None
             self._show_project(None)
+            if keyword:
+                self.statusBar().showMessage("搜索命中 0 个项目", 3000)
 
     def _refresh_tag_tree(self) -> None:
         self.tag_tree.populate(
@@ -4035,6 +4060,10 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, ev):  # noqa: D401
         """全局监听 drag 进出，控制 DropZone 显隐。"""
         et = ev.type()
+        if et == QEvent.KeyPress and obj is self.search_box:
+            if ev.key() == Qt.Key_Escape and self.search_box.text():
+                self.search_box.clear()
+                return True
         if et == QEvent.KeyPress and obj in (self.tbl_files, self.tbl_files.viewport()):
             if ev.key() == Qt.Key_F2:
                 if ev.modifiers() & Qt.ShiftModifier:

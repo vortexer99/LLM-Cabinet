@@ -14,8 +14,21 @@ Architecture overlay:
     └── resources.py   Resource URI handlers
 """
 
+from typing import TYPE_CHECKING
+
 from .context import LibraryContext
-from .server import make_mcp_server
+
+if TYPE_CHECKING:
+    from .server import make_mcp_server
+
+
+def __getattr__(name: str):
+    """按需导入 MCP server，避免工具层测试依赖 FastMCP 运行时。"""
+    if name == "make_mcp_server":
+        from .server import make_mcp_server
+
+        return make_mcp_server
+    raise AttributeError(name)
 
 __all__ = [
     "LibraryContext",

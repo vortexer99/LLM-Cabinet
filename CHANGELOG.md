@@ -11,6 +11,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 📦 schema v7 → v8 — `files` 表新增 `origin` 列（`user`=用户原始文件 / `generated`=软件衍生物）。
 
 ### Added
+- **基础搜索（task #03 Phase A）**：启用主窗口顶部搜索框，按标题/描述关键词过滤项目，支持与左侧标签、标签父节点、未分类、待审阅和 MCP 修改筛选叠加为 AND；MCP `query_projects(action="search")` 同步支持 `tag_prefix`。
+- 新增 `selftests/task03_search_phase_a.py`，覆盖标题/描述关键词、keyword + tag/tag_prefix、未分类 keyword 与 MCP 搜索入口。
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
 - **文件来源标记（task #30）**：`files` 表新增 `origin` 列，区分用户原始文件与软件衍生物（如封面快照）。
