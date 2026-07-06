@@ -1,6 +1,6 @@
 # 24 · MCP 操作记录查看面板
 
-> **状态**：⚪ 待做
+> **状态**：✅ 完成 2026-06-04
 >
 > **工作量**：S（repo 层 + migration）+ S（UI 双 tab 对话框 + 主界面入口）+ XS（tools.py 打标）+ XS（selftest）= M
 >

@@ -11,6 +11,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 📦 schema v7 → v8 — `files` 表新增 `origin` 列（`user`=用户原始文件 / `generated`=软件衍生物）。
 
 ### Added
+- 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - **文件来源标记（task #30）**：`files` 表新增 `origin` 列，区分用户原始文件与软件衍生物（如封面快照）。
   - 新生成的封面快照自动标记 `origin='generated'`。
   - 迁移时自动回填历史封面快照 `__cover_*.png` 为 `generated`。
@@ -54,6 +55,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 批量删除（显示项目数量和文件统计）
 
 ### Changed
+- 开发约定改由 `AGENTS.md` 作为单一来源，`CLAUDE.md` 仅保留到该文件的导入指针；同步修正任务卡与 `tasks/README.md` 中已完成/进行中任务状态。
 - 任务规划重组（基于 `docs/file-handling.md` 评审）：
   - 新增 `tasks/32-cross-project-file-reference.md`：跨项目链接引用最小方案（路径共享 + 多引用警告 + #14 跨项目引用报告 + Windows path `normcase` 归一化 + 文件表角标提示），零 schema 改动。
   - 拆分 `tasks/31-...`：原卡保留为指针，新增 `tasks/31a-files-tree-interactions.md`（树形视图拖动 / 同级排序 / 新建空 subfolder / F2 重命名）+ `tasks/31b-files-table-flat-view.md`（扁平视图模式 + 大小/添加时间列 + Qt 原生列排序）。排序持久化按视图分键 `files_table_sort_tree` / `files_table_sort_flat`。

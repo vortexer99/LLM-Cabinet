@@ -80,6 +80,7 @@ with closing_repos(repo_a, repo_b):
 | [task20_unify_field_storage.py](./task20_unify_field_storage.py) | schema v3 → v4 迁移：4 列 DROP COLUMN 后系统字段值统一存 `project_field_values`；`Project` dataclass 顶层属性 author/date/source_url/rating 移除；`get/set_field_value` 走 field_values 路径；幂等 + 已有 pfv 行不覆盖 + rating "未填"语义保护 | [tasks/20](../tasks/20-unify-field-storage.md) |
 | [task21_wizard_two_step.py](./task21_wizard_two_step.py) | 字段助手两段式重构纯函数底座：`merge_decisions_into_drafts` / `diff_drafts_to_plan` / `check_undelete_name_conflict` / `summary_dialog_button_label` / `clone_draft` / `drafts_are_dirty` / `step1_visible_indices` 全部分支 | [tasks/21](../tasks/21-wizard-two-step-redesign.md) |
 | [task22_wizard_status_redesign.py](./task22_wizard_status_redesign.py) | 字段助手"LLM 建议"列文案重组：`step1_changed_dimensions` 把 ann × 实际改动维度映射成 `['name', 'type', 'hint']` 子集（rename 路径合并改类型后与 type_conflict 同构判 type）；`step1_action_label` 输出 (label, tooltip) 含决策态后缀；`annotate_conflicts` 把 rename + 改类型合并到 `ann.type`；`step1_visible_indices` 收紧到 `has_llm_change` | [tasks/22](../tasks/22-wizard-status-column-redesign.md) |
+| [task_status_consistency.py](./task_status_consistency.py) | 任务卡 `**状态**` 头与 `tasks/README.md` 索引表的完成度类别一致性（抓"一边完成一边待做"漂移）+ 索引完整性（双向） | 跨任务（无单一 task） |
 
 ## 不接入 CI 的原因
 

@@ -7,12 +7,12 @@
 | 文件 | 标题 | 工作量 | 优先级 | 状态 |
 |---|---|---|---|---|
 | [01-files-table-customization.md](./01-files-table-customization.md) | 文件表列可见性 + 列宽自定义 + 存储方式列 | S+XS | P1 | ✅ 2026-05-31 |
-| [02-files-table-detach-window.md](./02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | 待做 |
+| [02-files-table-detach-window.md](./02-files-table-detach-window.md) | 文件列表独立窗口 | S | P2 | ✅ 2026-06-10 |
 | [03-search-calibre-like.md](./03-search-calibre-like.md) | 类 Calibre 的搜索（关键词 + 字段 + 布尔 + 搜索历史 + 收藏表达式）；已拆 Phase A (XS~S) + Phase B (M) + Phase C (XS) | M | P0 | 待做（Phase A 可先开工） |
-| [04-project-system-files-folding.md](./04-project-system-files-folding.md) | 项目内系统/衍生文件折叠（二态视图：仅用户文件 / 显示所有，消费 #30 origin） | S | P1 | 待做（澄清完毕） |
+| [04-project-system-files-folding.md](./04-project-system-files-folding.md) | 项目内系统/衍生文件折叠（二态视图：仅用户文件 / 显示所有，消费 #30 origin） | S | P1 | ✅ 2026-06-11 |
 | [05-data-paths-migration-and-export.md](./05-data-paths-migration-and-export.md) | 数据路径自定义/迁移 + 项目导入导出 | M+S | P1 | ✅ 已闭环（被 #08/#09/#10 覆盖，归档保留） |
 | [06-tags-hierarchy-folding.md](./06-tags-hierarchy-folding.md) | 标签层级分类折叠 | S | P2 | ✅ 2026-06-01 |
-| [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 文件级摘要（手动导入 + 本地预处理流水线） | M+L | P1/P2 | 远期（T1/T2 可较早启动） |
+| [07-local-embedding-summary.md](./07-local-embedding-summary.md) | 文件级摘要（手动导入 + 本地预处理流水线） | M+L | P1/P2 | T0 ✅ 2026-06-01 · T1-T4 远期 |
 | [08-multiple-libraries-switch.md](./08-multiple-libraries-switch.md) | 多项目库并存与切换（Calibre 风格） | M | P1 | ✅ 2026-06-01 |
 | [09-project-export-basic.md](./09-project-export-basic.md) | 项目导出（基础版，T7 最小子集） | S | P1 | ✅ 2026-05-31 |
 | [10-folder-batch-import.md](./10-folder-batch-import.md) | 文件夹批量导入 + project.json 识别 | S+S | P1 | ✅ 2026-06-01 |
@@ -32,12 +32,12 @@
 | [25-project-list-batch-and-dnd.md](./25-project-list-batch-and-dnd.md) | 项目列表多选 + 批量操作适配 + 标签拖放赋值 | S+M | P1 | 🚧 Phase A/B 完成 |
 | [26-file-mode-library.md](./26-file-mode-library.md) | 文件模式库：每个文件 = 一个项目，隐藏文件表，标签做交叉分组 | S+S+S | P1 | 待做 |
 | [27-provenance-source-link.md](./27-provenance-source-link.md) | Provenance 来源链：MCP 写入可附带 source（依据文件 + 备注），UI 显示「来源」入口 | S | P1 | 待做 |
-| [28-export-structure-option.md](./28-export-structure-option.md) | 导出/导入闭环（扩展导出选项 + 批量导出 + 导入增强） | L | P1 | 🚧 部分完成（T1 导出已完成；T2/T3 待做） |
-| [29-file-storage-location-management.md](./29-file-storage-location-management.md) | 文件存储位置管理（T1 链接转仓储 / T2 移动 / T3a 重关联 / T3b 替换链接 / T3c 文件夹粒度） | S+S+S+S | P2 | 待做（从 #28 拆出；相邻 #14；协同 #32） |
+| [28-export-structure-option.md](./28-export-structure-option.md) | 导出/导入闭环（扩展导出选项 + 批量导出 + 导入增强） | L | P1 | ✅ T1/T2/T3 完成（v0.6 未发布） |
+| [29-file-storage-location-management.md](./29-file-storage-location-management.md) | 文件存储位置管理（T1 链接转仓储 / T2 移动 / T3a 重关联 / T3b 替换链接 / T3c 文件夹粒度） | S+S+S+S | P2 | 🚧 T1/T2/T3a/T3b 完成（v0.6 未发布） |
 | [30-file-origin-marker.md](./30-file-origin-marker.md) | 文件来源标记 `files.origin`（user/generated，区分软件衍生物如封面快照）；📦 schema v7→v8 | S | P1 | ✅ 2026-06-11 |
 | [31-files-table-sort-and-reorder.md](./31-files-table-sort-and-reorder.md) | （已拆分为 #31a / #31b，保留为指针） | — | — | 已拆分 |
-| [31a-files-tree-interactions.md](./31a-files-tree-interactions.md) | 树形视图：拖动改位置 + 同级排序 + 新建空文件夹 + F2 重命名（label/物理名/subfolder） | M+ | P1 | 待做（依赖 #17；联动 #02；协同 #32） |
-| [31b-files-table-flat-view.md](./31b-files-table-flat-view.md) | 扁平视图模式 + 大小/添加时间列 + 列任意排序（Qt 原生 setSortingEnabled） | M | P1 | 待做（依赖 #17；协同 #31a） |
+| [31a-files-tree-interactions.md](./31a-files-tree-interactions.md) | 树形视图：拖动改位置 + 同级排序 + 新建空文件夹 + F2 重命名（label/物理名/subfolder） | M+ | P1 | 🚧 新建文件夹/重命名 完成（v0.6 未发布） |
+| [31b-files-table-flat-view.md](./31b-files-table-flat-view.md) | 扁平视图模式 + 大小/添加时间列 + 列任意排序（Qt 原生 setSortingEnabled） | M | P1 | ✅ 完成（v0.6 未发布） |
 | [32-cross-project-file-reference.md](./32-cross-project-file-reference.md) | 跨项目链接引用（最小方案：路径共享，多引用警告 + #14 跨项目引用报告）；零 schema 改动 | S+S | P2 | 待做（依赖 #17 + #14 + #29） |
 
 ## 约定
