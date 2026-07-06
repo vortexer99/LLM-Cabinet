@@ -14,6 +14,7 @@ import os
 from PySide6.QtCore import QEvent, QObject, Qt, Signal
 
 DEBUG = os.environ.get("LLMCABINET_DND_DEBUG") == "1"
+PROJECT_IDS_MIME = "application/x-llmcabinet-project-ids"
 
 
 def _log(*args):
@@ -31,6 +32,24 @@ def extract_local_paths(mime) -> list[str]:
     return out
 
 
+def decode_project_ids(mime) -> list[int]:
+    """从项目拖放 MIME 中解析项目 id，自动去重并忽略坏值。"""
+    if not mime.hasFormat(PROJECT_IDS_MIME):
+        return []
+    raw = bytes(mime.data(PROJECT_IDS_MIME)).decode("utf-8", errors="ignore")
+    ids: list[int] = []
+    seen: set[int] = set()
+    for part in raw.split(","):
+        try:
+            pid = int(part.strip())
+        except ValueError:
+            continue
+        if pid > 0 and pid not in seen:
+            ids.append(pid)
+            seen.add(pid)
+    return ids
+
+
 class ProjectViewDnD(QObject):
     files_dropped_on_item = Signal(int, list)
     drag_hover_changed = Signal(object)  # int | None
@@ -42,10 +61,10 @@ class ProjectViewDnD(QObject):
         self._hover_pid: int | None = None
 
         from PySide6.QtWidgets import QAbstractItemView
-        view.setDragDropMode(QAbstractItemView.DropOnly)
+        view.setDragDropMode(QAbstractItemView.DragDrop)
         view.setAcceptDrops(True)
         view.viewport().setAcceptDrops(True)
-        view.setDragEnabled(False)
+        view.setDragEnabled(True)
         view.setDropIndicatorShown(False)
 
         view.installEventFilter(self)

@@ -54,12 +54,13 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - #31a 树形视图内部拖动：支持同级改序、拖入文件夹、拖回顶层，多选移动后写回 `files.ord` / `files.subfolder`
   - #31a 空文件夹持久化：显式新建的空 subfolder 存入 `project_settings.explicit_subfolders`，可右键删除空文件夹
   - #31a F2 进入说明列编辑，Shift+F2 可重命名仓储/链接文件的物理文件名；目录节点 F2 可重命名 subfolder
-- **项目列表多选（task #25 Phase A/B）**：
+- **项目列表多选（task #25 Phase A/B/C）**：
   - 卡片视图/表格视图支持 Ctrl+点击多选、Shift+范围选择
   - 多选时预览区显示"已选 X 个项目"
   - 右键菜单区分单选/多选
   - 批量标记已读 MCP 修改
   - 批量删除（显示项目数量和文件统计）
+  - 支持从项目列表拖动一个或多个项目到左侧标签/标签父节点，为项目批量追加标签
 
 ### Changed
 - 开发约定改由 `AGENTS.md` 作为单一来源，`CLAUDE.md` 仅保留到该文件的导入指针；同步修正任务卡与 `tasks/README.md` 中已完成/进行中任务状态。

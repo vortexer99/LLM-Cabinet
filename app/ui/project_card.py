@@ -11,6 +11,7 @@ from __future__ import annotations
 from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
+    QMimeData,
     QRect,
     QSize,
     Qt,
@@ -20,6 +21,7 @@ from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 
 from ..models import Field, Project
 from ..utils import utc_to_local_str
+from .dnd import PROJECT_IDS_MIME
 
 # 网格卡片
 CARD_W = 168
@@ -146,6 +148,36 @@ class ProjectModel(QAbstractTableModel):
         if kind == "extra":
             return self._extra_data(p, str(payload), role)
         return None
+
+    def flags(self, index: QModelIndex):
+        flags = super().flags(index)
+        if index.isValid():
+            flags |= Qt.ItemIsDragEnabled
+        return flags
+
+    def mimeTypes(self) -> list[str]:  # noqa: N802 (Qt 命名)
+        return [PROJECT_IDS_MIME]
+
+    def mimeData(self, indexes: list[QModelIndex]) -> QMimeData:  # noqa: N802
+        ids: list[int] = []
+        seen: set[int] = set()
+        for idx in indexes:
+            if not idx.isValid():
+                continue
+            p = self.project_at(idx.row())
+            if p is None or p.id is None or p.id in seen:
+                continue
+            ids.append(p.id)
+            seen.add(p.id)
+
+        mime = QMimeData()
+        mime.setData(PROJECT_IDS_MIME, ",".join(str(pid) for pid in ids).encode("utf-8"))
+        if ids:
+            mime.setText(f"{len(ids)} 个项目")
+        return mime
+
+    def supportedDragActions(self):  # noqa: N802
+        return Qt.CopyAction
 
     def _field_data(self, p: Project, f: Field, role: int):
         # 取原始值

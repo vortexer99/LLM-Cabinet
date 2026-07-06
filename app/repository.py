@@ -219,6 +219,61 @@ class Repository:
             "DELETE FROM tags WHERE id NOT IN (SELECT DISTINCT tag_id FROM project_tags)"
         )
 
+    def batch_add_tag(self, project_ids: Iterable[int], tag: str) -> int:
+        """为多个项目追加同一个标签，返回实际新增关联数量。"""
+        tag = (tag or "").strip()
+        ids: list[int] = []
+        seen: set[int] = set()
+        for raw in project_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid > 0 and pid not in seen:
+                ids.append(pid)
+                seen.add(pid)
+        if not tag or not ids:
+            return 0
+
+        placeholders = ",".join("?" for _ in ids)
+        rows = self.conn.execute(
+            f"SELECT id FROM projects WHERE id IN ({placeholders})",
+            ids,
+        ).fetchall()
+        existing_ids = [int(r["id"]) for r in rows]
+        if not existing_ids:
+            return 0
+
+        cur = self.conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            cur.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (tag,))
+            tag_id = cur.execute(
+                "SELECT id FROM tags WHERE name=?", (tag,),
+            ).fetchone()["id"]
+
+            changed: list[int] = []
+            for pid in existing_ids:
+                cur.execute(
+                    "INSERT OR IGNORE INTO project_tags(project_id, tag_id) VALUES(?,?)",
+                    (pid, tag_id),
+                )
+                if cur.rowcount:
+                    changed.append(pid)
+
+            if changed:
+                changed_placeholders = ",".join("?" for _ in changed)
+                cur.execute(
+                    f"UPDATE projects SET updated_at=datetime('now') "
+                    f"WHERE id IN ({changed_placeholders})",
+                    changed,
+                )
+            self.conn.commit()
+            return len(changed)
+        except Exception:
+            self.conn.rollback()
+            raise
+
     # ------------------------------------------------------------------ fields (schema)
     # task #20 schema v4 起：移除 SYSTEM_FIELD_COLUMNS dict。
     # 历史上 author/date/source_url/rating/description 的 key 用来 dispatch 到

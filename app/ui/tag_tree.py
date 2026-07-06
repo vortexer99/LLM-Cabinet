@@ -23,7 +23,9 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QHeaderView, QTreeWidget, QTreeWidgetItem
+from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTreeWidget, QTreeWidgetItem
+
+from .dnd import PROJECT_IDS_MIME, decode_project_ids
 
 
 # 标签层级分隔符（约定）
@@ -35,6 +37,7 @@ SETTING_COLLAPSED_PREFIXES = "tag_tree_collapsed_prefixes"
 
 class TagTree(QTreeWidget):
     filter_changed = Signal(str, str)  # kind, value
+    projects_dropped_on_tag = Signal(list, str)  # project_ids, tag
 
     KIND_ROLE = Qt.UserRole + 1
     VALUE_ROLE = Qt.UserRole + 2
@@ -47,6 +50,10 @@ class TagTree(QTreeWidget):
         # 显示顶层节点的展开/折叠三角形（用于"标签 / 未使用的标签"分组）
         self.setRootIsDecorated(True)
         self.setAnimated(True)
+        self.setAcceptDrops(True)
+        self.viewport().setAcceptDrops(True)
+        self.setDragDropMode(QAbstractItemView.DropOnly)
+        self.setDropIndicatorShown(True)
         # 含层级父节点后高度可能不一致，关掉 uniform
         self.setUniformRowHeights(False)
         self.setColumnCount(1)
@@ -288,6 +295,60 @@ class TagTree(QTreeWidget):
         else:
             self._collapsed_prefixes.add(prefix)
         self._save_collapsed_state()
+
+    # ============================================================
+    # 项目拖放到标签（task #25 Phase C）
+    # ============================================================
+    def _drop_target_tag(self, pos) -> str:
+        item = self.itemAt(pos)
+        if item is None:
+            return ""
+        kind = item.data(0, self.KIND_ROLE) or ""
+        value = item.data(0, self.VALUE_ROLE) or ""
+        if kind == "tag":
+            return value
+        if kind == "tag_prefix":
+            return value
+        return ""
+
+    def dragEnterEvent(self, ev):  # noqa: N802
+        if ev.mimeData().hasFormat(PROJECT_IDS_MIME):
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+            return
+        super().dragEnterEvent(ev)
+
+    def dragMoveEvent(self, ev):  # noqa: N802
+        if not ev.mimeData().hasFormat(PROJECT_IDS_MIME):
+            super().dragMoveEvent(ev)
+            return
+        try:
+            pos = ev.position().toPoint()
+        except AttributeError:
+            pos = ev.pos()
+        tag = self._drop_target_tag(pos)
+        if tag:
+            ev.setDropAction(Qt.CopyAction)
+            ev.accept()
+        else:
+            ev.ignore()
+
+    def dropEvent(self, ev):  # noqa: N802
+        if not ev.mimeData().hasFormat(PROJECT_IDS_MIME):
+            super().dropEvent(ev)
+            return
+        try:
+            pos = ev.position().toPoint()
+        except AttributeError:
+            pos = ev.pos()
+        tag = self._drop_target_tag(pos)
+        project_ids = decode_project_ids(ev.mimeData())
+        if not tag or not project_ids:
+            ev.ignore()
+            return
+        ev.setDropAction(Qt.CopyAction)
+        ev.accept()
+        self.projects_dropped_on_tag.emit(project_ids, tag)
 
 
 # =============================================================================

@@ -1,4 +1,4 @@
-"""task #25 自检：项目列表多选 + 批量操作。
+"""task #25 自检：项目列表多选 + 批量操作 + 标签拖放赋值。
 
 流程：
   1. 验证 selection mode 为 ExtendedSelection
@@ -6,6 +6,7 @@
   3. 验证多选时预览区显示选中数量
   4. 验证批量删除
   5. 验证批量标记 MCP 已读
+  6. 验证批量追加标签（Phase C 拖放赋值的数据层后端）
 """
 from __future__ import annotations
 
@@ -27,11 +28,6 @@ from app.repository import Repository
 # =============================================================================
 def test_selection_mode_extended(tmp: Path, t: T) -> None:
     """验证项目列表支持多选。"""
-    from PySide6.QtWidgets import QAbstractItemView
-
-    # 这里不启动 GUI，只验证代码里设置了 ExtendedSelection
-    # 实际 GUI 测试需要 QApplication
-
     # 验证 Repository 层支持多选操作
     db_path = tmp / "test.db"
     repo = Repository(connect(db_path))
@@ -162,6 +158,35 @@ def test_selected_ids_logic(tmp: Path, t: T) -> None:
 
 
 # =============================================================================
+# Test 5: Phase C 批量追加标签
+# =============================================================================
+def test_batch_add_tag(tmp: Path, t: T) -> None:
+    """验证标签拖放赋值使用的批量追加标签后端。"""
+    db_path = tmp / "test_batch_tag.db"
+    repo = Repository(connect(db_path))
+
+    try:
+        pid1 = repo.save_project(Project(title="Alpha", tags=["已有"]))
+        pid2 = repo.save_project(Project(title="Beta"))
+        pid3 = repo.save_project(Project(title="Gamma", tags=["待整理"]))
+
+        changed = repo.batch_add_tag([pid1, pid2, pid2, 999999], "待整理")
+        t.assert_eq("batch_add_tag changed count", changed, 2)
+        t.assert_eq("pid1 tags", sorted(repo.get_project(pid1).tags), ["已有", "待整理"])
+        t.assert_eq("pid2 tags", repo.get_project(pid2).tags, ["待整理"])
+        t.assert_eq("pid3 unchanged duplicate tag", repo.get_project(pid3).tags, ["待整理"])
+
+        changed_again = repo.batch_add_tag([pid1, pid2, pid3], "待整理")
+        t.assert_eq("duplicate batch_add_tag changed count", changed_again, 0)
+
+        changed_prefix = repo.batch_add_tag([pid1], "领域")
+        t.assert_eq("tag_prefix node can add prefix tag", changed_prefix, 1)
+        t.assert_in("prefix tag present", "领域", repo.get_project(pid1).tags)
+    finally:
+        repo.conn.close()
+
+
+# =============================================================================
 # 入口
 # =============================================================================
 def main() -> bool:
@@ -178,6 +203,7 @@ def main() -> bool:
             ("Batch delete", test_batch_delete),
             ("Batch mark MCP seen", test_batch_mark_mcp_seen),
             ("Selected IDs logic", test_selected_ids_logic),
+            ("Batch add tag", test_batch_add_tag),
         ]
 
         for name, fn in tests:

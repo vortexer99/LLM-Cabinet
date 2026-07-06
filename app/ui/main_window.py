@@ -1221,6 +1221,7 @@ class MainWindow(QMainWindow):
             getter=self.repo.get_setting,
         )
         self.tag_tree.filter_changed.connect(self._on_tag_filter_changed)
+        self.tag_tree.projects_dropped_on_tag.connect(self._on_projects_dropped_on_tag)
         self._current_filter_kind: str = "all"
         self._current_filter_value: str = ""
 
@@ -1885,6 +1886,28 @@ class MainWindow(QMainWindow):
         self._current_filter_kind = kind
         self._current_filter_value = value
         self.refresh_projects()
+
+    def _on_projects_dropped_on_tag(self, project_ids: list[int], tag: str) -> None:
+        """把拖到标签树上的项目批量追加标签。"""
+        n_changed = self.repo.batch_add_tag(project_ids, tag)
+        self.refresh_projects()
+        valid_ids: list[int] = []
+        for raw in project_ids:
+            try:
+                pid = int(raw)
+            except (TypeError, ValueError):
+                continue
+            if pid > 0 and pid not in valid_ids:
+                valid_ids.append(pid)
+        total = len(valid_ids)
+        if n_changed:
+            self.statusBar().showMessage(
+                f"已为 {n_changed} / {total} 个项目添加标签「{tag}」", 4000,
+            )
+        else:
+            self.statusBar().showMessage(
+                f"选中项目已拥有标签「{tag}」", 3000,
+            )
 
     # ============================================================ project selection (task #25)
     def _selected_project_ids(self) -> list[int]:
