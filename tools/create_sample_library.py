@@ -175,6 +175,7 @@ def create_source_files(external: Path) -> dict[str, Path]:
         "foundation_txt": ("foundation-quotes.txt", "Foundation sample notes\npsychohistory\n"),
         "ai_plan": ("ai-team-workspace-plan.md", "# AI Team Workspace\n\n共享记忆、任务状态、来源链。\n"),
         "dataset_csv": ("experiment-data.csv", "case,score\nA,5\nB,3\n"),
+        "deep_note": ("deep-research-note.md", "# 深层目录笔记\n\n用于测试树形目录、扁平视图和导出目录结构。\n"),
         "image_png": ("cover-source.png", PNG_1X1),
         "video_note": ("demo-video-notes.txt", "视频素材说明：用于测试 video 标签和外链。\n"),
         "archive_note": ("archive-readme.txt", "归档包说明，占位用于导出测试。\n"),
@@ -186,6 +187,25 @@ def create_source_files(external: Path) -> dict[str, Path]:
         else:
             path.write_text(content, encoding="utf-8")
         files[key] = path
+
+    # 同名外链文件：用于手测导出复制时不会互相覆盖。
+    for key, folder, body in (
+        ("duplicate_a", "duplicates_a", "同名文件 A\n"),
+        ("duplicate_b", "duplicates_b", "同名文件 B\n"),
+    ):
+        d = external / folder
+        d.mkdir(parents=True, exist_ok=True)
+        path = d / "shared-name.txt"
+        path.write_text(body, encoding="utf-8")
+        files[key] = path
+
+    # 缺失链接的修复目标：原 DB 指向 external_sources/missing-target.pdf（不存在），
+    # 手测重关联时选择 repair_targets/，应按文件名匹配到这里。
+    repair_dir = external / "repair_targets"
+    repair_dir.mkdir(parents=True, exist_ok=True)
+    repair_target = repair_dir / "missing-target.pdf"
+    repair_target.write_text("%PDF-1.4\n% relink target placeholder\n", encoding="utf-8")
+    files["missing_repair"] = repair_target
     return files
 
 
@@ -238,6 +258,15 @@ def seed_projects(
     )
     add_copy_file(repo, library, p1, files["three_body_pdf"], "原文 PDF", "document", "source/pdf")
     add_copy_file(repo, library, p1, files["three_body_md"], "人物关系笔记", "document", "notes")
+    add_copy_file(
+        repo,
+        library,
+        p1,
+        files["deep_note"],
+        "深层目录笔记",
+        "document",
+        "research/2024/phase-a/notes/deep",
+    )
     add_generated_cover(repo, library, p1)
     repo.set_project_setting(p1, "explicit_subfolders", json.dumps(["notes/drafts", "figures"], ensure_ascii=False))
 
@@ -343,7 +372,25 @@ def seed_projects(
     )
     add_copy_file(repo, library, p6, files["dataset_csv"], "数据表", "document", "data")
     add_link_file(repo, p6, files["image_png"], "外部图片", "image", "images")
+    add_link_file(repo, p6, files["duplicate_a"], "同名外链 A", "document", "duplicates")
+    add_link_file(repo, p6, files["duplicate_b"], "同名外链 B", "document", "duplicates")
     add_generated_cover(repo, library, p6)
+
+    save_project(
+        repo,
+        "空项目边界样例",
+        "没有文件，用于测试空项目列表展示、批量导出灰显和删除确认。",
+        ["边界情况", "空项目"],
+        {
+            author: "QA",
+            date: "2026-01-01",
+            rating: "3",
+            status: "待整理",
+            priority: "4",
+            owner: "Tester",
+            remark: "此项目故意不挂任何文件。",
+        },
+    )
 
 
 def save_project(

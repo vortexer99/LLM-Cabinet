@@ -19,6 +19,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 新增 `app/search_history.py` 与 `selftests/task03_search_phase_c.py`，覆盖搜索历史去重/上限、坏 JSON 容错、收藏新增/覆盖/删除。
 - 新增 `selftests/gui_main_window_regressions.py`，用 PySide6 offscreen 覆盖主窗口搜索菜单、全库搜索、GUI 宽关键词、MCP 已读右键目标、MCP 未读筛选刷新、目录/ZIP 项目包导出导入与分栏宽度等 GUI 回归。
 - 新增 `tools/create_sample_library.py` 与 `docs/sample-library.md`，可生成完整样例库用于手工测试搜索、标签、文件树、缺失链接、导出导入、MCP audit、LLM 建议和搜索历史/收藏。
+- 扩展样例库手测清单：补充逐步操作与预期结果，并新增深层目录、同名外链、缺失链接修复目标和空项目边界样例。
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
 - 新增 `selftests/task29_file_storage_folder_ops.py`，覆盖文件夹粒度存储操作的递归范围与 missing-only 筛选。
