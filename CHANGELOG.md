@@ -15,6 +15,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 新增 `selftests/task03_search_phase_a.py`，覆盖标题/描述关键词、keyword + tag/tag_prefix、未分类 keyword 与 MCP 搜索入口。
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
+- 新增 `selftests/task29_file_storage_folder_ops.py`，覆盖文件夹粒度存储操作的递归范围与 missing-only 筛选。
 - **文件来源标记（task #30）**：`files` 表新增 `origin` 列，区分用户原始文件与软件衍生物（如封面快照）。
   - 新生成的封面快照自动标记 `origin='generated'`。
   - 迁移时自动回填历史封面快照 `__cover_*.png` 为 `generated`。
@@ -44,6 +45,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - T2 移动文件到新位置：文件表右键「📂 移动文件到...」，物理移动并更新路径
   - T3a 重关联到外部文件：文件表右键「🔧 重关联到外部文件...」，按文件名匹配修复 missing
   - T3b 替换链接目标：文件表右键「🔗 替换链接目标...」，单选链接文件替换目标
+  - T3c 文件夹粒度入口：逻辑文件夹节点右键可批量转仓储、移动、重关联 missing 文件
 - **文件视图增强（task #31a / #31b）**：
   - #31b 扁平视图模式：文件表新增「🌲/📋」按钮切换树形/扁平视图，按项目记忆
   - #31b 新增列：文件「大小」「添加时间」列（自动 stat 物理文件获取大小）

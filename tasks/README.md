@@ -33,7 +33,7 @@
 | [26-file-mode-library.md](./26-file-mode-library.md) | 文件模式库：每个文件 = 一个项目，隐藏文件表，标签做交叉分组 | S+S+S | P1 | 待做 |
 | [27-provenance-source-link.md](./27-provenance-source-link.md) | Provenance 来源链：MCP 写入可附带 source（依据文件 + 备注），UI 显示「来源」入口 | S | P1 | 待做 |
 | [28-export-structure-option.md](./28-export-structure-option.md) | 导出/导入闭环（扩展导出选项 + 批量导出 + 导入增强） | L | P1 | ✅ T1/T2/T3 完成（v0.6 未发布） |
-| [29-file-storage-location-management.md](./29-file-storage-location-management.md) | 文件存储位置管理（T1 链接转仓储 / T2 移动 / T3a 重关联 / T3b 替换链接 / T3c 文件夹粒度） | S+S+S+S | P2 | 🚧 T1/T2/T3a/T3b 完成（v0.6 未发布） |
+| [29-file-storage-location-management.md](./29-file-storage-location-management.md) | 文件存储位置管理（T1 链接转仓储 / T2 移动 / T3a 重关联 / T3b 替换链接 / T3c 文件夹粒度） | S+S+S+S | P2 | ✅ 2026-07-06（v0.6 未发布） |
 | [30-file-origin-marker.md](./30-file-origin-marker.md) | 文件来源标记 `files.origin`（user/generated，区分软件衍生物如封面快照）；📦 schema v7→v8 | S | P1 | ✅ 2026-06-11 |
 | [31-files-table-sort-and-reorder.md](./31-files-table-sort-and-reorder.md) | （已拆分为 #31a / #31b，保留为指针） | — | — | 已拆分 |
 | [31a-files-tree-interactions.md](./31a-files-tree-interactions.md) | 树形视图：拖动改位置 + 同级排序 + 新建空文件夹 + F2 重命名（label/物理名/subfolder） | M+ | P1 | ✅ 完成（v0.6 未发布） |

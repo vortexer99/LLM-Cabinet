@@ -831,6 +831,23 @@ class Repository:
         ).fetchall()
         return [self._row_to_file(r) for r in rows]
 
+    def list_files_under_subfolder(
+        self, project_id: int, subfolder: str, *, missing_only: bool = False,
+    ) -> list[FileItem]:
+        """列出逻辑文件夹及其子层级下的文件（task #29 T3c）。"""
+        subfolder = (subfolder or "").strip("/")
+        if not subfolder:
+            return []
+        prefix = subfolder + "/"
+        files = [
+            f for f in self.list_files(project_id)
+            if (f.subfolder or "") == subfolder
+            or (f.subfolder or "").startswith(prefix)
+        ]
+        if missing_only:
+            files = [f for f in files if f.missing]
+        return files
+
     def get_file(self, fid: int) -> Optional[FileItem]:
         row = self.conn.execute("SELECT * FROM files WHERE id=?", (fid,)).fetchone()
         return self._row_to_file(row) if row else None

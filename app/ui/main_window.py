@@ -3137,9 +3137,26 @@ class MainWindow(QMainWindow):
         ids: list[int] = []
         for it in self.tbl_files.selectedItems():
             fid = it.data(0, Qt.UserRole)
-            if fid is not None and fid > 0:
+            if fid is not None and fid > 0 and fid not in ids:
                 ids.append(fid)
         return ids
+
+    def _selected_files(self) -> list[FileItem]:
+        """返回当前选中的文件对象，过滤目录节点和失效 id。"""
+        files: list[FileItem] = []
+        for fid in self._selected_file_ids():
+            f = self.repo.get_file(fid)
+            if f is not None:
+                files.append(f)
+        return files
+
+    def _files_under_subfolder(self, subfolder: str, *, missing_only: bool = False) -> list[FileItem]:
+        """收集某个逻辑文件夹及其子层级下的文件。"""
+        if self._current_project_id is None:
+            return []
+        return self.repo.list_files_under_subfolder(
+            self._current_project_id, subfolder, missing_only=missing_only,
+        )
 
     def _on_file_selected(self) -> None:
         fid = self._current_file_row_id()
@@ -3314,14 +3331,20 @@ class MainWindow(QMainWindow):
     # ============================================================ task #29 文件存储位置管理
     def action_convert_to_storage(self) -> None:
         """task #29 T1：链接文件转为仓储文件（复制进库）。"""
-        file_ids = self._selected_file_ids()
-        if not file_ids:
-            return
+        files = self._selected_files()
+        self._convert_files_to_storage(files)
 
-        files = [self.repo.get_file(fid) for fid in file_ids]
-        files = [f for f in files if f]
+    def action_convert_folder_to_storage(self) -> None:
+        """task #29 T3c：整个逻辑文件夹转仓储。"""
+        sf = getattr(self, "_files_context_subfolder", "") or ""
+        files = self._files_under_subfolder(sf)
+        self._convert_files_to_storage(files, scope_label=f"文件夹「{sf}」")
 
+    def _convert_files_to_storage(
+        self, files: list[FileItem], *, scope_label: str = "所选文件",
+    ) -> None:
         if not files:
+            QMessageBox.information(self, "提示", f"{scope_label}中没有可处理的文件。")
             return
 
         # 分类：🔗 链接文件才需要转换，📦 仓储已在内
@@ -3331,14 +3354,14 @@ class MainWindow(QMainWindow):
         if not link_files:
             QMessageBox.information(
                 self, "提示",
-                "所选文件已都是仓储模式，无需转换。"
+                f"{scope_label}已都是仓储模式，无需转换。"
             )
             return
 
         # 确认对话框
         ans = QMessageBox.question(
             self, "确认转换",
-            f"将把 {len(link_files)} 个🔗链接文件复制进库：\n\n"
+            f"{scope_label}：将把 {len(link_files)} 个🔗链接文件复制进库：\n\n"
             + "\n".join(f"  • {f.label or f.path}" for f in link_files[:5])
             + (f"\n  … 等共 {len(link_files)} 个" if len(link_files) > 5 else "")
             + f"\n\n已仓储文件 {len(storage_files)} 个将跳过。\n\n"
@@ -3351,7 +3374,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QProgressDialog
         from PySide6.QtCore import Qt
         prog = QProgressDialog(
-            "正在转换...", "取消", 0, len(link_files), self,
+            f"{scope_label}：正在转换...", "取消", 0, len(link_files), self,
         )
         prog.setWindowTitle("链接转仓储")
         prog.setWindowModality(Qt.WindowModal)
@@ -3407,14 +3430,20 @@ class MainWindow(QMainWindow):
 
     def action_move_file(self) -> None:
         """task #29 T2：移动文件到新位置。"""
-        file_ids = self._selected_file_ids()
-        if not file_ids:
-            return
+        files = self._selected_files()
+        self._move_files_to_location(files)
 
-        files = [self.repo.get_file(fid) for fid in file_ids]
-        files = [f for f in files if f]
+    def action_move_folder(self) -> None:
+        """task #29 T3c：移动整个逻辑文件夹下的文件。"""
+        sf = getattr(self, "_files_context_subfolder", "") or ""
+        files = self._files_under_subfolder(sf)
+        self._move_files_to_location(files, scope_label=f"文件夹「{sf}」")
 
+    def _move_files_to_location(
+        self, files: list[FileItem], *, scope_label: str = "所选文件",
+    ) -> None:
         if not files:
+            QMessageBox.information(self, "提示", f"{scope_label}中没有可移动的文件。")
             return
 
         # 选择目标目录
@@ -3429,7 +3458,7 @@ class MainWindow(QMainWindow):
         from PySide6.QtWidgets import QProgressDialog
         from PySide6.QtCore import Qt
         prog = QProgressDialog(
-            "正在移动...", "取消", 0, len(files), self,
+            f"{scope_label}：正在移动...", "取消", 0, len(files), self,
         )
         prog.setWindowTitle("移动文件")
         prog.setWindowModality(Qt.WindowModal)
@@ -3491,14 +3520,20 @@ class MainWindow(QMainWindow):
 
     def action_relink_file(self) -> None:
         """task #29 T3a：重关联到外部文件（修复 missing 文件）。"""
-        file_ids = self._selected_file_ids()
-        if not file_ids:
-            return
+        files = self._selected_files()
+        self._relink_files_to_directory(files)
 
-        files = [self.repo.get_file(fid) for fid in file_ids]
-        files = [f for f in files if f]
+    def action_relink_folder(self) -> None:
+        """task #29 T3c：按文件夹批量重关联 missing 文件。"""
+        sf = getattr(self, "_files_context_subfolder", "") or ""
+        files = self._files_under_subfolder(sf, missing_only=True)
+        self._relink_files_to_directory(files, scope_label=f"文件夹「{sf}」")
 
+    def _relink_files_to_directory(
+        self, files: list[FileItem], *, scope_label: str = "所选文件",
+    ) -> None:
         if not files:
+            QMessageBox.information(self, "提示", f"{scope_label}中没有可重关联的文件。")
             return
 
         # 选择外部目录
@@ -3511,21 +3546,26 @@ class MainWindow(QMainWindow):
         source_dir = Path(source_dir)
 
         # 收集目录中的文件（按文件名匹配）
-        available_files = {f.name: f for f in source_dir.iterdir() if f.is_file()}
+        try:
+            available_files = {p.name: p for p in source_dir.iterdir() if p.is_file()}
+        except OSError as e:
+            QMessageBox.warning(self, "无法读取目录", str(e))
+            return
 
         # 匹配文件
         matched = []
         unmatched = []
         for f in files:
-            if f.path in available_files:
-                matched.append((f, available_files[f.path]))
+            name = Path(f.path).name
+            if name in available_files:
+                matched.append((f, available_files[name]))
             else:
-                unmatched.append(f.path)
+                unmatched.append(name)
 
         if not matched:
             QMessageBox.warning(
                 self, "未找到匹配文件",
-                "所选文件中没有一个能在指定目录下找到同名文件。\n\n"
+                f"{scope_label}中没有一个文件能在指定目录下找到同名文件。\n\n"
                 "请确认文件是否在选择的目录中。"
             )
             return
@@ -3533,7 +3573,7 @@ class MainWindow(QMainWindow):
         # 确认对话框
         ans = QMessageBox.question(
             self, "确认重关联",
-            f"将为 {len(matched)} 个文件重新关联到外部文件：\n\n"
+            f"{scope_label}：将为 {len(matched)} 个文件重新关联到外部文件：\n\n"
             + "\n".join(f"  • {old.path} → {new.name}" for old, new in matched[:5])
             + (f"\n  … 等共 {len(matched)} 个" if len(matched) > 5 else "")
             + (f"\n\n未找到：{len(unmatched)} 个" if unmatched else "")
@@ -4028,11 +4068,28 @@ class MainWindow(QMainWindow):
             is_empty = bool(sf) and not any(
                 f.subfolder == sf or f.subfolder.startswith(sf + "/") for f in files
             )
+            has_missing = bool(sf) and any(
+                (f.subfolder == sf or f.subfolder.startswith(sf + "/")) and f.missing
+                for f in files
+            )
             menu = QMenu(self)
             menu.addAction("📁  在此文件夹下新建子文件夹", self.action_new_subfolder)
             menu.addAction("✏️  重命名文件夹", self.action_rename_subfolder)
             act_del_empty = menu.addAction("🗑  删除空文件夹", self.action_delete_empty_subfolder)
             act_del_empty.setEnabled(is_empty)
+            menu.addSeparator()
+            act_folder_storage = menu.addAction(
+                "📦  整个文件夹转为仓储", self.action_convert_folder_to_storage,
+            )
+            act_folder_move = menu.addAction(
+                "📂  整个文件夹移到...", self.action_move_folder,
+            )
+            act_folder_relink = menu.addAction(
+                "🔧  整个文件夹重关联到...", self.action_relink_folder,
+            )
+            act_folder_storage.setEnabled(not is_empty)
+            act_folder_move.setEnabled(not is_empty)
+            act_folder_relink.setEnabled(has_missing)
             menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
             return
 
