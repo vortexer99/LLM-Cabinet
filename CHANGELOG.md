@@ -78,6 +78,9 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 收尾 `tasks/04-project-system-files-folding.md`：从"待澄清"敲定为"二态视图（仅用户文件 / 显示所有）"，默认显示所有 + 无 generated 时 toggle 自动隐藏，消费 #30 origin。
   - 同步 `docs/file-handling.md` 任务地图、推荐执行顺序、`tasks/README.md` 索引表、`TODO.md` 条目。
 
+### Fixed
+- 主界面左/中/右三栏宽度在拖拽后会写入设置，重启后恢复上次宽度。
+
 ## [0.5.0] - 2026-06-10
 
 📦 schema v6 → v7 — `files` 表新增 `subfolder` 列（逻辑子目录路径，驱动 UI 树形展示）。

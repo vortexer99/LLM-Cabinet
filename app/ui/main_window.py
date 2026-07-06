@@ -195,6 +195,10 @@ def _ask_delete_mode(parent, root_path, scan) -> str | None:
 
 
 class MainWindow(QMainWindow):
+    MAIN_SPLITTER_SETTING_KEY = "main_splitter_sizes"
+    MAIN_SPLITTER_DEFAULT_SIZES = [200, 800, 400]
+    MAIN_SPLITTER_MIN_SIZE = 80
+
     def __init__(
         self,
         repo: Repository,
@@ -1417,7 +1421,8 @@ class MainWindow(QMainWindow):
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes([200, 800, 400])
+        splitter.setSizes(self._load_main_splitter_sizes())
+        splitter.splitterMoved.connect(self._on_main_splitter_moved)
         splitter.setHandleWidth(1)
 
         root = QWidget()
@@ -2210,6 +2215,36 @@ class MainWindow(QMainWindow):
     def _main_splitter_sizes(self) -> list[int]:
         splitter = getattr(self, "_main_splitter", None)
         return splitter.sizes() if splitter is not None else []
+
+    def _valid_main_splitter_sizes(self, sizes: object) -> list[int] | None:
+        if not isinstance(sizes, list) or len(sizes) != 3:
+            return None
+        valid_sizes: list[int] = []
+        for size in sizes:
+            if not isinstance(size, int):
+                return None
+            if size < self.MAIN_SPLITTER_MIN_SIZE:
+                return None
+            valid_sizes.append(size)
+        return valid_sizes if sum(valid_sizes) > 0 else None
+
+    def _load_main_splitter_sizes(self) -> list[int]:
+        raw = self.repo.get_setting(self.MAIN_SPLITTER_SETTING_KEY, "")
+        if raw:
+            try:
+                saved_sizes = json.loads(raw)
+            except Exception:
+                saved_sizes = None
+            valid_sizes = self._valid_main_splitter_sizes(saved_sizes)
+            if valid_sizes is not None:
+                return valid_sizes
+        return list(self.MAIN_SPLITTER_DEFAULT_SIZES)
+
+    def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        sizes = self._valid_main_splitter_sizes(self._main_splitter_sizes())
+        if sizes is None:
+            return
+        self.repo.set_setting(self.MAIN_SPLITTER_SETTING_KEY, json.dumps(sizes))
 
     def _restore_main_splitter_sizes(self, sizes: list[int]) -> None:
         splitter = getattr(self, "_main_splitter", None)
