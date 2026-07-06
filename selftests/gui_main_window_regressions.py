@@ -9,6 +9,7 @@
 - 目录项目包和 ZIP 项目包导入/导出 round-trip 应刷新 GUI 列表
 - 主 splitter 宽度应写入设置并可被新窗口读取
 - 主 splitter 右栏宽度不应随项目选择漂移
+- 文件视图「定位」应从 GUI 入口调用系统定位路径
 
 运行要求：使用安装了 PySide6 的 Python；Windows 本机通常为
 ``C:\\Users\\hfdxm\\AppData\\Local\\Python\\bin\\python.exe -B``。
@@ -24,8 +25,8 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QEvent, QItemSelectionModel
-from PySide6.QtWidgets import QApplication
+from PySide6.QtCore import QEvent, QItemSelectionModel, Qt
+from PySide6.QtWidgets import QApplication, QTreeWidgetItem
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -38,6 +39,7 @@ from app.library import Library
 from app.models import FileItem, Project
 from app.repository import Repository
 from app.search_history import HISTORY_SETTING_KEY
+import app.ui.main_window as main_window_module
 from app.ui.main_window import MainWindow
 
 
@@ -87,6 +89,23 @@ def _field(repo: Repository, name: str, ftype: str, key: str = "") -> int:
     )
     repo.conn.commit()
     return int(cur.lastrowid)
+
+
+def _find_file_tree_item(win: MainWindow, file_id: int) -> QTreeWidgetItem | None:
+    def walk(item: QTreeWidgetItem) -> QTreeWidgetItem | None:
+        if item.data(0, Qt.UserRole) == file_id:
+            return item
+        for i in range(item.childCount()):
+            found = walk(item.child(i))
+            if found is not None:
+                return found
+        return None
+
+    for i in range(win.tbl_files.topLevelItemCount()):
+        found = walk(win.tbl_files.topLevelItem(i))
+        if found is not None:
+            return found
+    return None
 
 
 def test_search_menu_focus_guard(tmp: Path, t: T) -> None:
@@ -441,6 +460,46 @@ def test_right_panel_width_stable_across_selection(tmp: Path, t: T) -> None:
             _close_window(win)
 
 
+def test_file_reveal_action_uses_positioning_path(tmp: Path, t: T) -> None:
+    src = tmp / "source" / "定位 源文件.txt"
+    src.parent.mkdir(parents=True)
+    src.write_text("用于测试定位按钮", encoding="utf-8")
+
+    repo = Repository(connect(tmp / "cabinet.db"))
+    with closing_repos(repo):
+        pid = _save_project(repo, "文件定位项目")
+        file_id = repo.add_file(FileItem(
+            project_id=pid,
+            path=str(src.resolve()),
+            is_relative=False,
+            label="定位目标",
+            kind="doc",
+        ))
+
+    win, repo = _window(tmp)
+    calls: list[Path] = []
+    old_reveal = main_window_module.reveal_in_explorer
+    with closing_repos(repo):
+        try:
+            win._show_project(repo.get_project(pid))
+            _app().processEvents()
+            item = _find_file_tree_item(win, file_id)
+            t.assert_true("file reveal test can find GUI file row", item is not None)
+            if item is None:
+                return
+
+            def fake_reveal(path: str | Path) -> None:
+                calls.append(Path(path))
+
+            main_window_module.reveal_in_explorer = fake_reveal
+            win.tbl_files.setCurrentItem(item)
+            win.action_reveal_current_file()
+            t.assert_eq("file reveal action calls positioning helper", calls, [src.resolve()])
+        finally:
+            main_window_module.reveal_in_explorer = old_reveal
+            _close_window(win)
+
+
 def main() -> bool:
     _app()
     t = T()
@@ -459,6 +518,7 @@ def main() -> bool:
             ("ZIP package export/import", test_zip_package_export_import_round_trip),
             ("Main splitter persistence", test_main_splitter_sizes_persist),
             ("Right panel width stable", test_right_panel_width_stable_across_selection),
+            ("File reveal action", test_file_reveal_action_uses_positioning_path),
         ]
         for name, fn in tests:
             print(f"\n-> {name}")

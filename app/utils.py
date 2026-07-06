@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -339,11 +340,16 @@ def reveal_in_explorer(path: str | Path) -> None:
     """在资源管理器中定位文件。"""
     p = Path(path).resolve()
     if sys.platform == "win32":
-        os.system(f'explorer /select,"{p}"')
+        creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+        subprocess.Popen(
+            ["explorer.exe", f"/select,{p}"],
+            close_fds=True,
+            creationflags=creationflags,
+        )
     elif sys.platform == "darwin":
-        os.system(f'open -R "{p}"')
+        subprocess.Popen(["open", "-R", str(p)], close_fds=True)
     else:
-        os.system(f'xdg-open "{p.parent}"')
+        subprocess.Popen(["xdg-open", str(p.parent)], close_fds=True)
 
 
 def utc_to_local_str(s: str, fmt: str = "%Y-%m-%d %H:%M") -> str:

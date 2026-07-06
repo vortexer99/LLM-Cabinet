@@ -22,6 +22,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
 - 新增 `selftests/task29_file_storage_folder_ops.py`，覆盖文件夹粒度存储操作的递归范围与 missing-only 筛选。
+- 新增 `selftests/task_utils_opening.py`，覆盖 Windows 文件定位不经命令行 shell 的工具函数回归。
 - **文件来源标记（task #30）**：`files` 表新增 `origin` 列，区分用户原始文件与软件衍生物（如封面快照）。
   - 新生成的封面快照自动标记 `origin='generated'`。
   - 迁移时自动回填历史封面快照 `__cover_*.png` 为 `generated`。
@@ -84,6 +85,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 全新库直接创建到当前 schema 时补建 `mcp_audit` 表，避免主窗口首次启动查询 MCP 审计状态时崩溃。
 - 主界面左/中/右三栏宽度在拖拽后会写入设置，重启后恢复上次宽度。
 - 项目右键菜单的「已读MCP修改」会固定使用本次右键目标，避免因当前选区未更新而清错或没有清除 MCP 未读标记。
+- Windows 上文件「定位」改为直接启动资源管理器，不再通过命令行 shell 中转，避免弹出命令行窗口并提升响应速度。
 
 ## [0.5.0] - 2026-06-10
 

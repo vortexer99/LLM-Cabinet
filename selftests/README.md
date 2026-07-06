@@ -95,6 +95,7 @@ with closing_repos(repo_a, repo_b):
 | [task25_multi_select.py](./task25_multi_select.py) | 项目列表多选的数据层回归：批量删除、批量标记 MCP 已读、选中 id 逻辑、Phase C 批量追加标签后端 | [tasks/25](../tasks/25-project-list-batch-and-dnd.md) |
 | [task29_file_storage_folder_ops.py](./task29_file_storage_folder_ops.py) | 文件存储位置管理 T3c：逻辑文件夹粒度批量入口的数据层范围（递归子层级 + missing_only） | [tasks/29](../tasks/29-file-storage-location-management.md) T3c |
 | [task31a_files_tree_interactions.py](./task31a_files_tree_interactions.py) | 文件树交互数据层底座：`update_file` 写回 subfolder、`set_file_subfolder` 移动逻辑目录、`rename_subfolder` 递归重命名子层级、`explicit_subfolders` 空文件夹设置往返 | [tasks/31a](../tasks/31a-files-tree-interactions.md) |
+| [task_utils_opening.py](./task_utils_opening.py) | 工具函数回归：Windows `reveal_in_explorer()` 直接启动 Explorer，不经 `os.system`/shell，避免 GUI 定位文件时弹命令行窗口 | 跨任务工具函数 |
 | [task_status_consistency.py](./task_status_consistency.py) | 任务卡 `**状态**` 头与 `tasks/README.md` 索引表的完成度类别一致性（抓"一边完成一边待做"漂移）+ 索引完整性（双向） | 跨任务（无单一 task） |
 
 ## 不接入 CI 的原因
