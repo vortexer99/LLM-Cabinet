@@ -1,6 +1,7 @@
 """主窗口：左侧项目卡片墙 / 中间文件列表 / 右侧详情+预览。"""
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 
@@ -1481,6 +1482,7 @@ class MainWindow(QMainWindow):
         self.tbl_files.setHeaderLabels([c.label for c in FILES_COLUMNS])
         self._files_dnd = FilesTableDnD(self.tbl_files)
         self._files_dnd.files_dropped.connect(self._on_dropped_on_files_table)
+        self._files_dnd.files_moved.connect(self._on_files_moved)
         h = self.tbl_files.header()
         # 所有列都 Interactive：允许用户自由拖宽
         for i, _col in enumerate(FILES_COLUMNS):
@@ -1509,6 +1511,7 @@ class MainWindow(QMainWindow):
         self.tbl_files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl_files.customContextMenuRequested.connect(self._file_context_menu)
         self.tbl_files.itemDoubleClicked.connect(self._on_file_double_clicked)
+        self._files_context_subfolder = ""
         # 防止列宽信号触发时还没绑定项目导致空操作
         self._files_columns_loading = False
 
@@ -1941,6 +1944,7 @@ class MainWindow(QMainWindow):
         if view_mode == "flat":
             self._populate_files_flat(files)
         else:
+            self.tbl_files.setSortingEnabled(False)
             self._populate_files_tree(files)
             self.tbl_files.expandAll()
         self.tbl_files.blockSignals(False)
@@ -1954,6 +1958,91 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             f"项目 #{p.id}  ·  {p.title}  ·  {len(files)} 文件"
         )
+
+    FILES_TREE_SORT_SETTING_KEY = "files_table_sort_tree"
+    EXPLICIT_SUBFOLDERS_SETTING_KEY = "explicit_subfolders"
+
+    def _load_explicit_subfolders(self, project_id: int | None) -> set[str]:
+        if project_id is None:
+            return set()
+        raw = self.repo.get_project_setting(
+            int(project_id), self.EXPLICIT_SUBFOLDERS_SETTING_KEY, "[]",
+        )
+        try:
+            data = json.loads(raw)
+        except Exception:
+            return set()
+        if not isinstance(data, list):
+            return set()
+        out: set[str] = set()
+        for item in data:
+            if isinstance(item, str):
+                sf = item.strip().strip("/")
+                if sf:
+                    out.add(sf)
+        return out
+
+    def _save_explicit_subfolders(self, project_id: int, subfolders: set[str]) -> None:
+        cleaned = sorted(sf.strip().strip("/") for sf in subfolders if sf.strip().strip("/"))
+        self.repo.set_project_setting(
+            int(project_id),
+            self.EXPLICIT_SUBFOLDERS_SETTING_KEY,
+            json.dumps(cleaned, ensure_ascii=False),
+        )
+
+    def _tree_sort_state(self) -> tuple[str, bool]:
+        pid = self._current_project_id
+        if pid is None:
+            return "custom", False
+        raw = self.repo.get_project_setting(
+            int(pid), self.FILES_TREE_SORT_SETTING_KEY, "",
+        )
+        if raw:
+            try:
+                data = json.loads(raw)
+                key = str(data.get("key") or "custom")
+                descending = bool(data.get("descending", False))
+                if key == "custom" or files_column_by_key(key) is not None:
+                    return key, descending
+            except Exception:
+                pass
+        return "custom", False
+
+    def _set_tree_sort_state(self, key: str, descending: bool = False) -> None:
+        pid = self._current_project_id
+        if pid is None:
+            return
+        if key != "custom" and files_column_by_key(key) is None:
+            key = "custom"
+            descending = False
+        self.repo.set_project_setting(
+            int(pid),
+            self.FILES_TREE_SORT_SETTING_KEY,
+            json.dumps({"key": key, "descending": bool(descending)}, ensure_ascii=False),
+        )
+
+    def _connect_files_tree_header(self) -> None:
+        header = self.tbl_files.header()
+        try:
+            header.sectionClicked.disconnect(self._on_files_flat_header_clicked)
+        except (RuntimeError, TypeError):
+            pass
+        try:
+            header.sectionClicked.disconnect(self._on_files_tree_header_clicked)
+        except (RuntimeError, TypeError):
+            pass
+        header.sectionClicked.connect(self._on_files_tree_header_clicked)
+
+    def _on_files_tree_header_clicked(self, col: int) -> None:
+        if not (0 <= col < len(FILES_COLUMNS)):
+            return
+        key = FILES_COLUMNS[col].key
+        cur_key, cur_desc = self._tree_sort_state()
+        descending = (not cur_desc) if cur_key == key else False
+        self._set_tree_sort_state(key, descending)
+        self._sort_files_tree()
+        order = Qt.DescendingOrder if descending else Qt.AscendingOrder
+        self.tbl_files.header().setSortIndicator(col, order)
 
     def _populate_files_tree(self, files: list[FileItem]) -> None:
         """按 files.subfolder 分组建树（task #17）。
@@ -2026,6 +2115,7 @@ class MainWindow(QMainWindow):
                 node.setFlags(node.flags() & ~Qt.ItemIsEditable)
                 # 目录节点不可选中执行（存一个特殊标记）
                 node.setData(0, Qt.UserRole, -1)
+                node.setData(0, Qt.UserRole + 1, partial)
                 if parent_node is None:
                     self.tbl_files.addTopLevelItem(node)
                 else:
@@ -2033,6 +2123,11 @@ class MainWindow(QMainWindow):
                 dir_nodes[partial] = node
                 parent_node = node
             return parent_node
+
+        explicit_subfolders = self._load_explicit_subfolders(self._current_project_id)
+        file_subfolders = {f.subfolder for f in files if f.subfolder}
+        for subfolder in sorted(explicit_subfolders | file_subfolders):
+            _get_dir_node(subfolder)
 
         for f in files:
             name = Path(f.path).name
@@ -2047,8 +2142,12 @@ class MainWindow(QMainWindow):
             item.setText(4, _format_added_at(f.added_at))
             item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
             item.setData(0, Qt.UserRole, f.id)
+            item.setData(0, Qt.UserRole + 2, f.subfolder or "")
             # 文件节点默认不可编辑（label 编辑通过 _on_file_item_changed 控制）
-            item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
+            item.setFlags(
+                (item.flags() | Qt.ItemIsDragEnabled | Qt.ItemIsEditable)
+                & ~Qt.ItemIsDropEnabled
+            )
 
             if f.missing:
                 item.setToolTip(0,
@@ -2066,8 +2165,9 @@ class MainWindow(QMainWindow):
             else:
                 parent_node.addChild(item)
 
-        # 排序：同级内目录先（按名字），文件后（按 ord）
+        # 排序：同级内目录先（按名字），文件后（按当前树形排序设置）
         self._sort_files_tree()
+        self._connect_files_tree_header()
 
     # task #31b: 扁平视图
     def _populate_files_flat(self, files: list[FileItem]) -> None:
@@ -2158,7 +2258,19 @@ class MainWindow(QMainWindow):
         self.repo.set_project_setting(pid, "files_flat_sort_order", str(order))
 
     def _sort_files_tree(self) -> None:
-        """对树的每一级排序：目录节点在前（按文本），文件节点在后（按 ord/文本）。"""
+        """对树的每一级排序：目录在前，文件按树形排序偏好排列。"""
+        sort_key, descending = self._tree_sort_state()
+        key_to_col = {col.key: i for i, col in enumerate(FILES_COLUMNS)}
+
+        def _file_sort_value(item: QTreeWidgetItem):
+            if sort_key == "custom":
+                fid = item.data(0, Qt.UserRole)
+                f = self.repo.get_file(int(fid)) if fid is not None and fid > 0 else None
+                return (f.ord if f else 0, f.id if f and f.id is not None else 0)
+            col = key_to_col.get(sort_key, 0)
+            text = item.text(col) or ""
+            return text.casefold()
+
         def _sort_items(parent: QTreeWidget | QTreeWidgetItem) -> None:
             # 用 take* 取出所有子节点（不删除）
             children: list[QTreeWidgetItem] = []
@@ -2175,6 +2287,7 @@ class MainWindow(QMainWindow):
 
             # 目录按文本排序，文件保持原序
             dirs.sort(key=lambda n: n.text(0))
+            files.sort(key=_file_sort_value, reverse=descending)
 
             # 重新放回
             for n in dirs:
@@ -2193,6 +2306,11 @@ class MainWindow(QMainWindow):
                 _sort_items(n)
 
         _sort_items(self.tbl_files)
+        if sort_key != "custom":
+            col = key_to_col.get(sort_key, 0)
+            order = Qt.DescendingOrder if descending else Qt.AscendingOrder
+            self.tbl_files.header().setSortIndicatorShown(True)
+            self.tbl_files.header().setSortIndicator(col, order)
 
     @staticmethod
     def _desc_plain(md: str) -> str:
@@ -2952,6 +3070,9 @@ class MainWindow(QMainWindow):
         fid = it.data(0, Qt.UserRole)
         if fid is None or fid > 0:
             return ""  # 文件节点或无效
+        stored = it.data(0, Qt.UserRole + 1)
+        if stored is not None:
+            return stored or ""
         # 目录节点：向上遍历拼路径
         parts: list[str] = []
         node = it
@@ -3129,6 +3250,9 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _subfolder_from_tree_node(node: QTreeWidgetItem) -> str:
         """从目录树节点向上遍历，拼出 subfolder 路径。"""
+        stored = node.data(0, Qt.UserRole + 1)
+        if stored is not None:
+            return stored or ""
         parts: list[str] = []
         n: QTreeWidgetItem | None = node
         while n is not None:
@@ -3579,18 +3703,7 @@ class MainWindow(QMainWindow):
         if pid is None:
             return
 
-        # 检测当前右键点击的是哪个目录节点
-        item = self.tbl_files.itemAt(self.tbl_files.viewport().mapFromGlobal(
-            self.tbl_files.viewport().mapToGlobal(self.tbl_files.cursor().pos())
-        ))
-        parent_subfolder = ""
-        if item:
-            role = item.data(0, Qt.UserRole)
-            if role == -1:  # 目录节点
-                text = item.text(0).replace("📁 ", "").rstrip("/")
-                parent_subfolder = text
-
-        # 输入对话框
+        parent_subfolder = getattr(self, "_files_context_subfolder", "") or ""
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(
             self, "新建文件夹",
@@ -3601,38 +3714,30 @@ class MainWindow(QMainWindow):
             return
 
         name = name.strip()
-        # 验证名称合法
-        if "/" in name:
-            QMessageBox.warning(self, "无效名称", "文件夹名称不能包含「/」。")
+        if "/" in name or "\\" in name:
+            QMessageBox.warning(self, "无效名称", "文件夹名称不能包含路径分隔符。")
             return
 
         new_subfolder = f"{parent_subfolder}/{name}" if parent_subfolder else name
 
-        # 检查是否已存在
         existing_files = self.repo.list_files(pid)
         existing_sf = {f.subfolder for f in existing_files}
-        if new_subfolder in existing_sf:
+        explicit = self._load_explicit_subfolders(pid)
+        if new_subfolder in existing_sf or new_subfolder in explicit:
             QMessageBox.warning(self, "已存在", f"文件夹「{new_subfolder}」已存在。")
             return
 
-        # 创建虚拟文件占位（空文件夹需要至少一个文件才能显示）
-        # 我们创建一个占位文件，用户可以后续拖文件进去
-        from ..models import FileItem
-        placeholder = FileItem(
-            project_id=pid,
-            path=f"{new_subfolder}/.placeholder",
-            is_relative=True,
-            label="（空文件夹占位）",
-            kind="other",
-            subfolder=new_subfolder,
-        )
-        # 注意：占位文件设为隐藏（用特殊命名），不在 UI 显示
-        # 这里简单处理：直接刷新
+        explicit.add(new_subfolder)
+        self._save_explicit_subfolders(pid, explicit)
         self._show_project(self.repo.get_project(pid))
         self.statusBar().showMessage(f"已创建文件夹「{new_subfolder}」", 4000)
 
     def action_rename_file(self) -> None:
         """task #31a T4：F2 重命名文件（label）。"""
+        item = self.tbl_files.currentItem()
+        if item is not None and item.data(0, Qt.UserRole) is not None and item.data(0, Qt.UserRole) < 0:
+            self.action_rename_subfolder()
+            return
         fid = self._current_file_row_id()
         if fid is None:
             return
@@ -3655,6 +3760,199 @@ class MainWindow(QMainWindow):
         self._refresh_files_table()
         self.statusBar().showMessage(f"已重命名为「{f.label}」", 4000)
 
+    def action_rename_physical_file(self) -> None:
+        """task #31a T4：Shift+F2 重命名物理文件名。"""
+        fid = self._current_file_row_id()
+        if fid is None:
+            return
+        f = self.repo.get_file(fid)
+        if not f:
+            return
+
+        old_abs = self.library.resolve(f.path, f.is_relative)
+        old_name = old_abs.name
+        from PySide6.QtWidgets import QInputDialog
+        new_name, ok = QInputDialog.getText(
+            self, "重命名物理文件",
+            "请输入新的文件名：",
+            text=old_name,
+        )
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name or new_name in (".", ".."):
+            QMessageBox.warning(self, "无效名称", "文件名不能为空。")
+            return
+        if any(ch in new_name for ch in '<>:"/\\|?*'):
+            QMessageBox.warning(self, "无效名称", "文件名包含 Windows 不允许的字符。")
+            return
+        if new_name == old_name:
+            return
+
+        new_abs = old_abs.with_name(new_name)
+        if new_abs.exists():
+            QMessageBox.warning(self, "已存在", f"目标文件已存在：\n{new_abs}")
+            return
+        if not old_abs.exists():
+            QMessageBox.warning(self, "文件不存在", f"原文件不存在：\n{old_abs}")
+            return
+
+        try:
+            old_abs.rename(new_abs)
+            if f.is_relative:
+                f.path = (Path(f.path).parent / new_name).as_posix()
+            else:
+                f.path = str(new_abs.resolve())
+            self.repo.update_file(f)
+        except OSError as e:
+            QMessageBox.warning(self, "重命名失败", str(e))
+            return
+
+        self._refresh_files_table()
+        self.statusBar().showMessage(f"已重命名物理文件为「{new_name}」", 4000)
+
+    def action_rename_subfolder(self) -> None:
+        """task #31a T4：重命名逻辑文件夹。"""
+        pid = self._current_project_id
+        item = self.tbl_files.currentItem()
+        if pid is None or item is None:
+            return
+        old = self._subfolder_from_tree_node(item)
+        if not old:
+            return
+        parent = old.rsplit("/", 1)[0] if "/" in old else ""
+        old_name = old.rsplit("/", 1)[-1]
+
+        from PySide6.QtWidgets import QInputDialog
+        new_name, ok = QInputDialog.getText(
+            self, "重命名文件夹",
+            "请输入新的文件夹名：",
+            text=old_name,
+        )
+        if not ok:
+            return
+        new_name = new_name.strip()
+        if not new_name:
+            QMessageBox.warning(self, "无效名称", "文件夹名不能为空。")
+            return
+        if "/" in new_name or "\\" in new_name:
+            QMessageBox.warning(self, "无效名称", "文件夹名称不能包含路径分隔符。")
+            return
+        new = f"{parent}/{new_name}" if parent else new_name
+        if new == old:
+            return
+
+        files = self.repo.list_files(pid)
+        existing = {f.subfolder for f in files if f.subfolder and f.subfolder != old}
+        explicit = self._load_explicit_subfolders(pid)
+        if new in existing or (new in explicit and new != old):
+            QMessageBox.warning(self, "已存在", f"文件夹「{new}」已存在。")
+            return
+
+        self.repo.rename_subfolder(pid, old, new)
+        updated_explicit: set[str] = set()
+        prefix = old + "/"
+        for sf in explicit:
+            if sf == old:
+                updated_explicit.add(new)
+            elif sf.startswith(prefix):
+                updated_explicit.add(new + sf[len(old):])
+            else:
+                updated_explicit.add(sf)
+        self._save_explicit_subfolders(pid, updated_explicit)
+        self._refresh_files_table()
+        self.statusBar().showMessage(f"已重命名文件夹为「{new}」", 4000)
+
+    def action_delete_empty_subfolder(self) -> None:
+        """删除显式创建且不含文件的空文件夹。"""
+        pid = self._current_project_id
+        item = self.tbl_files.currentItem()
+        if pid is None or item is None:
+            return
+        sf = self._subfolder_from_tree_node(item)
+        if not sf:
+            return
+        files = self.repo.list_files(pid)
+        if any(f.subfolder == sf or f.subfolder.startswith(sf + "/") for f in files):
+            QMessageBox.information(self, "无法删除", "只能删除空文件夹。")
+            return
+        explicit = self._load_explicit_subfolders(pid)
+        explicit.discard(sf)
+        self._save_explicit_subfolders(pid, explicit)
+        self._refresh_files_table()
+        self.statusBar().showMessage(f"已删除空文件夹「{sf}」", 4000)
+
+    def _on_files_moved(
+        self,
+        file_ids: list[int],
+        target_subfolder: str,
+        target_file_id,
+        before: bool,
+    ) -> None:
+        """task #31a T2：内部拖动文件，更新 subfolder 与同级顺序。"""
+        pid = self._current_project_id
+        if pid is None or getattr(self, "_files_view_mode", "tree") != "tree":
+            return
+        selected_ids: list[int] = []
+        for fid in file_ids:
+            if fid not in selected_ids:
+                selected_ids.append(int(fid))
+        if not selected_ids:
+            return
+        if target_file_id in selected_ids:
+            target_file_id = None
+
+        target_subfolder = (target_subfolder or "").strip("/")
+        selected_files = [self.repo.get_file(fid) for fid in selected_ids]
+        selected_files = [
+            f for f in selected_files
+            if f is not None and f.project_id == pid and f.id is not None
+        ]
+        if not selected_files:
+            return
+
+        source_subfolders = {f.subfolder or "" for f in selected_files}
+        for f in selected_files:
+            if f.subfolder != target_subfolder and f.id is not None:
+                self.repo.set_file_subfolder(f.id, target_subfolder)
+                f.subfolder = target_subfolder
+
+        all_files = self.repo.list_files(pid)
+        selected_set = {int(f.id) for f in selected_files if f.id is not None}
+        siblings = [
+            f for f in all_files
+            if (f.subfolder or "") == target_subfolder and f.id not in selected_set
+        ]
+        siblings.sort(key=lambda f: (f.ord, f.id or 0))
+
+        insert_at = len(siblings)
+        if target_file_id is not None:
+            for i, f in enumerate(siblings):
+                if f.id == target_file_id:
+                    insert_at = i if before else i + 1
+                    break
+
+        selected_order = [int(f.id) for f in selected_files if f.id is not None]
+        new_order = [int(f.id) for f in siblings[:insert_at] if f.id is not None]
+        new_order.extend(selected_order)
+        new_order.extend(int(f.id) for f in siblings[insert_at:] if f.id is not None)
+        self.repo.reorder_files(new_order)
+
+        for sf in source_subfolders - {target_subfolder}:
+            remaining = [
+                f for f in self.repo.list_files(pid)
+                if (f.subfolder or "") == sf and f.id is not None
+            ]
+            remaining.sort(key=lambda f: (f.ord, f.id or 0))
+            self.repo.reorder_files([int(f.id) for f in remaining])
+
+        self._set_tree_sort_state("custom", False)
+        self._refresh_files_table()
+        self.statusBar().showMessage(
+            f"已移动 {len(selected_files)} 个文件到「{target_subfolder or '顶层'}」",
+            4000,
+        )
+
     def _refresh_files_table(self) -> None:
         """刷新文件表（重载当前项目）。"""
         pid = self._current_project_id
@@ -3666,20 +3964,32 @@ class MainWindow(QMainWindow):
         item = self.tbl_files.itemAt(pos)
         if item is None:
             # 在空白处右键 → 新建文件夹
+            self._files_context_subfolder = ""
             menu = QMenu(self)
             menu.addAction("📁  新建文件夹", self.action_new_subfolder)
             menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
             return
 
+        self.tbl_files.setCurrentItem(item)
         fid = item.data(0, Qt.UserRole)
         if fid is None or fid <= 0:
             # 右键在目录节点上 → 可新建子文件夹
+            sf = self._subfolder_from_tree_node(item)
+            self._files_context_subfolder = sf
+            files = self.repo.list_files(self._current_project_id) if self._current_project_id else []
+            is_empty = bool(sf) and not any(
+                f.subfolder == sf or f.subfolder.startswith(sf + "/") for f in files
+            )
             menu = QMenu(self)
             menu.addAction("📁  在此文件夹下新建子文件夹", self.action_new_subfolder)
+            menu.addAction("✏️  重命名文件夹", self.action_rename_subfolder)
+            act_del_empty = menu.addAction("🗑  删除空文件夹", self.action_delete_empty_subfolder)
+            act_del_empty.setEnabled(is_empty)
             menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
             return
 
         # 右键在文件节点上 → 显示文件操作菜单
+        self._files_context_subfolder = item.data(0, Qt.UserRole + 2) or ""
         menu = QMenu(self)
         menu.addAction("▶  打开", self.action_open_current_file)
         menu.addAction("📂  在资源管理器中显示", self.action_reveal_current_file)
@@ -3695,6 +4005,7 @@ class MainWindow(QMainWindow):
         menu.addSeparator()
         # task #31a T4: F2 重命名
         menu.addAction("✏️  重命名", self.action_rename_file)
+        menu.addAction("✏️  重命名物理文件", self.action_rename_physical_file)
         menu.addSeparator()
         menu.addAction("🗑  移除", self.action_delete_files)
         menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
@@ -3724,6 +4035,17 @@ class MainWindow(QMainWindow):
     def eventFilter(self, obj, ev):  # noqa: D401
         """全局监听 drag 进出，控制 DropZone 显隐。"""
         et = ev.type()
+        if et == QEvent.KeyPress and obj in (self.tbl_files, self.tbl_files.viewport()):
+            if ev.key() == Qt.Key_F2:
+                if ev.modifiers() & Qt.ShiftModifier:
+                    self.action_rename_physical_file()
+                else:
+                    item = self.tbl_files.currentItem()
+                    if item is not None and item.data(0, Qt.UserRole) is not None and item.data(0, Qt.UserRole) < 0:
+                        self.action_rename_subfolder()
+                    elif item is not None:
+                        self.tbl_files.editItem(item, 1)
+                return True
         if et == QEvent.DragEnter:
             md = ev.mimeData() if hasattr(ev, "mimeData") else None
             if md and md.hasUrls():

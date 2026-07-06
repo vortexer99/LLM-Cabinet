@@ -12,6 +12,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ### Added
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
+- 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
 - **文件来源标记（task #30）**：`files` 表新增 `origin` 列，区分用户原始文件与软件衍生物（如封面快照）。
   - 新生成的封面快照自动标记 `origin='generated'`。
   - 迁移时自动回填历史封面快照 `__cover_*.png` 为 `generated`。
@@ -47,6 +48,10 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - #31b 扁平视图排序：点击列头可排序（按项目记忆）
   - #31a 新建文件夹：文件表空白处/目录节点右键「📁 新建文件夹」
   - #31a 重命名：文件表右键「✏️ 重命名」修改文件说明（label）
+  - #31a 树形视图列排序：同级内文件可按文件名/说明/类型/大小/添加时间/存储排序，文件夹始终置顶，按项目记忆排序状态
+  - #31a 树形视图内部拖动：支持同级改序、拖入文件夹、拖回顶层，多选移动后写回 `files.ord` / `files.subfolder`
+  - #31a 空文件夹持久化：显式新建的空 subfolder 存入 `project_settings.explicit_subfolders`，可右键删除空文件夹
+  - #31a F2 进入说明列编辑，Shift+F2 可重命名仓储/链接文件的物理文件名；目录节点 F2 可重命名 subfolder
 - **项目列表多选（task #25 Phase A/B）**：
   - 卡片视图/表格视图支持 Ctrl+点击多选、Shift+范围选择
   - 多选时预览区显示"已选 X 个项目"

@@ -791,9 +791,9 @@ class Repository:
 
     def update_file(self, f: FileItem) -> None:
         self.conn.execute(
-            """UPDATE files SET path=?, is_relative=?, label=?, kind=?, ord=?
+            """UPDATE files SET path=?, is_relative=?, label=?, kind=?, ord=?, subfolder=?
                WHERE id=?""",
-            (f.path, int(f.is_relative), f.label, f.kind, f.ord, f.id),
+            (f.path, int(f.is_relative), f.label, f.kind, f.ord, f.subfolder, f.id),
         )
         self.conn.commit()
 
@@ -810,6 +810,44 @@ class Repository:
         for i, fid in enumerate(ordered_ids):
             cur.execute("UPDATE files SET ord=? WHERE id=?", (i, fid))
         self.conn.commit()
+
+    def set_file_subfolder(self, fid: int, subfolder: str) -> None:
+        """更新单个文件的逻辑子目录（task #31a）。"""
+        self.conn.execute(
+            "UPDATE files SET subfolder=? WHERE id=?",
+            (subfolder, fid),
+        )
+        self.conn.commit()
+
+    def rename_subfolder(self, project_id: int, old: str, new: str) -> int:
+        """重命名项目内的逻辑子目录，并同步其所有子层级。
+
+        返回受影响的文件行数。``old='docs'`` 改为 ``notes`` 时，
+        ``docs/a`` 也会同步变为 ``notes/a``。
+        """
+        old = (old or "").strip("/")
+        new = (new or "").strip("/")
+        if not old or old == new:
+            return 0
+
+        rows = self.conn.execute(
+            "SELECT id, subfolder FROM files WHERE project_id=?",
+            (project_id,),
+        ).fetchall()
+        changed: list[tuple[str, int]] = []
+        prefix = old + "/"
+        for r in rows:
+            sf = r["subfolder"] or ""
+            if sf == old:
+                changed.append((new, r["id"]))
+            elif sf.startswith(prefix):
+                changed.append((new + sf[len(old):], r["id"]))
+
+        cur = self.conn.cursor()
+        for sf, fid in changed:
+            cur.execute("UPDATE files SET subfolder=? WHERE id=?", (sf, fid))
+        self.conn.commit()
+        return len(changed)
 
     def set_file_missing(self, fid: int, missing: bool) -> None:
         """标记/取消文件缺失标记（task #14 T1）。"""
