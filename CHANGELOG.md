@@ -17,6 +17,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 - 新增 `selftests/task03_search_phase_b.py`，覆盖字段 key / 字段显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索。
 - **搜索历史与收藏表达式（task #03 Phase C）**：成功执行的搜索自动保存到 `settings.search_history`；搜索框焦点/下拉按钮可复用最近搜索；☆ 按钮可命名收藏当前表达式并保存到 `settings.saved_searches`。
 - 新增 `app/search_history.py` 与 `selftests/task03_search_phase_c.py`，覆盖搜索历史去重/上限、坏 JSON 容错、收藏新增/覆盖/删除。
+- 新增 `selftests/gui_main_window_regressions.py`，用 PySide6 offscreen 覆盖主窗口搜索菜单、全库搜索、MCP 已读右键目标与分栏宽度持久化等 GUI 回归。
 - 新增 `tools/create_sample_library.py` 与 `docs/sample-library.md`，可生成完整样例库用于手工测试搜索、标签、文件树、缺失链接、导出导入、MCP audit、LLM 建议和搜索历史/收藏。
 - 新增 `selftests/task_status_consistency.py`，检查任务卡头部状态与 `tasks/README.md` 索引表完成度类别是否一致，并纳入 selftests 索引。
 - 新增 `selftests/task31a_files_tree_interactions.py`，覆盖文件树 `subfolder` 更新、递归重命名与显式空文件夹设置。
@@ -80,6 +81,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 同步 `docs/file-handling.md` 任务地图、推荐执行顺序、`tasks/README.md` 索引表、`TODO.md` 条目。
 
 ### Fixed
+- 全新库直接创建到当前 schema 时补建 `mcp_audit` 表，避免主窗口首次启动查询 MCP 审计状态时崩溃。
 - 主界面左/中/右三栏宽度在拖拽后会写入设置，重启后恢复上次宽度。
 - 项目右键菜单的「已读MCP修改」会固定使用本次右键目标，避免因当前选区未更新而清错或没有清除 MCP 未读标记。
 

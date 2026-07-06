@@ -129,6 +129,17 @@ CREATE TABLE IF NOT EXISTS project_field_suggestions (
 CREATE INDEX IF NOT EXISTS idx_pfs_project ON project_field_suggestions(project_id, status);
 CREATE INDEX IF NOT EXISTS idx_pfs_field   ON project_field_suggestions(field_id);
 
+-- MCP 审计日志（task #24）
+CREATE TABLE IF NOT EXISTS mcp_audit (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL DEFAULT (datetime('now')),
+    client_name     TEXT,
+    tool_name       TEXT NOT NULL,
+    arguments_json  TEXT,
+    result_status   TEXT NOT NULL DEFAULT 'success',
+    error_message   TEXT
+);
+
 CREATE TABLE IF NOT EXISTS settings (
     key    TEXT PRIMARY KEY,
     value  TEXT

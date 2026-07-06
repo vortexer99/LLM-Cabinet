@@ -7,7 +7,7 @@
 | 跑法 | 开发者**手动**按需跑 | CI / pytest 自动跑 |
 | 范围 | **端到端**：临时库 + 真实文件 + 跨模块 | 单函数 / 单类 |
 | 依赖 | 真 SQLite、真文件系统、真 `app.*` | 大量 mock |
-| 不能依赖 | `QApplication` 与任何 GUI 控件 | 同 |
+| 不能依赖 | 普通 `task*.py` 不依赖 `QApplication`；GUI 回归另放 `gui_*.py` | 同 |
 | 何时新增 | 一个 task 完工时 | 复杂逻辑写完时 |
 
 ## 运行方式
@@ -29,6 +29,13 @@ python selftests/task10_folder_import.py
 ```powershell
 $env:PYTHONIOENCODING = 'utf-8'
 Get-ChildItem selftests/task*.py | ForEach-Object { python $_.FullName }
+```
+
+GUI 回归自检单独跑，要求使用已安装 PySide6 的 Python，并默认走 Qt offscreen：
+
+```powershell
+$env:PYTHONIOENCODING = 'utf-8'
+C:\Users\hfdxm\AppData\Local\Python\bin\python.exe -B selftests\gui_main_window_regressions.py
 ```
 
 ## 文件命名
@@ -60,7 +67,8 @@ with closing_repos(repo_a, repo_b):
 - 用 `tempfile.TemporaryDirectory(ignore_cleanup_errors=True)` 隔离副作用
 - 所有 `Repository` 在退出前 `conn.close()`（最稳的方式：把它们收集到 list，
   在 `with tempfile.TemporaryDirectory` 退出之前手动关；或包一层 helper）
-- **不要**`from PySide6...`：这一层只验证非 UI 逻辑
+- 普通 `task*.py` **不要**`from PySide6...`：这一层只验证非 UI 逻辑
+- GUI 行为回归放在 `gui_*.py`，脚本必须能 offscreen 启动、自己关闭窗口和数据库连接
 - 断言失败用 `T.assert_*`，不要直接 `raise`：让一次跑能看到所有失败点
 - 末尾 `sys.exit(0 if t.report() else 1)`
 
@@ -83,6 +91,7 @@ with closing_repos(repo_a, repo_b):
 | [task20_unify_field_storage.py](./task20_unify_field_storage.py) | schema v3 → v4 迁移：4 列 DROP COLUMN 后系统字段值统一存 `project_field_values`；`Project` dataclass 顶层属性 author/date/source_url/rating 移除；`get/set_field_value` 走 field_values 路径；幂等 + 已有 pfv 行不覆盖 + rating "未填"语义保护 | [tasks/20](../tasks/20-unify-field-storage.md) |
 | [task21_wizard_two_step.py](./task21_wizard_two_step.py) | 字段助手两段式重构纯函数底座：`merge_decisions_into_drafts` / `diff_drafts_to_plan` / `check_undelete_name_conflict` / `summary_dialog_button_label` / `clone_draft` / `drafts_are_dirty` / `step1_visible_indices` 全部分支 | [tasks/21](../tasks/21-wizard-two-step-redesign.md) |
 | [task22_wizard_status_redesign.py](./task22_wizard_status_redesign.py) | 字段助手"LLM 建议"列文案重组：`step1_changed_dimensions` 把 ann × 实际改动维度映射成 `['name', 'type', 'hint']` 子集（rename 路径合并改类型后与 type_conflict 同构判 type）；`step1_action_label` 输出 (label, tooltip) 含决策态后缀；`annotate_conflicts` 把 rename + 改类型合并到 `ann.type`；`step1_visible_indices` 收紧到 `has_llm_change` | [tasks/22](../tasks/22-wizard-status-column-redesign.md) |
+| [gui_main_window_regressions.py](./gui_main_window_regressions.py) | 主窗口 GUI 回归：搜索菜单 FocusIn 防重复、全库搜索 toggle、右键 MCP 已读目标、主 splitter 宽度保存/读取；需 PySide6 + offscreen Qt | 跨任务 GUI 回归 |
 | [task25_multi_select.py](./task25_multi_select.py) | 项目列表多选的数据层回归：批量删除、批量标记 MCP 已读、选中 id 逻辑、Phase C 批量追加标签后端 | [tasks/25](../tasks/25-project-list-batch-and-dnd.md) |
 | [task29_file_storage_folder_ops.py](./task29_file_storage_folder_ops.py) | 文件存储位置管理 T3c：逻辑文件夹粒度批量入口的数据层范围（递归子层级 + missing_only） | [tasks/29](../tasks/29-file-storage-location-management.md) T3c |
 | [task31a_files_tree_interactions.py](./task31a_files_tree_interactions.py) | 文件树交互数据层底座：`update_file` 写回 subfolder、`set_file_subfolder` 移动逻辑目录、`rename_subfolder` 递归重命名子层级、`explicit_subfolders` 空文件夹设置往返 | [tasks/31a](../tasks/31a-files-tree-interactions.md) |

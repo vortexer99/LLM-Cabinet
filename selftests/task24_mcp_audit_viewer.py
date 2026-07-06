@@ -109,6 +109,21 @@ def test_migration_column_exists():
     return t.report()
 
 
+def test_fresh_connect_creates_audit_table():
+    """全新库直接创建到当前 schema 时，也必须包含 mcp_audit 表。"""
+    from app.db import connect
+    from app.repository import Repository
+
+    t = T()
+    with tempfile.TemporaryDirectory() as tmpdir:
+        repo = Repository(connect(Path(tmpdir) / "cabinet.db"))
+        try:
+            t.assert_eq("fresh audit count", repo.count_mcp_audit(), 0)
+        finally:
+            repo.conn.close()
+    return t.report()
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("task24_mcp_audit_viewer selftest")
@@ -119,6 +134,7 @@ if __name__ == "__main__":
         ("test_mark_and_list_modified", test_mark_and_list_modified),
         ("test_audit_count_and_list", test_audit_count_and_list),
         ("test_migration_column_exists", test_migration_column_exists),
+        ("test_fresh_connect_creates_audit_table", test_fresh_connect_creates_audit_table),
     ]:
         print(f"\n--- {name} ---")
         ok = fn()

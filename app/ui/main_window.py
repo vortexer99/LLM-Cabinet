@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import shutil
 import time
+import warnings
 from pathlib import Path
 
 from PySide6.QtCore import QEvent, QItemSelectionModel, QSize, Qt, QTimer
@@ -2316,16 +2317,20 @@ class MainWindow(QMainWindow):
         )
 
     def _connect_files_tree_header(self) -> None:
-        header = self.tbl_files.header()
-        try:
-            header.sectionClicked.disconnect(self._on_files_flat_header_clicked)
-        except (RuntimeError, TypeError):
-            pass
-        try:
-            header.sectionClicked.disconnect(self._on_files_tree_header_clicked)
-        except (RuntimeError, TypeError):
-            pass
-        header.sectionClicked.connect(self._on_files_tree_header_clicked)
+        self._disconnect_files_header_clicked()
+        self.tbl_files.header().sectionClicked.connect(self._on_files_tree_header_clicked)
+
+    def _disconnect_files_header_clicked(self) -> None:
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*Failed to disconnect.*sectionClicked.*",
+                category=RuntimeWarning,
+            )
+            try:
+                self.tbl_files.header().sectionClicked.disconnect()
+            except RuntimeError:
+                pass
 
     def _on_files_tree_header_clicked(self, col: int) -> None:
         if not (0 <= col < len(FILES_COLUMNS)):
@@ -2534,10 +2539,7 @@ class MainWindow(QMainWindow):
             self.tbl_files.sortByColumn(int(sort_col), Qt.SortOrder(int(sort_order)))
 
         # 连接排序信号
-        try:
-            self.tbl_files.header().sectionClicked.disconnect()
-        except RuntimeError:
-            pass
+        self._disconnect_files_header_clicked()
         self.tbl_files.header().sectionClicked.connect(self._on_files_flat_header_clicked)
 
     def _on_files_flat_header_clicked(self, col: int) -> None:
