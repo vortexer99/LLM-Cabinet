@@ -10,6 +10,7 @@
 - 主 splitter 宽度应写入设置并可被新窗口读取
 - 主 splitter 右栏宽度不应随项目选择漂移
 - 文件视图「定位」应从 GUI 入口调用系统定位路径
+- 顶部搜索工具按钮与项目视图切换按钮应保持清晰间距
 
 运行要求：使用安装了 PySide6 的 Python；Windows 本机通常为
 ``C:\\Users\\hfdxm\\AppData\\Local\\Python\\bin\\python.exe -B``。
@@ -165,6 +166,35 @@ def test_search_all_toggle_ignores_sidebar_filter(tmp: Path, t: T) -> None:
                 "search all ignores sidebar filter",
                 _titles(win),
                 {"三体 设定集", "三体 厨房笔记"},
+            )
+        finally:
+            _close_window(win)
+
+
+def test_search_toolbar_buttons_are_grouped(tmp: Path, t: T) -> None:
+    win, repo = _window(tmp)
+    with closing_repos(repo):
+        try:
+            _app().processEvents()
+
+            def left(widget) -> int:
+                return widget.mapTo(win, widget.rect().topLeft()).x()
+
+            def right(widget) -> int:
+                return widget.mapTo(win, widget.rect().topRight()).x()
+
+            t.assert_eq("search menu button fixed width", win.btn_search_menu.width(), 28)
+            t.assert_eq("save search button fixed width", win.btn_save_search.width(), 28)
+            t.assert_eq("search all button has room for text", win.btn_search_all.width(), 46)
+            t.assert_eq("grid view button fixed width", win.btn_view_grid.width(), 28)
+            t.assert_eq("list view button fixed width", win.btn_view_list.width(), 28)
+            t.assert_true(
+                "search actions keep internal spacing",
+                left(win.btn_save_search) - right(win.btn_search_menu) >= 4,
+            )
+            t.assert_true(
+                "search all separated from project view buttons",
+                left(win.btn_view_grid) - right(win.btn_search_all) >= 12,
             )
         finally:
             _close_window(win)
@@ -511,6 +541,7 @@ def main() -> bool:
         tests = [
             ("Search menu focus guard", test_search_menu_focus_guard),
             ("Search all toggle", test_search_all_toggle_ignores_sidebar_filter),
+            ("Search toolbar button grouping", test_search_toolbar_buttons_are_grouped),
             ("GUI broad keyword search", test_gui_keyword_searches_fields_and_files),
             ("MCP seen context targets", test_mcp_seen_context_targets),
             ("Table targets and MCP filter", test_table_context_targets_and_mcp_filter_refresh),
