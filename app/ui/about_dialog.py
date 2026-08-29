@@ -17,7 +17,6 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
@@ -26,6 +25,7 @@ from PySide6.QtWidgets import (
 from .. import HOMEPAGE_URL, __version__
 from ..db import SCHEMA_VERSION
 from ..utils import app_icon_path
+from .dialogs import info
 
 
 class AboutDialog(QDialog):
@@ -174,7 +174,7 @@ class AboutDialog(QDialog):
                 if p.is_file():
                     QDesktopServices.openUrl(QUrl.fromLocalFile(str(p)))
                     return
-        QMessageBox.information(
+        info(
             self, "数据隐私声明",
             "未找到本地 PRIVACY 文件。请到项目仓库根目录查看。",
         )

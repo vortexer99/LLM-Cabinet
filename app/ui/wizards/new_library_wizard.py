@@ -39,7 +39,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
@@ -58,6 +57,7 @@ from ...cabinet import (
     validate_library_path,
 )
 from ...db import OPTIONAL_DEFAULT_FIELDS, connect as db_connect
+from ..dialogs import error, warn
 
 
 # 页索引常量
@@ -375,7 +375,7 @@ class NewLibraryWizard(QDialog):
             return
         path = Path(d)
         if not is_library_dir(path):
-            QMessageBox.warning(
+            warn(
                 self, "不是有效的库目录",
                 f"目录 {path} 缺少 .llm-cabinet 标记，无法识别为 LLM Cabinet 库。",
             )
@@ -439,16 +439,16 @@ class NewLibraryWizard(QDialog):
     def _validate_and_collect_path(self) -> bool:
         path_str = self.ed_path.text().strip()
         if not path_str:
-            QMessageBox.warning(self, "请输入路径", "请先选一个库目录。")
+            warn(self, "请输入路径", "请先选一个库目录。")
             return False
         root = Path(path_str)
         # 路径合法性（绝对路径 / 非法字符 / 系统保护目录 / 父目录存在 等）
         err = validate_library_path(root)
         if err is not None:
-            QMessageBox.warning(self, "路径不合适", err)
+            warn(self, "路径不合适", err)
             return False
         if not is_empty_or_safe_for_library(root):
-            QMessageBox.warning(
+            warn(
                 self, "目录不可用",
                 f"目录 {root} 已含其它文件，不适合作为新库目录。\n请选一个空目录。",
             )
@@ -456,7 +456,7 @@ class NewLibraryWizard(QDialog):
         # 不允许与已有库目录重复
         for h in self._existing_handles:
             if h.path.resolve() == root.resolve():
-                QMessageBox.warning(
+                warn(
                     self, "目录冲突",
                     f"目录 {root} 已经是一个已知库（{h.display_name}）。\n"
                     "如果想打开它，请用「库 → 切换库」。",
@@ -500,7 +500,7 @@ class NewLibraryWizard(QDialog):
         """晚建：所有写盘操作集中在此，任一步失败 → rmtree 整体回滚。"""
         s = self.state
         if s.root is None:
-            QMessageBox.warning(self, "状态异常", "未收集到目标目录。")
+            warn(self, "状态异常", "未收集到目标目录。")
             return False
 
         root = s.root
@@ -596,7 +596,7 @@ class NewLibraryWizard(QDialog):
                         shutil.rmtree(root)
             except OSError:
                 pass
-            QMessageBox.critical(
+            error(
                 self, "创建失败",
                 f"创建库时出错（已尝试回滚目录）：\n{e}",
             )

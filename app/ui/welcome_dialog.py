@@ -29,13 +29,13 @@ from PySide6.QtWidgets import (
     QLabel,
     QListWidget,
     QListWidgetItem,
-    QMessageBox,
     QPushButton,
     QVBoxLayout,
     QWidget,
 )
 
 from ..cabinet import CabinetConfig, is_library_dir
+from .dialogs import error, info, warn
 
 
 # 对话框返回值（QDialog.DialogCode 自定义复用）
@@ -255,11 +255,11 @@ class WelcomeDialog(QDialog):
             return
         it = self.lst_recent.currentItem()
         if it is None:
-            QMessageBox.information(self, "提示", "请先在列表里选一个库。")
+            info(self, "提示", "请先在列表里选一个库。")
             return
         path = Path(str(it.data(Qt.UserRole)))
         if not is_library_dir(path):
-            QMessageBox.warning(
+            warn(
                 self, "目录无效",
                 f"目录\n  {path}\n不再是有效的库（标记 / cabinet.db 缺失）。\n\n"
                 "可能已被移动 / 删除 / 损坏；请改用「打开其它已有库目录」"
@@ -378,7 +378,7 @@ class WelcomeDialog(QDialog):
             return  # 用户取消选择，不关闭 Welcome
         path = Path(d)
         if not is_library_dir(path):
-            QMessageBox.warning(
+            warn(
                 self, "目录无效",
                 f"目录 {path} 不是一个有效的 LLM Cabinet 库（缺少 .llm-cabinet 标记）。\n"
                 "请选择由本应用之前创建过的目录，或选「新建库」走新建流程。",
@@ -415,13 +415,13 @@ class WelcomeDialog(QDialog):
         tp = Path(target_dir)
         try:
             if tp.exists() and tp.is_dir() and any(tp.iterdir()):
-                QMessageBox.warning(
+                warn(
                     self, "目录不为空",
                     f"目标目录非空：{tp}\n请选一个空目录或新建目录。",
                 )
                 return
         except OSError as e:
-            QMessageBox.warning(self, "目录不可访问", str(e))
+            warn(self, "目录不可访问", str(e))
             return
 
         # Step 3：解压 + 进度对话框（zipfile 没有细粒度进度，做一个忙状态指示）
@@ -434,20 +434,20 @@ class WelcomeDialog(QDialog):
             root = restore_library(Path(zip_path), tp)
         except Exception as e:  # noqa: BLE001
             prog.close()
-            QMessageBox.critical(self, "恢复失败", str(e))
+            error(self, "恢复失败", str(e))
             return
         prog.close()
 
         # 解出来若不是有效库（zip 损坏 / 不是本应用产物）→ 拦下来不让进主界面
         if not is_library_dir(root):
-            QMessageBox.warning(
+            warn(
                 self, "恢复结果无效",
                 f"解压完成的目录\n  {root}\n不是有效的 LLM Cabinet 库"
                 "（缺少 .llm-cabinet 标记 / cabinet.db）。\n请检查备份文件来源。",
             )
             return
 
-        QMessageBox.information(
+        info(
             self, "恢复完成",
             f"已从备份恢复到：\n{root}\n\n点击 OK 立即打开该库。",
         )

@@ -38,6 +38,8 @@ SETTING_COLLAPSED_PREFIXES = "tag_tree_collapsed_prefixes"
 class TagTree(QTreeWidget):
     filter_changed = Signal(str, str)  # kind, value
     projects_dropped_on_tag = Signal(list, str)  # project_ids, tag
+    # task #39：标签管理右键动作（action: rename/merge/delete, kind: tag/tag_prefix, value）
+    tag_action_requested = Signal(str, str, str)
 
     KIND_ROLE = Qt.UserRole + 1
     VALUE_ROLE = Qt.UserRole + 2
@@ -61,6 +63,9 @@ class TagTree(QTreeWidget):
         self.itemSelectionChanged.connect(self._on_selection)
         self.itemExpanded.connect(self._on_item_toggle)
         self.itemCollapsed.connect(self._on_item_toggle)
+        # task #39：标签节点右键菜单（重命名/合并/删除）
+        self.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._on_context_menu)
 
         self._suspend_signal = False
         # 持久化标签前缀的折叠状态：{prefix: collapsed_bool}
@@ -295,6 +300,30 @@ class TagTree(QTreeWidget):
         else:
             self._collapsed_prefixes.add(prefix)
         self._save_collapsed_state()
+
+    # ============================================================
+    # 标签管理右键菜单（task #39）
+    # ============================================================
+    def _on_context_menu(self, pos) -> None:
+        item = self.itemAt(pos)
+        if item is None:
+            return
+        kind = item.data(0, self.KIND_ROLE) or ""
+        value = item.data(0, self.VALUE_ROLE) or ""
+        if kind not in ("tag", "tag_prefix") or not value:
+            return
+        from PySide6.QtWidgets import QMenu
+        menu = QMenu(self)
+        act_rename = menu.addAction(f"✏️  重命名标签「{value}」…")
+        act_merge = menu.addAction(f"🔀  把「{value}」合并到…")
+        act_del = menu.addAction(f"🗑  删除标签「{value}」")
+        chosen = menu.exec(self.viewport().mapToGlobal(pos))
+        if chosen is act_rename:
+            self.tag_action_requested.emit("rename", kind, value)
+        elif chosen is act_merge:
+            self.tag_action_requested.emit("merge", kind, value)
+        elif chosen is act_del:
+            self.tag_action_requested.emit("delete", kind, value)
 
     # ============================================================
     # 项目拖放到标签（task #25 Phase C）

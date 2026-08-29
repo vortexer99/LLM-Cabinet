@@ -20,7 +20,6 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
@@ -33,6 +32,7 @@ from PySide6.QtWidgets import (
 
 from ..models import Field, FieldSuggestion, Project
 from ..repository import Repository
+from .dialogs import warn
 from .widgets import StarRating
 
 
@@ -391,7 +391,7 @@ class ProjectDialog(QDialog):
         for fid, (f, w, _sw) in self._editors.items():
             v = self._read_editor(f, w)
             if f.is_title and not (v or "").strip():
-                QMessageBox.warning(self, "提示", "标题不能为空")
+                warn(self, "提示", "标题不能为空")
                 return
             self._repo.set_field_value_on_project(self._project, f, v)
 

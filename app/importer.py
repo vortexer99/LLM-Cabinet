@@ -237,7 +237,12 @@ def import_folder_as_project(
     progress: Callable[[int, int, str], None] | None = None,
     ask_field_policy: Callable[[Path, list[str]], FieldPolicy] | None = None,
 ) -> ImportResult:
-    """将一个 ``ImportPlan`` 落地为新项目。
+    """将一个 ``ImportPlan`` 落地为新项目（同步组合版）。
+
+    task #36 起内部拆成三个阶段，UI 可拆开调用以便把文件复制放进 worker
+    线程（``prepare_project_from_plan`` → ``save_project`` →
+    ``copy_files_for_import``（worker 可跑）→ ``write_import_file_rows``）；
+    本函数保持旧签名旧行为，等价于三阶段在主线程顺序执行。
 
     Args:
         repo: 数据仓库
@@ -250,7 +255,28 @@ def import_folder_as_project(
             ``FieldPolicy``。若回调为 ``None``，回退到 ``options.field_policy``。
     """
     warnings: list[str] = []
+    project = prepare_project_from_plan(repo, plan, options, warnings, ask_field_policy)
+    pid = repo.save_project(project)
+    project.id = pid
+    prepared = copy_files_for_import(
+        library, pid, plan, options, warnings, progress=progress,
+    )
+    n_files = write_import_file_rows(repo, project, plan, prepared, warnings)
+    return ImportResult(project_id=pid, n_files=n_files, warnings=warnings)
 
+
+def prepare_project_from_plan(
+    repo: Repository,
+    plan: ImportPlan,
+    options: ImportOptions,
+    warnings: list[str],
+    ask_field_policy: Callable[[Path, list[str]], FieldPolicy] | None = None,
+) -> Project:
+    """阶段 1（主线程）：决定项目元数据 + 未匹配字段策略。
+
+    返回**尚未持久化**的 ``Project``（tags / field_values 已挂上）；
+    调用方负责 ``repo.save_project``。
+    """
     # ---- 决定项目元数据 ----
     project, tags, field_value_map = _build_project_from_plan(
         plan, options, warnings, repo,
@@ -270,18 +296,96 @@ def import_folder_as_project(
             repo, project, plan, effective_policy, field_value_map, warnings,
         )
 
-    # ---- 写项目 ----
     project.tags = tags
     project.field_values = field_value_map
-    pid = repo.save_project(project)
-    project.id = pid
+    return project
 
-    # ---- 处理文件 ----
-    n_files = _import_files_for_project(
-        repo, library, project, plan, options, warnings, progress,
-    )
 
-    return ImportResult(project_id=pid, n_files=n_files, warnings=warnings)
+def copy_files_for_import(
+    library: Library,
+    project_id: int,
+    plan: ImportPlan,
+    options: ImportOptions,
+    warnings: list[str],
+    *,
+    progress: Callable[[int, int, str], None] | None = None,
+    is_cancelled: Callable[[], bool] | None = None,
+) -> list[tuple[PendingFile, str, bool, "int | None"]]:
+    """阶段 2（纯文件 IO，可放 worker 线程）：收集并（copy 模式）复制文件。
+
+    返回 ``[(PendingFile, stored_path, is_relative, old_file_id), ...]``：
+    - copy 模式：``stored_path`` 为库内相对路径（已物理复制）
+    - link 模式：``stored_path`` 为源文件绝对路径（无 IO）
+    失败项跳过并记 ``warnings``。``is_cancelled()`` 为 True 时提前返回
+    已处理完的部分（不抛异常，由调用方决定如何收尾）。
+    """
+    pending_files, file_id_map = _collect_files_to_import(plan)
+    pf_to_old_id = {id(pf): old_id for old_id, pf in file_id_map.items()}
+
+    prepared: list[tuple[PendingFile, str, bool, "int | None"]] = []
+    total = len(pending_files)
+    for i, pf in enumerate(pending_files):
+        if is_cancelled is not None and is_cancelled():
+            break  # 已复制的部分照常返回，主线程决定收尾
+        try:
+            if options.storage_mode == "copy":
+                rel = library.import_copy(project_id, pf.src)
+                prepared.append((pf, rel, True, pf_to_old_id.get(id(pf))))
+            else:
+                prepared.append(
+                    (pf, str(pf.src.resolve()), False, pf_to_old_id.get(id(pf)))
+                )
+        except Exception as e:
+            warnings.append(f"导入文件失败 {pf.src.name}：{e}")
+        if progress is not None:
+            try:
+                progress(i + 1, total, pf.src.name)
+            except Exception:
+                pass
+    return prepared
+
+
+def write_import_file_rows(
+    repo: Repository,
+    project: Project,
+    plan: ImportPlan,
+    prepared: list[tuple[PendingFile, str, bool, "int | None"]],
+    warnings: list[str],
+) -> int:
+    """阶段 3（主线程）：把阶段 2 的结果写成 files 行 + 封面还原。"""
+    assert project.id is not None
+    n_added = 0
+    old_to_new_id: dict[int, int] = {}
+    for pf, stored_path, is_rel, old_file_id in prepared:
+        try:
+            fi = FileItem(
+                project_id=project.id,
+                path=stored_path,
+                is_relative=is_rel,
+                label=pf.label,
+                kind=detect_kind(pf.src.suffix),
+                ord=n_added,
+                subfolder=pf.subfolder,
+                origin=pf.origin,
+            )
+            new_id = repo.add_file(fi)
+            if old_file_id:
+                try:
+                    old_to_new_id[int(old_file_id)] = new_id
+                except (ValueError, TypeError):
+                    pass
+            n_added += 1
+        except Exception as e:
+            warnings.append(f"导入文件失败 {pf.src.name}：{e}")
+
+    # task #28 T3：封面还原
+    pj = plan.project_json or {}
+    old_cover_id = pj.get("project", {}).get("cover_file_id")
+    if old_cover_id and old_cover_id in old_to_new_id:
+        project.cover_file_id = old_to_new_id[old_cover_id]
+        repo.save_project(project)
+
+    return n_added
 
 
 # -----------------------------------------------------------------------------
@@ -467,101 +571,6 @@ def _apply_field_policy(
         warnings.append(f"已自动创建字段：{'、'.join(created)}")
     if failed:
         warnings.append(f"创建字段失败：{'、'.join(failed)}")
-
-
-def _import_files_for_project(
-    repo: Repository,
-    library: Library,
-    project: Project,
-    plan: ImportPlan,
-    options: ImportOptions,
-    warnings: list[str],
-    progress: Callable[[int, int, str], None] | None,
-) -> int:
-    """复制 / 链接文件夹中的文件到 project。返回成功导入数量。
-
-    task #28 T3 增强：
-    - 优先使用 files.json 的 subfolder（拍平结构也能正确还原目录树）
-    - 写入 origin（user/generated）保留文件来源标记
-    - 建立旧 file_id → 新 file_id 映射，用于封面还原
-    """
-    assert project.id is not None
-
-    # 收集要导入的文件：优先 files.json 列出的；否则递归扫文件夹（排除 project.json/files.json/README.md/files/ 子目录）
-    pending_files, file_id_map = _collect_files_to_import(plan)
-
-    n_added = 0
-    total = len(pending_files)
-
-    # 用于封面还原：旧 file_id → 新 file_id（从 file_id_map 的 key 获取）
-    old_to_new_id: dict[int, int] = {}
-
-    # 建立 PendingFile 到旧 file_id 的映射
-    old_id_by_pf: dict[int, int] = {}
-    for old_id, pf in file_id_map.items():
-        # 通过 src 路径匹配
-        for idx, p in enumerate(pending_files):
-            if p.src == pf.src:
-                old_id_by_pf[idx] = old_id
-                break
-
-    for i, pf in enumerate(pending_files):
-        src = pf.src
-        old_file_id = old_id_by_pf.get(i)  # 从映射获取旧 file_id
-        try:
-            kind = detect_kind(src.suffix)
-            if options.storage_mode == "copy":
-                rel = library.import_copy(project.id, src)
-                fi = FileItem(
-                    project_id=project.id,
-                    path=rel,
-                    is_relative=True,
-                    label=pf.label,
-                    kind=kind,
-                    ord=n_added,
-                    subfolder=pf.subfolder,
-                    origin=pf.origin,
-                )
-            else:
-                fi = FileItem(
-                    project_id=project.id,
-                    path=str(src.resolve()),
-                    is_relative=False,
-                    label=pf.label,
-                    kind=kind,
-                    ord=n_added,
-                    subfolder=pf.subfolder,
-                    origin=pf.origin,
-                )
-            new_id = repo.add_file(fi)
-
-            # 记录旧 file_id → 新 file_id 映射（用于封面还原）
-            if old_file_id:
-                try:
-                    old_id_int = int(old_file_id)
-                    old_to_new_id[old_id_int] = new_id
-                except (ValueError, TypeError):
-                    pass
-
-            n_added += 1
-        except Exception as e:
-            warnings.append(f"导入文件失败 {src.name}：{e}")
-
-        if progress is not None:
-            try:
-                progress(i + 1, total, src.name)
-            except Exception:
-                pass
-
-    # task #28 T3：封面还原
-    pj = plan.project_json or {}
-    old_cover_id = pj.get("project", {}).get("cover_file_id")
-    if old_cover_id and old_cover_id in old_to_new_id:
-        new_cover_id = old_to_new_id[old_cover_id]
-        project.cover_file_id = new_cover_id
-        repo.save_project(project)
-
-    return n_added
 
 
 def _safe_project_subfolder(raw: object) -> str:

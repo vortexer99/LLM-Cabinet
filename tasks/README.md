@@ -39,6 +39,16 @@
 | [31a-files-tree-interactions.md](./31a-files-tree-interactions.md) | 树形视图：拖动改位置 + 同级排序 + 新建空文件夹 + F2 重命名（label/物理名/subfolder） | M+ | P1 | ✅ 完成（v0.6 未发布） |
 | [31b-files-table-flat-view.md](./31b-files-table-flat-view.md) | 扁平视图模式 + 大小/添加时间列 + 列任意排序（Qt 原生 setSortingEnabled） | M | P1 | ✅ 完成（v0.6 未发布） |
 | [32-cross-project-file-reference.md](./32-cross-project-file-reference.md) | 跨项目链接引用（最小方案：路径共享，多引用警告 + #14 跨项目引用报告）；零 schema 改动 | S+S | P2 | 待做（依赖 #17 + #14 + #29） |
+| [33-project-list-performance.md](./33-project-list-performance.md) | 项目列表与封面加载性能优化（缩略图缓存 + 查询减重 + stat 缓存） | M | P0 | ✅ 2026-08-01（v0.6 未发布） |
+| [34-theme-system-unification.md](./34-theme-system-unification.md) | 主题系统统一：颜色主题化 + 浅色主题修复 + QSS 模板化 | M | P1（T1 P0） | ✅ 2026-08-01（v0.6 未发布；废弃深色，落地浅色单主题） |
+| [35-mainwindow-split-and-layering.md](./35-mainwindow-split-and-layering.md) | MainWindow 拆分与 UI 分层整理（纯重构，建议在 #33/#36/#37 之后） | L | P1 | ✅ 2026-08-01（v0.6 未发布） |
+| [36-background-workers.md](./36-background-workers.md) | 长耗时操作线程化（消除主线程 processEvents） | M | P1 | ✅ 2026-08-01（v0.6 未发布） |
+| [37-dialog-and-feedback-unification.md](./37-dialog-and-feedback-unification.md) | 确认对话框中文化 + 批量错误汇总 + 回收站删除 + 反馈策略约定 | M | P1 | ✅ 2026-08-01（v0.6 未发布） |
+| [38-search-box-autocomplete.md](./38-search-box-autocomplete.md) | 搜索框交互改造：补全下拉替代聚焦弹窗 | M | P2 | ✅ 2026-08-01（v0.6 未发布） |
+| [39-batch-panel-and-tag-management.md](./39-batch-panel-and-tag-management.md) | 多选批量操作面板 + 全局标签管理（重命名/合并/删除） | M | P2 | ✅ 2026-08-01（v0.6 未发布） |
+| [40-preview-panel-enhancements.md](./40-preview-panel-enhancements.md) | 预览面板增强（图片缩放 / 视频音量 / PDF 翻页） | M | P2 | ✅ 2026-08-01（v0.6 未发布） |
+| [41-window-state-and-polish.md](./41-window-state-and-polish.md) | 窗口状态持久化与细节打磨合集（geometry / 快捷键 / splitter hack / 字号） | S+M | P2 | ✅ 2026-08-01（v0.6 未发布） |
+| [42-api-key-secure-storage.md](./42-api-key-secure-storage.md) | API Key 安全存储（keyring + 明文迁移 + PRIVACY 同步） | S | P2 | ✅ 2026-08-01（v0.6 未发布） |
 
 ## 约定
 

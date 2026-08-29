@@ -1,13 +1,21 @@
-"""图片 / 视频 / PDF 内嵌预览组件。"""
+"""图片 / 视频 / PDF 内嵌预览组件。
+
+task #40 增强：
+- 图片：滚轮缩放（以光标为中心）/ 拖拽平移 / 双击 适应窗口↔100%，底部控制条
+- 视频：音量滑条 + 倍速 + 空格播放暂停
+- PDF：页码跳转 + 缩放模式 + 页码指示
+"""
 from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import QPointF, QRectF, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QComboBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QPushButton,
     QSizePolicy,
     QSlider,
@@ -17,43 +25,209 @@ from PySide6.QtWidgets import (
 )
 
 from ..utils import detect_kind, open_with_default_app
+from .palette import current as _current_palette
 
 
 # ---------- 图片 ----------------------------------------------------------------
-class ImagePreview(QLabel):
+class _ImageCanvas(QWidget):
+    """图片画布：缩放 + 平移 + 双击切换。由 ImagePreview 托管。"""
+
+    view_changed = Signal()
+
+    MIN_SCALE = 0.1
+    MAX_SCALE = 8.0
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setAlignment(Qt.AlignCenter)
-        self.setMinimumSize(200, 200)
-        self.setStyleSheet("background:#1e1e1e;color:#888;")
-        self.setText("（无预览）")
+        self.setMinimumSize(200, 160)
         self._pix: QPixmap | None = None
+        self._zoom = 1.0            # 自由模式缩放
+        self._offset = QPointF(0, 0)  # 自由模式平移（屏幕像素）
+        self._fit_mode = True       # True = 适应窗口
+        self._drag_pos: QPointF | None = None
+
+    # ---- 视图状态 ----
+    def set_pixmap(self, pix: QPixmap | None) -> None:
+        self._pix = pix
+        self.reset_view()
+
+    def reset_view(self) -> None:
+        self._fit_mode = True
+        self._zoom = 1.0
+        self._offset = QPointF(0, 0)
+        self.update()
+        self.view_changed.emit()
+
+    def set_zoom_100(self) -> None:
+        self._fit_mode = False
+        self._zoom = 1.0
+        self._offset = QPointF(0, 0)
+        self.update()
+        self.view_changed.emit()
+
+    def current_scale(self) -> float:
+        return self._fit_scale() if self._fit_mode else self._zoom
+
+    def _fit_scale(self) -> float:
+        if self._pix is None or self._pix.isNull():
+            return 1.0
+        w = max(1, self.width())
+        h = max(1, self.height())
+        return min(w / self._pix.width(), h / self._pix.height())
+
+    def zoom_step(self, factor: float, center: QPointF | None = None) -> None:
+        """按 factor 缩放；center 为缩放锚点（缺省画布中心）。"""
+        if self._pix is None:
+            return
+        if center is None:
+            center = QPointF(self.width() / 2, self.height() / 2)
+        old_s = self.current_scale()
+        new_s = max(self.MIN_SCALE, min(self.MAX_SCALE, old_s * factor))
+        if new_s == old_s:
+            return
+        # 锚点下的图像点保持不动：x0' = c - ip*s2
+        x0 = (self.width() - self._pix.width() * old_s) / 2 + self._offset.x()
+        y0 = (self.height() - self._pix.height() * old_s) / 2 + self._offset.y()
+        ipx = (center.x() - x0) / old_s
+        ipy = (center.y() - y0) / old_s
+        self._fit_mode = False
+        self._zoom = new_s
+        self._offset = QPointF(
+            center.x() - ipx * new_s - (self.width() - self._pix.width() * new_s) / 2,
+            center.y() - ipy * new_s - (self.height() - self._pix.height() * new_s) / 2,
+        )
+        self.update()
+        self.view_changed.emit()
+
+    # ---- 事件 ----
+    def paintEvent(self, _ev) -> None:  # noqa: N802
+        pal = _current_palette()
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(pal.bg1))
+        if self._pix is None or self._pix.isNull():
+            painter.setPen(QColor(pal.fg2))
+            painter.drawText(self.rect(), Qt.AlignCenter, "（无预览）")
+            painter.end()
+            return
+        s = self.current_scale()
+        dw = self._pix.width() * s
+        dh = self._pix.height() * s
+        x0 = (self.width() - dw) / 2 + self._offset.x()
+        y0 = (self.height() - dh) / 2 + self._offset.y()
+        painter.setRenderHint(QPainter.SmoothPixmapTransform, s < 1.0)
+        painter.drawPixmap(
+            QRectF(x0, y0, dw, dh),
+            self._pix,
+            QRectF(self._pix.rect()),
+        )
+        painter.end()
+
+    def wheelEvent(self, ev) -> None:  # noqa: N802
+        if self._pix is None:
+            return
+        factor = 1.15 if ev.angleDelta().y() > 0 else 1 / 1.15
+        self.zoom_step(factor, ev.position())
+
+    def mousePressEvent(self, ev) -> None:  # noqa: N802
+        if ev.button() == Qt.LeftButton and self._pix is not None:
+            self._drag_pos = ev.position()
+            self.setCursor(Qt.ClosedHandCursor)
+
+    def mouseMoveEvent(self, ev) -> None:  # noqa: N802
+        if self._drag_pos is not None and self._pix is not None:
+            delta = ev.position() - self._drag_pos
+            self._drag_pos = ev.position()
+            if self._fit_mode:
+                # 适应模式下拖动即进入自由模式
+                self._zoom = self._fit_scale()
+                self._fit_mode = False
+                self._offset = QPointF(0, 0)
+            self._offset += delta
+            self.update()
+
+    def mouseReleaseEvent(self, ev) -> None:  # noqa: N802
+        if ev.button() == Qt.LeftButton:
+            self._drag_pos = None
+            self.unsetCursor()
+
+    def mouseDoubleClickEvent(self, _ev) -> None:  # noqa: N802
+        if self._pix is None:
+            return
+        if self._fit_mode:
+            self.set_zoom_100()
+        else:
+            self.reset_view()
+
+    def resizeEvent(self, ev) -> None:  # noqa: N802
+        # 适应模式下 resize 自动重算（paint 时取 _fit_scale，无需处理）；
+        # 自由模式保持偏移，不做额外修正
+        super().resizeEvent(ev)
+        self.update()
+
+
+class ImagePreview(QWidget):
+    """图片预览 + 底部控制条（task #40 T1）。
+
+    对外保持 ``load`` / ``clear_image`` / ``_pix`` 接口不变。
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._canvas = _ImageCanvas(self)
+        self._canvas.view_changed.connect(self._sync_zoom_label)
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
+        lay.addWidget(self._canvas, 1)
+
+        bar = QHBoxLayout()
+        bar.setContentsMargins(4, 2, 4, 2)
+        btn_out = QPushButton("−")
+        btn_out.setFixedWidth(32)
+        btn_out.setToolTip("缩小")
+        btn_out.clicked.connect(lambda: self._canvas.zoom_step(1 / 1.25))
+        btn_in = QPushButton("＋")
+        btn_in.setFixedWidth(32)
+        btn_in.setToolTip("放大")
+        btn_in.clicked.connect(lambda: self._canvas.zoom_step(1.25))
+        btn_fit = QPushButton("适应窗口")
+        btn_fit.clicked.connect(self._on_fit)
+        btn_100 = QPushButton("1:1")
+        btn_100.setFixedWidth(44)
+        btn_100.setToolTip("实际大小")
+        btn_100.clicked.connect(self._on_100)
+        self._lbl_zoom = QLabel("—")
+        self._lbl_zoom.setStyleSheet(f"color:{_current_palette().fg2};")
+        for w in (btn_out, btn_in, btn_fit, btn_100, self._lbl_zoom):
+            bar.addWidget(w)
+        bar.addStretch(1)
+        lay.addLayout(bar)
+
+    # ---- 对外接口 ----
+    @property
+    def _pix(self) -> QPixmap | None:
+        return self._canvas._pix
 
     def load(self, path: str) -> None:
         pix = QPixmap(path)
-        self._pix = pix if not pix.isNull() else None
-        self._refresh()
+        self._canvas.set_pixmap(pix if not pix.isNull() else None)
 
     def clear_image(self) -> None:
-        self._pix = None
-        self.setPixmap(QPixmap())
-        self.setText("（无预览）")
+        self._canvas.set_pixmap(None)
 
-    def _refresh(self) -> None:
-        if self._pix is None:
-            return
-        self.setText("")
-        self.setPixmap(
-            self._pix.scaled(
-                self.size(),
-                Qt.KeepAspectRatio,
-                Qt.SmoothTransformation,
-            )
-        )
+    # ---- 控制条动作 ----
+    def _on_fit(self) -> None:
+        self._canvas.reset_view()
 
-    def resizeEvent(self, ev):
-        self._refresh()
-        super().resizeEvent(ev)
+    def _on_100(self) -> None:
+        self._canvas.set_zoom_100()
+
+    def _sync_zoom_label(self) -> None:
+        if self._canvas._pix is None:
+            self._lbl_zoom.setText("—")
+        else:
+            self._lbl_zoom.setText(f"{self._canvas.current_scale() * 100:.0f}%")
 
 
 # ---------- 视频 ----------------------------------------------------------------
@@ -78,15 +252,45 @@ class VideoPreview(QWidget):
 
         self._lbl_time = QLabel("00:00 / 00:00")
 
+        # task #40 T2：音量 + 倍速
+        self._audio.setVolume(0.8)
+        self._vol = QSlider(Qt.Horizontal)
+        self._vol.setRange(0, 100)
+        self._vol.setValue(80)
+        self._vol.setFixedWidth(70)
+        self._vol.setToolTip("音量")
+        self._vol.valueChanged.connect(lambda v: self._audio.setVolume(v / 100))
+
+        self._cmb_rate = QComboBox()
+        for label, rate in (
+            ("0.5x", 0.5), ("0.75x", 0.75), ("1x", 1.0),
+            ("1.25x", 1.25), ("1.5x", 1.5), ("2x", 2.0),
+        ):
+            self._cmb_rate.addItem(label, rate)
+        self._cmb_rate.setCurrentIndex(2)
+        self._cmb_rate.setToolTip("倍速")
+        self._cmb_rate.currentIndexChanged.connect(
+            lambda _i: self._player.setPlaybackRate(self._cmb_rate.currentData())
+        )
+
         ctrl = QHBoxLayout()
         ctrl.addWidget(self._btn_play)
         ctrl.addWidget(self._slider, 1)
         ctrl.addWidget(self._lbl_time)
+        ctrl.addWidget(QLabel("🔊"))
+        ctrl.addWidget(self._vol)
+        ctrl.addWidget(self._cmb_rate)
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.addWidget(self._video, 1)
         lay.addLayout(ctrl)
+
+        # 空格播放/暂停（预览面板有焦点时）
+        from PySide6.QtGui import QKeySequence, QShortcut
+        self._sc_space = QShortcut(QKeySequence(Qt.Key_Space), self)
+        self._sc_space.setContext(Qt.WidgetWithChildrenShortcut)
+        self._sc_space.activated.connect(self._toggle)
 
         self._player.positionChanged.connect(self._on_pos)
         self._player.durationChanged.connect(self._on_dur)
@@ -156,6 +360,7 @@ class PdfPreview(QWidget):
         super().__init__(parent)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(0)
         self._available = True
         try:
             from PySide6.QtPdf import QPdfDocument           # noqa
@@ -174,20 +379,103 @@ class PdfPreview(QWidget):
                 self._view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
             except Exception:
                 pass
-            lay.addWidget(self._view)
+            lay.addWidget(self._view, 1)
+
+            # task #40 T3：页码跳转 + 缩放控制条
+            nav = self._view.pageNavigator()
+            bar = QHBoxLayout()
+            bar.setContentsMargins(4, 2, 4, 2)
+            btn_prev = QPushButton("‹")
+            btn_prev.setFixedWidth(32)
+            btn_prev.setToolTip("上一页")
+            btn_prev.clicked.connect(lambda: self._jump(-1))
+            self._ed_page = QLineEdit("1")
+            self._ed_page.setFixedWidth(44)
+            self._ed_page.setAlignment(Qt.AlignCenter)
+            self._ed_page.returnPressed.connect(self._goto_page)
+            self._lbl_pages = QLabel("/ 0")
+            btn_next = QPushButton("›")
+            btn_next.setFixedWidth(32)
+            btn_next.setToolTip("下一页")
+            btn_next.clicked.connect(lambda: self._jump(1))
+            self._cmb_zoom = QComboBox()
+            for label, data in (
+                ("适应宽度", "fit_width"), ("适应页面", "fit_view"),
+                ("50%", 0.5), ("100%", 1.0), ("150%", 1.5), ("200%", 2.0),
+            ):
+                self._cmb_zoom.addItem(label, data)
+            self._cmb_zoom.currentIndexChanged.connect(self._on_zoom_changed)
+            for w in (btn_prev, self._ed_page, self._lbl_pages, btn_next):
+                bar.addWidget(w)
+            bar.addStretch(1)
+            bar.addWidget(self._cmb_zoom)
+            lay.addLayout(bar)
+
+            if nav is not None:
+                try:
+                    nav.currentPageChanged.connect(self._on_page_changed)
+                except Exception:
+                    pass
+            try:
+                self._doc.statusChanged.connect(self._on_doc_status)
+            except Exception:
+                pass
         else:
             tip = QLabel("当前 PySide6 未安装 QtPdf 模块，无法内嵌预览 PDF。\n点击右侧『用默认程序打开』查看。")
             tip.setAlignment(Qt.AlignCenter)
-            tip.setStyleSheet("color:#888;")
+            tip.setStyleSheet(f"color:{_current_palette().fg2};")
             lay.addWidget(tip)
 
+    # ---- 页码 / 缩放 ----
+    def _jump(self, delta: int) -> None:
+        nav = self._view.pageNavigator()
+        if nav is None:
+            return
+        page = max(0, min(self._doc.pageCount() - 1, nav.currentPage() + delta))
+        nav.jump(page, QPointF(0, 0), 0)
+
+    def _goto_page(self) -> None:
+        nav = self._view.pageNavigator()
+        if nav is None:
+            return
+        try:
+            page = int(self._ed_page.text()) - 1
+        except ValueError:
+            return
+        page = max(0, min(self._doc.pageCount() - 1, page))
+        nav.jump(page, QPointF(0, 0), 0)
+
+    def _on_page_changed(self, page: int) -> None:
+        self._ed_page.setText(str(page + 1))
+
+    def _on_doc_status(self, _status) -> None:
+        self._lbl_pages.setText(f"/ {self._doc.pageCount()}")
+
+    def _on_zoom_changed(self, _i: int) -> None:
+        from PySide6.QtPdfWidgets import QPdfView
+        data = self._cmb_zoom.currentData()
+        try:
+            if data == "fit_width":
+                self._view.setZoomMode(QPdfView.ZoomMode.FitToWidth)
+            elif data == "fit_view":
+                self._view.setZoomMode(QPdfView.ZoomMode.FitInView)
+            else:
+                self._view.setZoomMode(QPdfView.ZoomMode.Custom)
+                self._view.setZoomFactor(float(data))
+        except Exception:
+            pass
+
+    # ---- 对外接口 ----
     def load(self, path: str) -> None:
         if self._available:
             self._doc.load(path)
+            self._lbl_pages.setText(f"/ {self._doc.pageCount()}")
+            self._ed_page.setText("1")
 
     def clear_doc(self) -> None:
         if self._available:
             self._doc.close()
+            self._lbl_pages.setText("/ 0")
 
     def capture_current_page(self) -> QPixmap | None:
         """渲染当前可见的第一页为 QPixmap（用作封面）。"""
@@ -232,7 +520,7 @@ class PreviewPanel(QWidget):
 
         self._other = QLabel("此类型不支持内嵌预览\n请点击下方按钮以默认程序打开")
         self._other.setAlignment(Qt.AlignCenter)
-        self._other.setStyleSheet("color:#888;")
+        self._other.setStyleSheet(f"color:{_current_palette().fg2};")
 
         self._stack = QStackedWidget()
         self._stack.addWidget(self._image)   # 0
@@ -241,7 +529,7 @@ class PreviewPanel(QWidget):
         self._stack.addWidget(self._other)   # 3
 
         self._lbl_path = QLabel("（未选择文件）")
-        self._lbl_path.setStyleSheet("color:#666;")
+        self._lbl_path.setStyleSheet(f"color:{_current_palette().fg2};")
         # 单行 + 中间省略，避免长路径换行把整个面板撑宽
         self._lbl_path.setWordWrap(False)
         self._lbl_path.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -308,7 +596,7 @@ class PreviewPanel(QWidget):
         text = fm.elidedText(self._full_path, Qt.ElideMiddle, avail)
         self._lbl_path.setText(text)
 
-    def resizeEvent(self, ev):  # noqa: N802
+    def resizeEvent(self, ev) -> None:  # noqa: N802
         super().resizeEvent(ev)
         self._update_path_label()
 

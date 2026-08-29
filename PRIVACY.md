@@ -27,7 +27,7 @@ The following data lives **only on your local disk** and is never proactively up
   - Only the path string is recorded. The app does not copy or move these files.
   - Deleting a project does **not** delete the original files.
 
-**Important**: API keys are stored in the database as **plaintext JSON** (in the `settings` table under the `llm_config` key). This is so the app can issue requests immediately at startup; there is currently **no extra encryption**. Do not share the `cabinet.db` file with others.
+**Important**: since v0.6, API keys are stored in the **Windows Credential Manager** (via the `keyring` library); the database only keeps a reference marker (`keyring:1`) and **no longer contains plaintext keys**. Plaintext keys from older libraries are migrated automatically on first read. Backup zips and exported project bundles do **not** include API keys. If the OS credential store is unavailable (rare), the app falls back to plaintext storage and shows a clear notice on the Settings → API page.
 
 ---
 
@@ -110,7 +110,7 @@ An export bundle is a plain directory containing:
 
 ## 5. Known limitations and risks
 
-- **Plaintext API keys**: as noted above. Recommendation: clear keys you don't need long-term; or encrypt the partition holding `%APPDATA%/LLMCabinet/` at the OS level
+- **API key storage**: by default keys live in the Windows Credential Manager (isolated per library); library files and backups contain no keys. After moving to a new machine or clearing the credential store, re-enter keys in Settings → API. If the credential store is unavailable, the app falls back to plaintext (with a UI notice) — do not share `cabinet.db` in that case
 - **Filenames are data too**: when you trigger an LLM suggestion, the **filenames of every file in the project** are sent as project-structure context regardless of which files are ticked. If a filename itself contains sensitive information (real names, internal codenames, contract numbers, etc.), rename it to a redacted form or remove that file from the project before triggering
 - **LLM provider retention**: DeepSeek / OpenAI / Gemini / Grok each have their own data retention and training policies. If you tick sensitive files as reference, that content may be retained by the provider. If unsure, read the provider's privacy policy or use a "no-training" tier (such as OpenAI's zero-data-retention agreements or Gemini's paid tier)
 - **Open and auditable**: you can always read the source under `app/llm/` to verify that the outbound requests match what this document describes

@@ -17,7 +17,9 @@ LLM Cabinet：带 AI 元数据助手的轻量级项目化文件管理器。
 
 ```
 app/
-  ui/             # PySide6 UI（main_window.py 是主窗口）
+  ui/             # PySide6 UI（main_window.py 是主窗口；task #35 起按职责拆为
+                #   mw_library/mw_projects/mw_files/mw_dnd/mw_search 五个 mixin，
+                #   设置对话框为 settings/ 包：dialog.py + page_*.py + field_dialogs.py）
   db.py           # 数据库初始化 + 迁移（MIGRATIONS 注册表）
   models.py       # 数据模型（Project, PendingFile, Field 等）
   repository.py   # 数据访问层（Repository）
@@ -66,3 +68,16 @@ docs/             # 文档（file-handling.md, migrations.md, release.md 等）
 
 设置存储在 `repo.set_setting(key, value)` / `repo.get_setting(key, default)`，值都是字符串。
 布尔值用 `"1"` / `"0"` 表示。
+
+## 操作反馈策略（task #37）
+
+| 场景 | 渠道 |
+|---|---|
+| 即时小反馈（已复制、已重命名） | statusBar `showMessage` |
+| 需要用户知晓后果 / 做决定 | `app/ui/dialogs.py` 的 `confirm` / `ask_yes_no_cancel` |
+| 批量操作结果 | 一次汇总框（`info`/`warn` + `detailed`），**禁止**在循环里弹模态框 |
+| 后台任务完成/失败 | statusBar + 任务面板 |
+
+- 全 UI 的确认/警告/提示对话框一律走 `app/ui/dialogs.py`（中文按钮），不要直接调 `QMessageBox.question/information/warning/critical`
+- 删除用户文件一律走 `utils.move_to_trash`（进系统回收站，失败回退硬删除并汇报）
+- 关键路径禁止 `except Exception: pass` 静默吞错，至少 `logging` 记录

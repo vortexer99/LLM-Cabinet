@@ -506,6 +506,151 @@ class Repository:
             self.conn.rollback()
             raise
 
+    # ------------------------------------------------------------------ MCP audit / LLM 建议计数（task #35）
+    def wal_checkpoint(self) -> None:
+        """备份前把 WAL 闪存到主 db（失败静默——非 WAL 模式时会报错，可忽略）。"""
+        try:
+            self.conn.execute("PRAGMA wal_checkpoint(FULL)")
+        except Exception:
+            pass
+
+    def max_mcp_audit_id(self) -> int:
+        """mcp_audit 最新行 id（主窗口轮询用；无行返回 0）。"""
+        row = self.conn.execute("SELECT MAX(id) AS m FROM mcp_audit").fetchone()
+        return int(row["m"] or 0)
+
+    def count_pending_suggestions_for_field(self, field_id: int) -> int:
+        """某字段 pending 状态的 LLM 建议数（设置页改字段类型前的影响评估用）。"""
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM project_field_suggestions "
+            "WHERE field_id=? AND status='pending'",
+            (field_id,),
+        ).fetchone()
+        return int(row["c"])
+
+    def list_mcp_audit_clients(self) -> list[str]:
+        """mcp_audit 里出现过的客户端名（DISTINCT，升序）。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT client_name FROM mcp_audit "
+            "WHERE client_name IS NOT NULL ORDER BY 1"
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def list_mcp_audit_tools(self) -> list[str]:
+        """mcp_audit 里出现过的工具名（DISTINCT，升序）。"""
+        rows = self.conn.execute(
+            "SELECT DISTINCT tool_name FROM mcp_audit ORDER BY 1"
+        ).fetchall()
+        return [r[0] for r in rows]
+
+    def clear_mcp_audit(self) -> None:
+        """清空 MCP 操作记录。"""
+        self.conn.execute("DELETE FROM mcp_audit")
+        self.conn.commit()
+
+    def last_mcp_tool_by_project(self, project_ids: list[int]) -> dict[int, str]:
+        """每个项目最近一次成功的 MCP 工具名（审计对话框「MCP 修改」页用）。"""
+        if not project_ids:
+            return {}
+        placeholders = ",".join("?" for _ in project_ids)
+        rows = self.conn.execute(
+            f"SELECT pid, tool_name FROM ("
+            f"  SELECT json_extract(arguments_json, '$.project_id') AS pid, tool_name, ts "
+            f"  FROM mcp_audit WHERE result_status='success' "
+            f"  ORDER BY ts DESC"
+            f") WHERE pid IN ({placeholders}) GROUP BY pid",
+            project_ids,
+        ).fetchall()
+        return {int(r[0]): r[1] for r in rows}
+
+    # ------------------------------------------------------------------ 全局标签管理（task #39）
+    def count_projects_with_tag(self, tag: str) -> int:
+        """统计带指定标签（含 ``tag/...`` 子标签）的项目数。"""
+        tag = (tag or "").strip()
+        if not tag:
+            return 0
+        row = self.conn.execute(
+            """SELECT COUNT(DISTINCT pt.project_id) AS c
+               FROM project_tags pt JOIN tags t ON t.id = pt.tag_id
+               WHERE t.name = ? OR t.name LIKE ?""",
+            (tag, tag + "/%"),
+        ).fetchone()
+        return int(row["c"])
+
+    def rename_tag(self, old: str, new: str) -> int:
+        """全库重命名标签（含 ``old/...`` 子标签整体前缀迁移）。
+
+        目标标签名已存在时自然合并（同一项目不会去重）。返回受影响项目数。
+        """
+        new = (new or "").strip()
+        if not new or new == (old or "").strip():
+            return 0
+        return self._retag(old, new)
+
+    def merge_tag(self, src: str, dst: str) -> int:
+        """把标签 ``src`` 合并进 ``dst``（SQL 层面与 rename 相同）。"""
+        return self.rename_tag(src, dst)
+
+    def remove_tag_everywhere(self, tag: str) -> int:
+        """从所有项目移除标签（含 ``tag/...`` 子标签）。返回受影响项目数。"""
+        return self._retag(tag, None)
+
+    def _retag(self, old_prefix: str, new_prefix: str | None) -> int:
+        """内部：把 ``old_prefix``（及其 ``old_prefix/...`` 子标签）迁移到
+        ``new_prefix``；``new_prefix=None`` 表示删除。返回受影响项目数。"""
+        old_prefix = (old_prefix or "").strip()
+        if not old_prefix:
+            return 0
+        rows = self.conn.execute(
+            "SELECT id, name FROM tags WHERE name=? OR name LIKE ?",
+            (old_prefix, old_prefix + "/%"),
+        ).fetchall()
+        if not rows:
+            return 0
+
+        cur = self.conn.cursor()
+        try:
+            cur.execute("BEGIN")
+            affected: set[int] = set()
+            for r in rows:
+                src_id = int(r["id"])
+                src_name = r["name"]
+                pids = [
+                    int(x["project_id"]) for x in cur.execute(
+                        "SELECT project_id FROM project_tags WHERE tag_id=?",
+                        (src_id,),
+                    ).fetchall()
+                ]
+                affected.update(pids)
+                if new_prefix is not None:
+                    dst_name = new_prefix + src_name[len(old_prefix):]
+                    cur.execute(
+                        "INSERT OR IGNORE INTO tags(name) VALUES(?)", (dst_name,),
+                    )
+                    dst_id = cur.execute(
+                        "SELECT id FROM tags WHERE name=?", (dst_name,),
+                    ).fetchone()["id"]
+                    for pid in pids:
+                        cur.execute(
+                            "INSERT OR IGNORE INTO project_tags(project_id, tag_id) "
+                            "VALUES(?,?)",
+                            (pid, dst_id),
+                        )
+                cur.execute("DELETE FROM project_tags WHERE tag_id=?", (src_id,))
+                cur.execute("DELETE FROM tags WHERE id=?", (src_id,))
+            if affected:
+                placeholders = ",".join("?" for _ in affected)
+                cur.execute(
+                    f"UPDATE projects SET updated_at=datetime('now') "
+                    f"WHERE id IN ({placeholders})",
+                    list(affected),
+                )
+            self.conn.commit()
+            return len(affected)
+        except Exception:
+            self.conn.rollback()
+            raise
+
     # ------------------------------------------------------------------ fields (schema)
     # task #20 schema v4 起：移除 SYSTEM_FIELD_COLUMNS dict。
     # 历史上 author/date/source_url/rating/description 的 key 用来 dispatch 到
@@ -1056,6 +1201,18 @@ class Repository:
             )
 
     # ------------------------------------------------------------------ files
+    def count_files_total(self) -> int:
+        """全库文件总数（task #35：替代 UI 层直接 SQL）。"""
+        row = self.conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()
+        return int(row["c"])
+
+    def count_files_by_project(self) -> dict[int, int]:
+        """一次 GROUP BY 查出每个项目的文件数（task #33，替代逐项目 list_files）。"""
+        rows = self.conn.execute(
+            "SELECT project_id AS pid, COUNT(*) AS c FROM files GROUP BY project_id"
+        ).fetchall()
+        return {int(r["pid"]): int(r["c"]) for r in rows}
+
     def list_files(self, pid: int) -> list[FileItem]:
         rows = self.conn.execute(
             "SELECT * FROM files WHERE project_id=? ORDER BY ord, id",

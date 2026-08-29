@@ -12,6 +12,7 @@ from PySide6.QtCore import (
     QAbstractTableModel,
     QModelIndex,
     QMimeData,
+    QPointF,
     QRect,
     QSize,
     Qt,
@@ -22,6 +23,7 @@ from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
 from ..models import Field, Project
 from ..utils import utc_to_local_str
 from .dnd import PROJECT_IDS_MIME
+from .palette import current as _current_palette
 
 # 网格卡片
 CARD_W = 168
@@ -209,12 +211,13 @@ class ProjectModel(QAbstractTableModel):
             if f.type in ("rating", "number"):
                 return int(Qt.AlignCenter)
         if role == Qt.ForegroundRole:
+            pal = _current_palette()
             if f.type == "rating" and v:
-                return QColor("#f5a623")
+                return QColor(pal.warn)
             if f.type == "url" and v:
-                return QColor("#74c0fc")
+                return QColor(pal.accent)
             if f.type == "tags" and v:
-                return QColor("#74c0fc")
+                return QColor(pal.accent)
         return None
 
     def _extra_data(self, p: Project, key: str, role: int):
@@ -256,10 +259,12 @@ class ProjectCardDelegate(QStyledItemDelegate):
 
         rect = opt.rect.adjusted(6, 6, -6, -6)
 
+        # task #34：颜色统一走色板（浅色单主题）
+        pal = _current_palette()
         selected = opt.state & QStyle.State_Selected
         hovered = opt.state & QStyle.State_MouseOver
-        bg = QColor("#2b3a55") if selected else QColor("#25262b")
-        border = QColor("#4dabf7") if (selected or hovered) else QColor("#2c2e33")
+        bg = QColor(pal.select_bg) if selected else QColor(pal.bg1)
+        border = QColor(pal.accent) if (selected or hovered) else QColor(pal.border)
         painter.setPen(QPen(border, 1))
         painter.setBrush(bg)
         painter.drawRoundedRect(rect, RADIUS, RADIUS)
@@ -268,18 +273,23 @@ class ProjectCardDelegate(QStyledItemDelegate):
         cover_rect = QRect(rect.left() + PAD, rect.top() + PAD,
                            rect.width() - 2 * PAD, COVER_H)
         painter.setPen(Qt.NoPen)
-        painter.setBrush(QColor("#1a1b1e"))
+        painter.setBrush(QColor(pal.bg2))
         painter.drawRoundedRect(cover_rect, 4, 4)
         if cover and not cover.isNull():
-            scaled = cover.scaled(cover_rect.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            x = cover_rect.x() + (cover_rect.width() - scaled.width()) // 2
-            y = cover_rect.y() + (cover_rect.height() - scaled.height()) // 2
+            # task #33：cover 是 cover_cache 按封面区逻辑尺寸适配好的缩略图
+            # （带 devicePixelRatio），按自然逻辑尺寸居中绘制即可，
+            # paint 热点不再做 SmoothTransformation 实时缩放
+            dpr = cover.devicePixelRatio() or 1.0
+            cw = cover.width() / dpr
+            ch = cover.height() / dpr
+            x = cover_rect.x() + (cover_rect.width() - cw) / 2
+            y = cover_rect.y() + (cover_rect.height() - ch) / 2
             painter.save()
             painter.setClipRect(cover_rect)
-            painter.drawPixmap(x, y, scaled)
+            painter.drawPixmap(QPointF(x, y), cover)
             painter.restore()
         else:
-            painter.setPen(QColor("#495057"))
+            painter.setPen(QColor(pal.fg2))
             f = QFont(painter.font())
             f.setPointSize(28)
             painter.setFont(f)
@@ -294,7 +304,7 @@ class ProjectCardDelegate(QStyledItemDelegate):
         f.setPointSize(10)
         f.setBold(True)
         painter.setFont(f)
-        painter.setPen(QColor("#e9ecef"))
+        painter.setPen(QColor(pal.fg0))
         fm = QFontMetrics(f)
         title = fm.elidedText(p.title or "(未命名)", Qt.ElideRight, text_rect.width())
         painter.drawText(text_rect.left(), text_rect.top() + fm.ascent(), title)
@@ -309,7 +319,7 @@ class ProjectCardDelegate(QStyledItemDelegate):
         f.setPointSize(9)
         f.setBold(False)
         painter.setFont(f)
-        painter.setPen(QColor("#adb5bd"))
+        painter.setPen(QColor(pal.fg1))
         fm = QFontMetrics(f)
         if subtitle:
             subtitle = fm.elidedText(str(subtitle), Qt.ElideRight, text_rect.width())

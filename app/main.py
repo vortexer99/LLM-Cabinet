@@ -118,11 +118,10 @@ def main() -> int:
     if icon_path is not None:
         app.setWindowIcon(QIcon(str(icon_path)))
 
-    # 启动时先应用 light 主题作为兜底——Welcome 对话框可能在还没打开任何库
-    # （没 repo、读不到 settings.theme）时就弹出，没有 stylesheet 会被 Qt 的
-    # fusion 默认灰色背景渲染，与主窗口观感断裂。等下方真正打开库 / 读到
-    # ``settings.theme`` 后会再 apply 一次（dark 主题用户那时会被覆盖）。
-    apply_theme(app, "light")
+    # 启动时先应用主题——Welcome 对话框可能在还没打开任何库时就弹出，
+    # 没有 stylesheet 会被 Qt 的 fusion 默认灰色背景渲染，与主窗口观感断裂。
+    # task #34 起仅浅色单主题。
+    apply_theme(app)
 
     # ---- 读 cabinet.json ----
     cabinet = CabinetConfig.load()
@@ -169,8 +168,12 @@ def main() -> int:
 
     library = Library(use_lib_root)
 
-    theme = repo.get_setting("theme", "light") or "light"
-    apply_theme(app, theme)
+    # task #41 T6：应用用户字号设置
+    try:
+        _font_size = int(repo.get_setting("ui_font_size", "13") or "13")
+    except (TypeError, ValueError):
+        _font_size = 13
+    apply_theme(app, font_size=_font_size)
 
     llm_queue = LLMTaskQueue(repo, library, get_config=lambda: load_config(repo))
     llm_queue.start()

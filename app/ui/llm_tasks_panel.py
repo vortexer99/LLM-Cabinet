@@ -9,7 +9,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMessageBox,
     QPushButton,
     QTableWidget,
     QTableWidgetItem,
@@ -17,6 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..repository import Repository
+from .dialogs import confirm, info
 from ..utils import utc_to_local_str
 
 
@@ -243,12 +243,12 @@ class LLMTasksDialog(QDialog):
             blob = None
         sug: dict = (blob or {}).get("suggestions") if isinstance(blob, dict) else None
         if not isinstance(sug, dict) or not sug:
-            QMessageBox.information(self, "提示", "此任务没有可重新应用的建议。")
+            info(self, "提示", "此任务没有可重新应用的建议。")
             return
 
         project = self.repo.get_project(int(t.project_id))
         if project is None:
-            QMessageBox.information(self, "提示", "原项目已被删除。")
+            info(self, "提示", "原项目已被删除。")
             return
 
         # 字段名 → field_id（按当前最新的字段表，旧任务里没的字段会被丢弃）
@@ -279,17 +279,15 @@ class LLMTasksDialog(QDialog):
                 msg += f"\n\n（{len(dropped)} 个字段在当前已不存在：{', '.join(dropped)}）"
             if skipped_same:
                 msg += f"\n\n（{len(skipped_same)} 个字段当前值已与建议一致）"
-            QMessageBox.information(self, "提示", msg)
+            info(self, "提示", msg)
             return
 
-        confirm = QMessageBox.question(
+        if not confirm(
             self, "确认",
             f"将为项目「{project.title}」重新生成 {len(items)} 条待审阅建议。\n"
             f"同字段的旧建议会被自动标记为 superseded。是否继续？",
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.Yes,
-        )
-        if confirm != QMessageBox.Yes:
+            yes="继续", default_yes=True,
+        ):
             return
 
         n = self.repo.add_suggestions(int(project.id), int(t.id), items)
@@ -299,7 +297,7 @@ class LLMTasksDialog(QDialog):
             tip += f"\n（{len(dropped)} 个字段已不存在被丢弃）"
         if skipped_same:
             tip += f"\n（{len(skipped_same)} 个字段值已一致被跳过）"
-        QMessageBox.information(self, "完成", tip)
+        info(self, "完成", tip)
 
     @staticmethod
     def _current_value(p, f) -> str:

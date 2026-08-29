@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import os
 import sys
 from contextlib import contextmanager
 from pathlib import Path
@@ -17,6 +18,10 @@ from typing import Iterator
 _ROOT = Path(__file__).resolve().parent.parent
 if str(_ROOT) not in sys.path:
     sys.path.insert(0, str(_ROOT))
+
+# task #42：selftests 禁用 keyring（回退明文存储），
+# 避免测试往真实 Windows 凭据管理器里写垃圾条目
+os.environ.setdefault("LLM_CABINET_DISABLE_KEYRING", "1")
 
 
 class T:

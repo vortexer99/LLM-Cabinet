@@ -1,8 +1,19 @@
-"""LLM 配置：以 settings 表为后端持久化。"""
+"""LLM 配置：以 settings 表为后端持久化。
+
+task #42：API Key 不再明文落库。保存时优先写入系统凭据管理器
+（``keyring``，Windows 下为 Credential Manager），settings 的 JSON 里只留
+哨兵值 ``keyring:1``；keyring 不可用时回退明文（并在 UI 提示）。
+读取时自动把老库里的明文 key 迁移进 keyring。
+
+环境变量 ``LLM_CABINET_DISABLE_KEYRING=1`` 可强制禁用（selftests 用，
+避免污染真实凭据管理器）。
+"""
 from __future__ import annotations
 
+import hashlib
 import json
-from dataclasses import asdict, dataclass, field
+import os
+from dataclasses import dataclass, field
 
 
 # 所有支持的平台 id
@@ -64,6 +75,88 @@ class LLMConfig:
 # settings 键名
 _SETTING_KEY = "llm_config"
 
+# ---------------------------------------------------------------------------
+# task #42：keyring 存取层
+# ---------------------------------------------------------------------------
+_KEYRING_SERVICE = "llm-cabinet"
+KEYRING_SENTINEL = "keyring:1"
+
+
+def _kr():
+    """返回 keyring 模块；不可用（未安装 / 被环境变量禁用）返回 None。"""
+    if os.environ.get("LLM_CABINET_DISABLE_KEYRING"):
+        return None
+    try:
+        import keyring
+        return keyring
+    except Exception:
+        return None
+
+
+def keyring_available() -> bool:
+    """系统凭据管理器是否可用（设置页据此提示存储方式）。"""
+    kr = _kr()
+    if kr is None:
+        return False
+    try:
+        kr.get_keyring()
+        return True
+    except Exception:
+        return False
+
+
+def _scope_for_root(root: str) -> str:
+    root = (root or "").strip()
+    if not root:
+        return "default"
+    return hashlib.sha1(root.encode("utf-8")).hexdigest()[:12]
+
+
+def _keyring_scope(repo) -> str:
+    """按库根目录派生 keyring 作用域（不同库的 key 互不串）。"""
+    root = ""
+    try:
+        root = repo.get_setting("library_root", "") or ""
+    except Exception:
+        pass
+    return _scope_for_root(root)
+
+
+def _store_key(repo, pid: str, api_key: str) -> bool:
+    """把 key 写入 keyring（当前库作用域）。成功返回 True。"""
+    kr = _kr()
+    if kr is None or not api_key:
+        return False
+    try:
+        kr.set_password(
+            _KEYRING_SERVICE, f"{_keyring_scope(repo)}:{pid}", api_key,
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _read_key(repo, pid: str) -> str:
+    kr = _kr()
+    if kr is None:
+        return ""
+    try:
+        return kr.get_password(
+            _KEYRING_SERVICE, f"{_keyring_scope(repo)}:{pid}",
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _delete_key(repo, pid: str) -> None:
+    kr = _kr()
+    if kr is None:
+        return
+    try:
+        kr.delete_password(_KEYRING_SERVICE, f"{_keyring_scope(repo)}:{pid}")
+    except Exception:
+        pass
+
 
 def load_config(repo) -> LLMConfig:
     raw = repo.get_setting(_SETTING_KEY, "")
@@ -82,6 +175,18 @@ def load_config(repo) -> LLMConfig:
                 )
         except Exception:
             pass
+
+    # task #42：哨兵 → keyring 取真值；明文 → 自动迁移进 keyring
+    migrated = False
+    for pid, pc in cfg.providers.items():
+        if pc.api_key == KEYRING_SENTINEL:
+            pc.api_key = _read_key(repo, pid)
+        elif pc.api_key and _store_key(repo, pid, pc.api_key):
+            migrated = True
+    if migrated:
+        # 重写为哨兵形式（settings 不再含明文）
+        save_config(repo, cfg)
+
     # 用默认值兜底每个平台的 base_url/model
     for pid, defaults in PROVIDER_DEFAULTS.items():
         pc = cfg.providers.get(pid) or ProviderConfig(id=pid)
@@ -95,16 +200,62 @@ def load_config(repo) -> LLMConfig:
 
 
 def save_config(repo, cfg: LLMConfig) -> None:
+    providers: dict[str, dict] = {}
+    for pid, pc in cfg.providers.items():
+        stored = False
+        if pc.api_key:
+            # keyring 可用 → settings 里只留哨兵；不可用 → 回退明文
+            stored = _store_key(repo, pid, pc.api_key)
+        else:
+            _delete_key(repo, pid)
+        providers[pid] = {
+            "base_url": pc.base_url,
+            "api_key": KEYRING_SENTINEL if stored else pc.api_key,
+            "model": pc.model,
+        }
     data = {
         "default_provider": cfg.default_provider,
         "default_language": cfg.default_language,
-        "providers": {
-            pid: {
-                "base_url": pc.base_url,
-                "api_key": pc.api_key,
-                "model": pc.model,
-            }
-            for pid, pc in cfg.providers.items()
-        },
+        "providers": providers,
     }
     repo.set_setting(_SETTING_KEY, json.dumps(data, ensure_ascii=False))
+
+
+def rekey_imported_llm_config(repo, src_root) -> tuple[int, int]:
+    """task #42：把刚导入的 llm_config 里的哨兵按**源库**作用域解出，
+    重新写入当前库作用域。
+
+    在「从其它库导入 API 配置」后调用（同机场景）。源 keyring 里查不到的
+    （如备份来自另一台机器）对应平台 key 置空，让用户重新填写。
+    返回 ``(迁移成功数, 需重填数)``。
+    """
+    raw = repo.get_setting(_SETTING_KEY, "")
+    if not raw:
+        return (0, 0)
+    try:
+        data = json.loads(raw)
+    except Exception:
+        return (0, 0)
+    providers = data.get("providers") or {}
+    src_scope = _scope_for_root(str(src_root))
+    ok = fail = 0
+    changed = False
+    kr = _kr()
+    for pid, p in providers.items():
+        if p.get("api_key") != KEYRING_SENTINEL:
+            continue
+        key = ""
+        if kr is not None:
+            try:
+                key = kr.get_password(_KEYRING_SERVICE, f"{src_scope}:{pid}") or ""
+            except Exception:
+                key = ""
+        if key and _store_key(repo, pid, key):
+            ok += 1
+        else:
+            p["api_key"] = ""
+            fail += 1
+        changed = True
+    if changed:
+        repo.set_setting(_SETTING_KEY, json.dumps(data, ensure_ascii=False))
+    return (ok, fail)

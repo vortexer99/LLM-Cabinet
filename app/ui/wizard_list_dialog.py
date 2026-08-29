@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .dialogs import error
 from .wizards import WIZARDS
 
 
@@ -138,8 +139,7 @@ class WizardListDialog(QDialog):
         try:
             wiz = cls(self)
         except Exception as e:  # noqa: BLE001
-            from PySide6.QtWidgets import QMessageBox
-            QMessageBox.critical(self, "助手加载失败", f"{type(e).__name__}: {e}")
+            error(self, "助手加载失败", f"{type(e).__name__}: {e}")
             return
         applied = wiz.run(self.repo, self.library)
         if applied:

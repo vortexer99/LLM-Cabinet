@@ -16,7 +16,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPushButton,
     QRadioButton,
     QVBoxLayout,
@@ -24,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..models import Project
+from .dialogs import warn
 
 
 class ExportDialog(QDialog):
@@ -279,22 +279,22 @@ class ExportDialog(QDialog):
     def _on_accept(self) -> None:
         raw = self.ed_dir.text().strip()
         if not raw:
-            QMessageBox.warning(self, "请填写导出位置", "请先选择一个导出文件夹。")
+            warn(self, "请填写导出位置", "请先选择一个导出文件夹。")
             return
         p = Path(raw).expanduser()
         if not p.exists():
-            QMessageBox.warning(
+            warn(
                 self, "路径不存在",
                 f"目录不存在：{p}\n请先创建后再试，或点击「浏览」选择已有目录。",
             )
             return
         if not p.is_dir():
-            QMessageBox.warning(self, "不是目录", f"不是一个目录：{p}")
+            warn(self, "不是目录", f"不是一个目录：{p}")
             return
 
         # 批量模式检查是否选中了项目
         if self._projects is not None and not self._selected_project_indices:
-            QMessageBox.warning(self, "未选中项目", "请至少选择一个要导出的项目。")
+            warn(self, "未选中项目", "请至少选择一个要导出的项目。")
             return
 
         self.accept()

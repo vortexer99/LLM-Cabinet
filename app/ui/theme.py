@@ -1,413 +1,16 @@
-"""全局 QSS 主题（深色，扁平现代）。
+"""全局 QSS 主题（浅色单主题）。
+
+task #34 起废弃深色主题：受精力所限不再维护双主题，仅保留浅色。
+Python 侧颜色统一走 ``palette.py``；本文件只维护 QSS。
 
 色板：
-  --bg-0   #1a1b1e  最深背景（窗口）
-  --bg-1   #25262b  次深（面板、卡片）
-  --bg-2   #2c2e33  控件背景
-  --bg-3   #373a40  hover
-  --bd     #373a40  边框
-  --fg-0   #e9ecef  主文字
-  --fg-1   #adb5bd  次文字
-  --fg-2   #6c757d  弱文字
-  --accent #4dabf7  主色（链接 / 选中）
-  --accent-h #74c0fc
-  --warn   #f5a623  星星
-  --danger #fa5252
+  --bg-0  #ffffff   --bg-1  #f8f9fa   --bg-2  #e9ecef   --bg-3  #dee2e6
+  --fg-0  #212529   --fg-1  #495057   --fg-2  #868e96
+  --accent #228be6  --accent-h #1c7ed6
+  --warn   #f59f00  --danger #fa5252
 """
 from __future__ import annotations
 
-QSS_DARK = """
-/* ===== 全局 ===== */
-* {
-    font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
-    font-size: 13px;
-    color: #e9ecef;
-}
-QMainWindow, QDialog, QWidget#CentralRoot {
-    background: #1a1b1e;
-}
-QStatusBar {
-    background: #1a1b1e;
-    color: #adb5bd;
-    border-top: 1px solid #2c2e33;
-}
-QStatusBar::item { border: none; }
-
-/* ===== 工具栏 ===== */
-QToolBar {
-    background: #1a1b1e;
-    border: none;
-    spacing: 4px;
-    padding: 6px 8px;
-}
-QToolBar QToolButton {
-    background: transparent;
-    color: #e9ecef;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 5px 10px;
-    margin: 0 2px;
-}
-QToolBar QToolButton:hover {
-    background: #2c2e33;
-    border-color: #373a40;
-}
-QToolBar QToolButton:pressed { background: #373a40; }
-QToolBar::separator {
-    background: #2c2e33;
-    width: 1px;
-    margin: 6px 6px;
-}
-
-/* ===== 面板 / 卡片 (用 objectName 区分) ===== */
-QWidget#SidePanel, QWidget#CenterPanel, QWidget#DetailPanel {
-    background: #1a1b1e;
-}
-QFrame#Card {
-    background: #25262b;
-    border: 1px solid #2c2e33;
-    border-radius: 8px;
-}
-
-/* ===== GroupBox =====
- * 没写这条规则时 Qt fusion 会给 GroupBox 一个写死的浅色 panel，
- * 导致深色窗口下 group 标题 / 内部 form label 上覆盖一道白条。
- */
-QGroupBox {
-    background: transparent;
-    border: 1px solid #373a40;
-    border-radius: 6px;
-    margin-top: 14px;
-    padding: 12px 10px 10px 10px;
-    color: #e9ecef;
-}
-QGroupBox::title {
-    subcontrol-origin: margin;
-    subcontrol-position: top left;
-    left: 10px;
-    padding: 0 6px;
-    background: #1a1b1e;
-    color: #adb5bd;
-}
-/* GroupBox 内部 form 自动生成的 buddy label：fusion 默认给一个偏暗的灰，
- * 落在深色背景上几乎看不见。强制走主文字色。
- * 用两条选择器（直接子 + 后代）覆盖嵌套布局（form 里的 label 通常是 GroupBox
- * 的孙子节点而不是直接 child）。 */
-QGroupBox > QLabel,
-QGroupBox QLabel {
-    color: #e9ecef;
-    background: transparent;
-}
-
-/* 设置 → API 那个 QScrollArea + 内部 host 跟随窗口色。
- * 不动 viewport 选择器（那个会牵到 QTableView / QListView），改为给 host 设
- * objectName 后用 ID 选择器精准刷。 */
-QScrollArea#AppScrollArea {
-    background: #1a1b1e;
-    border: none;
-}
-QWidget#ApiScrollHost {
-    background: #1a1b1e;
-}
-/* 通用 ScrollArea 内部容器（项目元数据编辑、库字段设计助手等都用 AppScrollHost） */
-QWidget#AppScrollHost {
-    background: #1a1b1e;
-}
-
-
-
-/* ===== 输入框 ===== */
-QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
-    background: #25262b;
-    border: 1px solid #373a40;
-    border-radius: 6px;
-    padding: 6px 8px;
-    selection-background-color: #4dabf7;
-    selection-color: #1a1b1e;
-}
-QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus {
-    border: 1px solid #4dabf7;
-}
-QLineEdit#SearchBox {
-    padding: 7px 10px 7px 28px;
-    background: #25262b url(none) left center no-repeat;
-}
-QComboBox::drop-down {
-    subcontrol-origin: padding;
-    subcontrol-position: center right;
-    border: none;
-    width: 22px;
-}
-QComboBox::down-arrow {
-    image: url("__ARROW_DARK__");
-    width: 10px;
-    height: 6px;
-    margin-right: 8px;
-}
-QComboBox::down-arrow:disabled {
-    image: url("__ARROW_DISABLED__");
-}
-QComboBox:disabled {
-    color: #6c757d;
-    background: #1f2024;
-    border: 1px solid #2c2e33;
-}
-QComboBox QAbstractItemView {
-    background: #25262b;
-    border: 1px solid #373a40;
-    selection-background-color: #4dabf7;
-    selection-color: #1a1b1e;
-    outline: 0;
-}
-
-/* ===== 按钮 ===== */
-QPushButton {
-    background: #2c2e33;
-    color: #e9ecef;
-    border: 1px solid #373a40;
-    border-radius: 6px;
-    padding: 6px 14px;
-    min-height: 18px;
-}
-QPushButton:hover { background: #373a40; border-color: #495057; }
-QPushButton:pressed { background: #25262b; }
-QPushButton:disabled { color: #6c757d; background: #25262b; }
-
-QPushButton[primary="true"] {
-    background: #4dabf7;
-    color: #0b1726;
-    border: none;
-    font-weight: 600;
-}
-QPushButton[primary="true"]:hover { background: #74c0fc; }
-QPushButton[primary="true"]:pressed { background: #339af0; }
-
-QPushButton[danger="true"]:hover {
-    background: #fa5252;
-    color: #fff;
-    border-color: #fa5252;
-}
-
-QPushButton[flat="true"] {
-    background: transparent;
-    border: none;
-    padding: 4px 8px;
-}
-QPushButton[flat="true"]:hover { background: #2c2e33; }
-
-QToolButton {
-    background: transparent;
-    border: 1px solid transparent;
-    border-radius: 6px;
-    padding: 4px 8px;
-    color: #e9ecef;
-}
-QToolButton:hover { background: #2c2e33; border-color: #373a40; }
-QToolButton:checked { background: #373a40; border-color: #4dabf7; }
-
-/* ===== 列表 ===== */
-QListWidget, QListView {
-    background: #1a1b1e;
-    border: none;
-    outline: 0;
-}
-QListWidget::item {
-    padding: 8px 10px;
-    border-radius: 6px;
-    margin: 2px 4px;
-    color: #e9ecef;
-}
-QListWidget::item:hover { background: #25262b; }
-QListWidget::item:selected {
-    background: #2b3a55;
-    color: #ffffff;
-}
-
-/* 网格视图（卡片） */
-QListView#ProjectGrid {
-    background: #1a1b1e;
-    border: none;
-    padding: 8px;
-}
-QListView#ProjectGrid::item {
-    background: #25262b;
-    border: 1px solid #2c2e33;
-    border-radius: 8px;
-    padding: 0;
-    margin: 6px;
-}
-QListView#ProjectGrid::item:hover { border-color: #4dabf7; }
-QListView#ProjectGrid::item:selected {
-    border-color: #4dabf7;
-    background: #2b3a55;
-}
-
-/* ===== 表格 ===== */
-QTableWidget, QTableView {
-    background: #1a1b1e;
-    alternate-background-color: #1f2024;
-    border: 1px solid #2c2e33;
-    border-radius: 6px;
-    gridline-color: #2c2e33;
-    selection-background-color: #2b3a55;
-    selection-color: #ffffff;
-    outline: 0;
-}
-QTableWidget::item, QTableView::item {
-    padding: 6px 8px;
-    border: none;
-}
-QHeaderView::section {
-    background: #25262b;
-    color: #adb5bd;
-    border: none;
-    border-right: 1px solid #2c2e33;
-    border-bottom: 1px solid #2c2e33;
-    padding: 6px 8px;
-    font-weight: 600;
-}
-QHeaderView::section:last { border-right: none; }
-/* 表头本身的背景（最后一段 section 后面的空白区） */
-QHeaderView { background: #25262b; border: none; }
-QTableCornerButton::section { background: #25262b; border: none; }
-
-/* ===== 滚动条 ===== */
-QScrollBar:vertical {
-    background: transparent; width: 10px; margin: 2px;
-}
-QScrollBar::handle:vertical {
-    background: #373a40; min-height: 30px; border-radius: 5px;
-}
-QScrollBar::handle:vertical:hover { background: #495057; }
-QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
-QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: transparent; }
-
-QScrollBar:horizontal {
-    background: transparent; height: 10px; margin: 2px;
-}
-QScrollBar::handle:horizontal {
-    background: #373a40; min-width: 30px; border-radius: 5px;
-}
-QScrollBar::handle:horizontal:hover { background: #495057; }
-QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; }
-QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: transparent; }
-
-/* ===== Splitter ===== */
-QSplitter::handle { background: #1a1b1e; }
-QSplitter::handle:horizontal { width: 1px; background: #2c2e33; }
-QSplitter::handle:vertical   { height: 1px; background: #2c2e33; }
-QSplitter::handle:hover { background: #4dabf7; }
-
-/* ===== TextBrowser（详情 Markdown） ===== */
-QTextBrowser {
-    background: #25262b;
-    border: 1px solid #2c2e33;
-    border-radius: 8px;
-    padding: 12px 14px;
-}
-QTextBrowser a { color: #4dabf7; }
-
-/* ===== Slider ===== */
-QSlider::groove:horizontal {
-    background: #373a40; height: 4px; border-radius: 2px;
-}
-QSlider::sub-page:horizontal { background: #4dabf7; border-radius: 2px; }
-QSlider::handle:horizontal {
-    background: #e9ecef; width: 12px; height: 12px;
-    margin: -5px 0; border-radius: 6px;
-}
-QSlider::handle:horizontal:hover { background: #74c0fc; }
-
-/* ===== MenuBar（主窗口顶部菜单栏） ===== */
-QMenuBar {
-    background: #1a1b1e;
-    color: #e9ecef;
-    border-bottom: 1px solid #2c2e33;
-    padding: 2px 4px;
-}
-QMenuBar::item {
-    background: transparent;
-    padding: 4px 10px;
-    border-radius: 4px;
-}
-QMenuBar::item:selected { background: #2c2e33; }
-QMenuBar::item:pressed  { background: #373a40; }
-
-/* ===== Menu ===== */
-QMenu {
-    background: #25262b;
-    border: 1px solid #373a40;
-    border-radius: 6px;
-    padding: 4px;
-}
-QMenu::item {
-    padding: 6px 18px;
-    border-radius: 4px;
-}
-QMenu::item:selected { background: #2b3a55; }
-QMenu::separator { background: #373a40; height: 1px; margin: 4px 6px; }
-
-/* ===== ToolTip ===== */
-QToolTip {
-    background: #25262b;
-    color: #e9ecef;
-    border: 1px solid #373a40;
-    padding: 4px 8px;
-    border-radius: 4px;
-}
-
-/* ===== Tag tree（左栏） ===== */
-QTreeWidget#TagTree {
-    background: #18191c;
-    border: none;
-    outline: 0;
-    padding: 6px 4px;
-}
-QTreeWidget#TagTree::item {
-    padding: 6px 8px;
-    border-radius: 6px;
-    margin: 1px 4px;
-    color: #adb5bd;
-}
-QTreeWidget#TagTree::item:hover { background: #25262b; color: #e9ecef; }
-QTreeWidget#TagTree::item:selected {
-    background: #2b3a55;
-    color: #ffffff;
-}
-
-/* ===== Tag chip (用 QLabel + property) ===== */
-QLabel[chip="true"] {
-    background: #2b3a55;
-    color: #74c0fc;
-    border-radius: 10px;
-    padding: 2px 10px;
-    margin: 2px;
-}
-
-/* ===== Headline / 标题样式 ===== */
-QLabel[h1="true"] { font-size: 20px; font-weight: 700; color: #e9ecef; }
-QLabel[h2="true"] { font-size: 15px; font-weight: 600; color: #e9ecef; }
-QLabel[muted="true"] { color: #adb5bd; }
-QLabel[hint="true"] { color: #6c757d; }
-
-/* ===== Cover placeholder ===== */
-QLabel#CoverLarge {
-    background: #25262b;
-    border: 1px solid #2c2e33;
-    border-radius: 8px;
-    color: #6c757d;
-}
-"""
-
-
-# =============================================================================
-# Light theme
-# 色板:
-#   --bg-0  #ffffff   --bg-1  #f8f9fa   --bg-2  #e9ecef   --bg-3  #dee2e6
-#   --fg-0  #212529   --fg-1  #495057   --fg-2  #868e96
-#   --accent #228be6  --accent-h #1c7ed6
-#   --warn   #f59f00  --danger #fa5252
-# =============================================================================
 QSS_LIGHT = """
 * {
     font-family: "Microsoft YaHei UI", "Segoe UI", "PingFang SC", sans-serif;
@@ -432,7 +35,7 @@ QToolBar::separator { background: #dee2e6; width: 1px; margin: 6px 6px; }
 QWidget#SidePanel, QWidget#CenterPanel, QWidget#DetailPanel { background: #ffffff; }
 QFrame#Card { background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 8px; }
 
-/* GroupBox（与 dark 主题对称：避免 fusion 默认 panel 引发的视觉错位） */
+/* GroupBox（避免 fusion 默认 panel 引发的视觉错位） */
 QGroupBox {
     background: transparent;
     border: 1px solid #dee2e6;
@@ -455,7 +58,7 @@ QGroupBox QLabel {
     background: transparent;
 }
 
-/* 与 dark 主题对称的设置 → API ScrollArea 规则 */
+/* 设置 → API ScrollArea 规则 */
 QScrollArea#AppScrollArea {
     background: #ffffff;
     border: none;
@@ -467,8 +70,6 @@ QWidget#AppScrollHost {
     background: #ffffff;
 }
 
-
-
 /* 输入 */
 QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
     background: #ffffff; border: 1px solid #ced4da;
@@ -476,6 +77,9 @@ QLineEdit, QPlainTextEdit, QTextEdit, QComboBox, QSpinBox {
     selection-background-color: #228be6; selection-color: #ffffff;
 }
 QLineEdit:focus, QPlainTextEdit:focus, QTextEdit:focus, QComboBox:focus { border: 1px solid #228be6; }
+QLineEdit#SearchBox {
+    padding: 7px 10px 7px 28px;
+}
 QComboBox::drop-down {
     subcontrol-origin: padding;
     subcontrol-position: center right;
@@ -532,7 +136,20 @@ QListWidget::item { padding: 8px 10px; border-radius: 6px; margin: 2px 4px; colo
 QListWidget::item:hover { background: #f1f3f5; }
 QListWidget::item:selected { background: #d0ebff; color: #1971c2; }
 
+/* 网格视图（卡片；卡片本体由 ProjectCardDelegate 自绘，这里控制项间距与选中底） */
 QListView#ProjectGrid { background: #ffffff; border: none; padding: 8px; }
+QListView#ProjectGrid::item {
+    background: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 0;
+    margin: 6px;
+}
+QListView#ProjectGrid::item:hover { border-color: #228be6; }
+QListView#ProjectGrid::item:selected {
+    border-color: #228be6;
+    background: #d0ebff;
+}
 
 /* 表格 */
 QTableWidget, QTableView {
@@ -636,12 +253,6 @@ QTreeWidget#TagTree::item:selected { background: #d0ebff; color: #1971c2; }
 """
 
 
-THEMES = {
-    "dark": QSS_DARK,
-    "light": QSS_LIGHT,
-}
-
-
 def _assets_dir() -> "Path":
     """返回 ui/assets 目录的绝对路径。
     PyInstaller 单文件模式下 __file__ 解析到 _MEIPASS 临时目录，也能命中。"""
@@ -655,13 +266,18 @@ def _qss_with_assets(qss: str) -> str:
     base = _assets_dir().as_posix()
     return (
         qss
-        .replace("__ARROW_DARK__",     f"{base}/arrow-down.svg")
         .replace("__ARROW_LIGHT__",    f"{base}/arrow-down-light.svg")
         .replace("__ARROW_DISABLED__", f"{base}/arrow-down-disabled.svg")
     )
 
 
-def apply_theme(app, name: str) -> None:
-    """切换全局主题。name 接受: light / dark。其它值按 light 处理。"""
-    qss = THEMES.get(name, QSS_LIGHT)
+def apply_theme(app, name: str = "light", font_size: int | None = None) -> None:
+    """应用全局主题。task #34 起仅浅色单主题，``name`` 参数保留兼容（忽略）。
+
+    ``font_size``：基础字号（task #41 T6），缺省 13；只替换全局 ``*`` 规则的
+    字号，不影响 QSS 里其它相对尺寸。
+    """
+    qss = QSS_LIGHT
+    if font_size is not None and font_size != 13:
+        qss = qss.replace("font-size: 13px", f"font-size: {font_size}px", 1)
     app.setStyleSheet(_qss_with_assets(qss))

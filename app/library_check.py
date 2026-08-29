@@ -19,6 +19,7 @@ from typing import Callable, Literal, Optional
 
 from .library import Library
 from .repository import Repository
+from .utils import OperationCancelled
 
 log = logging.getLogger(__name__)
 
@@ -57,25 +58,38 @@ class ConsistencyReport:
 ConsistencyAction = Literal["mark", "delete", "noop"]
 
 
-def run_consistency_check(
-    repo: Repository,
-    library: Library,
-    *,
-    progress: Callable[[int, int, str], None] | None = None,
-) -> ConsistencyReport:
-    """扫描全库文件物理状态。
+def snapshot_file_rows(repo: Repository) -> list:
+    """一致性检查所需的文件清单快照（task #36：主线程查好再交给 worker）。
 
-    progress 回调签名 ``(done, total, current_name)``。
+    worker 线程不得触碰 ``repo.conn``（sqlite 连接不跨线程）。
     """
-    rep = ConsistencyReport()
-
-    # 一次拿出全部文件 + 项目标题（避免 N+1）
-    rows = repo.conn.execute(
+    return repo.conn.execute(
         """SELECT f.id AS fid, f.project_id AS pid, f.path AS path,
                   f.is_relative AS is_rel, p.title AS title
            FROM files f LEFT JOIN projects p ON p.id = f.project_id
            ORDER BY f.id"""
     ).fetchall()
+
+
+def run_consistency_check(
+    repo: Repository,
+    library: Library,
+    *,
+    progress: Callable[[int, int, str], None] | None = None,
+    rows: list | None = None,
+) -> ConsistencyReport:
+    """扫描全库文件物理状态。
+
+    progress 回调签名 ``(done, total, current_name)``。
+
+    ``rows``：可选的文件清单快照（task #36）。UI 线程化时由主线程先查好
+    传入，worker 线程里不再触碰 ``repo.conn``；为 None 时维持旧行为现查。
+    """
+    rep = ConsistencyReport()
+
+    # 一次拿出全部文件 + 项目标题（避免 N+1）
+    if rows is None:
+        rows = snapshot_file_rows(repo)
     rep.total_files = len(rows)
 
     for i, r in enumerate(rows):
@@ -106,6 +120,8 @@ def run_consistency_check(
         if progress is not None:
             try:
                 progress(i + 1, rep.total_files, name)
+            except OperationCancelled:
+                raise  # task #36：取消语义要穿透到 worker
             except Exception:
                 pass
 

@@ -299,6 +299,14 @@ def app_icon_path() -> Path | None:
     return None
 
 
+class OperationCancelled(Exception):
+    """后台操作被用户取消（task #36，协作式取消语义）。
+
+    定义在 utils（中立层），供 exporter / importer / library_check 等
+    后端模块与 ui/workers 共同引用，避免后端反向依赖 ui 包。
+    """
+
+
 def human_size(n: int | float) -> str:
     """字节数转人类可读，如 1.5 MB / 3 GB。"""
     f = float(n)
@@ -307,6 +315,23 @@ def human_size(n: int | float) -> str:
             return f"{f:.1f} {unit}" if unit != "B" else f"{int(f)} B"
         f /= 1024
     return f"{f:.1f} PB"
+
+
+def move_to_trash(path: str | Path) -> str:
+    """把文件移入系统回收站（task #37）。
+
+    回收站不可用（U盘 / 网络盘 / 未安装 Send2Trash 等）时回退为直接删除。
+    返回 ``"trash"``（进了回收站）或 ``"deleted"``（已直接删除）；
+    两者都失败时抛出 ``OSError``。
+    """
+    p = Path(path)
+    try:
+        from send2trash import send2trash
+        send2trash(str(p))
+        return "trash"
+    except Exception:
+        p.unlink()
+        return "deleted"
 
 
 def app_data_dir() -> Path:

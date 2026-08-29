@@ -11,6 +11,23 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 📦 schema v7 → v8 — `files` 表新增 `origin` 列（`user`=用户原始文件 / `generated`=软件衍生物）。
 
 ### Added
+- **API Key 安全存储（task #42）**：API Key 改存 Windows 凭据管理器（`keyring`，按库隔离），`llm_config` 里只留 `keyring:1` 引用标记；旧库明文 Key 首次读取时自动迁移；清空输入框同步删除凭据。备份 zip 与导出包不含 Key。「从其它库导入 API 配置」会把源库凭据重新挂到当前库作用域，挂不上的提示重新填写。凭据管理器不可用时回退明文存储并在「设置 → API」提示。`PRIVACY.md` / `PRIVACY.zh-CN.md` 同步更新。
+- **窗口状态持久化与细节打磨（task #41）**：
+  - 主窗口位置/尺寸/最大化状态在关闭时保存、启动时恢复（损坏数据自动回退默认）。
+  - 新增快捷键：项目视图/文件表 `Delete` 删除（内联编辑时不误触发）；文件表 `F2` / `Shift+F2` 改为控件级快捷键（原来是全局事件过滤）。
+  - 状态栏 MCP / LLM 计数标签改用新的 `ClickableLabel` 组件（替换 monkey patch）；搜索框按键处理迁到控件级过滤器，主窗口全局 eventFilter 只保留拖放追踪。
+  - 文件表文件名列 hover 显示完整文件名（长文件名截断后也能看全）；目录节点 tooltip 显示完整路径。
+  - 设置 → 通用 新增「界面字号」（11/12/13/14/16，立即生效）。
+  - 移除分栏宽度恢复时的 `QTimer.singleShot` 二次 setSizes hack（自检验证移除后宽度仍稳定）。
+- **预览面板增强（task #40）**：
+  - 图片预览支持滚轮缩放（以光标为中心，10%~800%）、左键拖拽平移、双击在「适应窗口 ↔ 100%」间切换，底部控制条（放大/缩小/适应窗口/1:1/缩放百分比）。
+  - 视频预览新增音量滑条、0.5x~2x 倍速、空格播放/暂停。
+  - PDF 预览新增页码跳转（‹ › + 页码输入）、缩放控制（适应宽度/适应页面/50%~200%）与页码指示。
+- **搜索框即时补全（task #38）**：输入时在搜索框下方弹出补全下拉，候选分「字段语法 / 标签值（`tag:` 语境，rating 字段给出 1~5）/ 收藏与最近搜索」三区；↑↓ 选择、Tab/Enter 补全、Esc 关闭（第一次按 Esc 只关补全不清空文本）。移除"聚焦搜索框自动弹历史菜单"的旧交互与状态 hack；历史/收藏仍由 ⌄ 按钮打开。新增 `Ctrl+F` 全局聚焦搜索框；语法错误色改用主题 danger 色。
+- **多选批量操作面板 + 全局标签管理（task #39）**：
+  - 多选项目时右侧不再空白，改为批量操作面板：批量加标签、LLM 元数据建议、导出、标记 MCP 已读、删除（与右键菜单能力一致的可视化入口）。
+  - 标签树节点右键菜单：重命名标签（含 `前缀/...` 子标签整体迁移）、合并到其它标签、删除标签（显示影响项目数并需确认）；`repository` 新增 `rename_tag` / `merge_tag` / `remove_tag_everywhere` / `count_projects_with_tag`。
+  - 项目区空白处右键新增「＋ 新建项目 / 📥 添加文件」菜单，与文件表空白菜单行为对齐。
 - **基础搜索（task #03 Phase A）**：启用主窗口顶部搜索框，按标题/描述关键词过滤项目，支持与左侧标签、标签父节点、未分类、待审阅和 MCP 修改筛选叠加为 AND；MCP `query_projects(action="search")` 同步支持 `tag_prefix`。
 - 新增 `selftests/task03_search_phase_a.py`，覆盖标题/描述关键词、keyword + tag/tag_prefix、未分类 keyword 与 MCP 搜索入口。
 - **类 Calibre 搜索（task #03 Phase B）**：新增 `app/search.py` 递归下降解析器，支持纯关键词、字段过滤、标签、`AND` / `OR` / `NOT` 与括号；Repository 新增 `list_projects_query(ast)` 参数化 SQL 后端，MCP `query_projects(action="search")` 的 `field_filter` 同步接入；主界面搜索框新增“全库”切换，可临时忽略左侧筛选范围。
@@ -74,6 +91,31 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 支持从项目列表拖动一个或多个项目到左侧标签/标签父节点，为项目批量追加标签
 
 ### Changed
+- **主题系统统一为浅色单主题（task #34，按用户决策废弃深色）**：
+  - 删除深色 QSS 与设置页的「主题」切换（含"不再维护深色"的旧声明）；`apply_theme(app)` 单参应用浅色主题。
+  - 新增 `app/ui/palette.py` 统一色板：卡片 delegate、星级、DropZone、预览面板、搜索错误色、状态栏 hover 色等原先写死深色的 Python 侧颜色全部改读色板；浅色下网格卡片/预览不再是深色块。
+  - 补齐浅色 QSS 缺失的 `QListView#ProjectGrid::item` 与搜索框规则，消除双主题时代的规则漂移。
+- **长耗时操作线程化（task #36）**：导出（单/批量）、批量导入、链接转仓储、移动文件、库一致性检查、备份/恢复全部改为后台 `QThread` worker 执行，主线程不再出现 `QApplication.processEvents()`，大文件操作时界面不再卡顿或"未响应"。
+  - 新增 `app/ui/workers.py`：`FileOpWorker` + `run_with_progress` 统一编排；进度对话框 WindowModal 天然防重入。
+  - 线程边界：worker 只做纯文件 IO；sqlite 不跨线程——导出/检查走主线程快照（`ExportSnapshotRepo` / 行快照），文件移动/转换的 DB 更新在完成后由主线程按结果清单统一应用。
+  - `importer.py` 拆为 `prepare_project_from_plan` / `copy_files_for_import` / `write_import_file_rows` 三阶段（`import_folder_as_project` 保持旧签名等价组合）；批量导入取消时未开始复制的项目会清掉空项目行，语义与旧版一致。
+  - 备份/恢复打包不可取消（避免留残包）；一致性检查的"取消"按钮现在真正生效。
+- **确认对话框与操作反馈统一（task #37）**：
+  - 新增 `app/ui/dialogs.py` 中文对话框封装（`confirm` / `ask_yes_no_cancel` / `info` / `warn` / `error`），全 UI 约 140 处 `QMessageBox` 调用全部改走封装，确认框按钮不再出现英文 Yes/No；危险操作的默认焦点统一在「取消」。
+  - 批量导入失败不再逐文件弹窗，改为结束后一次汇总（明细在详细文本里）。
+  - 删除项目 / 移除文件时，仓储物理文件改为移入系统回收站（`Send2Trash`，回收站不可用时回退直接删除），删除确认文案同步说明；物理删除失败收集后统一汇报，不再静默吞掉。
+  - `AGENTS.md` 新增「操作反馈策略」约定；关键静默 `except` 接入 `logging`。
+- **项目列表与封面加载性能优化（task #33）**：
+  - 封面改走缩略图缓存（新增 `app/ui/cover_cache.py`）：`QImageReader` 解码阶段即按卡片尺寸 × DPR 缩放，结果入 `QPixmapCache`（64MB，按 mtime 失效）；卡片 delegate 不再在 paint 热点做实时缩放，网格滚动更顺滑、内存占用显著下降。
+  - 项目列表文件数改为一条 GROUP BY 聚合查询，替代逐项目 `list_files` 的 N+1；字段定义未变化时跳过列表列重建（不再每次刷新都 model reset）。
+  - MCP 轮询（10s）发现新操作时不再整屏重建：仅更新标签树计数，只有正在看「未读 MCP 修改」筛选时才整刷。
+  - 文件表「大小」列改为会话级缓存（按 mtime/size 自动失效），重复切换项目不再重复 stat；项目详情只查一次文件列表。
+  - 「当前库信息」对话框的 library/ 大小统计挪到后台线程回填，大库不再卡住弹窗。
+- **MainWindow 拆分与 UI 分层（task #35，纯重构零行为变化）**：
+  - `main_window.py`（约 4900 行）拆为 5 个 mixin：`mw_library.py`（库菜单/工具）、`mw_projects.py`（项目列表/操作/LLM 入口）、`mw_files.py`（文件面板/封面）、`mw_dnd.py`（拖放导入）、`mw_search.py`（搜索框/历史收藏）；主文件只留组装与接线，降到 568 行。
+  - `settings_dialog.py`（1562 行）拆为 `app/ui/settings/` 包：`dialog.py` 框架 + 每页一个 `page_*.py` mixin + `field_dialogs.py` 字段小对话框；删除死代码 `_on_columns_changed`，非懒加载的局部 import 全部归并到模块头部。
+  - UI 层不再直接执行 SQL：文件总数、MCP 审计游标/客户端/工具清单、pending 建议计数、WAL checkpoint、一致性检查行快照等全部下沉 `repository` / `library_check`。
+  - 两次拆分均由 AST 脚本（`tools/split_main_window.py` / `tools/split_settings_dialog.py`）搬运，方法体零改动；GUI 回归全部通过。
 - 开发约定改由 `AGENTS.md` 作为单一来源，`CLAUDE.md` 仅保留到该文件的导入指针；同步修正任务卡与 `tasks/README.md` 中已完成/进行中任务状态。
 - 普通关键词搜索从标题/描述扩展为标题、描述、标签、自定义字段值、文件名/文件说明/逻辑目录名；字段表达式仍保持精确字段搜索。
 - 任务规划重组（基于 `docs/file-handling.md` 评审）：

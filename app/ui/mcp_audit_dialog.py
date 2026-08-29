@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QHeaderView,
     QLabel,
-    QMessageBox,
     QPushButton,
     QTabWidget,
     QTableWidget,
@@ -210,33 +209,25 @@ class MCPAuditDialog(QDialog):
 
         self.cmb_client.clear()
         self.cmb_client.addItem("全部", "")
-        clients = self.repo.conn.execute(
-            "SELECT DISTINCT client_name FROM mcp_audit WHERE client_name IS NOT NULL ORDER BY 1"
-        ).fetchall()
-        for r in clients:
-            self.cmb_client.addItem(r[0], r[0])
+        for name in self.repo.list_mcp_audit_clients():
+            self.cmb_client.addItem(name, name)
 
         self.cmb_tool.clear()
         self.cmb_tool.addItem("全部", "")
-        tools = self.repo.conn.execute(
-            "SELECT DISTINCT tool_name FROM mcp_audit ORDER BY 1"
-        ).fetchall()
-        for r in tools:
-            label = _TOOL_LABELS.get(r[0], r[0])
-            self.cmb_tool.addItem(label, r[0])
+        for tool in self.repo.list_mcp_audit_tools():
+            label = _TOOL_LABELS.get(tool, tool)
+            self.cmb_tool.addItem(label, tool)
 
         self.cmb_client.blockSignals(False)
         self.cmb_tool.blockSignals(False)
 
     def _clear_audit(self) -> None:
-        r = QMessageBox.question(
+        if confirm(
             self, "清空记录",
             "确定要清空所有 MCP 操作记录吗？此操作不可恢复。",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
-        )
-        if r == QMessageBox.Yes:
-            self.repo.conn.execute("DELETE FROM mcp_audit")
-            self.repo.conn.commit()
+            yes="清空", danger=True,
+        ):
+            self.repo.clear_mcp_audit()
             self._page = 0
             self._reload_audit()
 
@@ -285,18 +276,7 @@ class MCPAuditDialog(QDialog):
         last_tools: dict[int, str] = {}
         if projects:
             pids = [p["id"] for p in projects]
-            placeholders = ",".join("?" for _ in pids)
-            rows = self.repo.conn.execute(
-                f"SELECT pid, tool_name FROM ("
-                f"  SELECT json_extract(arguments_json, '$.project_id') AS pid, tool_name, ts "
-                f"  FROM mcp_audit WHERE result_status='success' "
-                f"  ORDER BY ts DESC"
-                f") WHERE pid IN ({placeholders}) GROUP BY pid",
-                pids,
-            ).fetchall()
-            for r in rows:
-                pid_int = int(r[0])
-                last_tools[pid_int] = r[1]
+            last_tools = self.repo.last_mcp_tool_by_project(pids)
 
         self.tbl_mod.setRowCount(0)
         self.tbl_mod.setRowCount(len(projects))

@@ -41,7 +41,6 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
-    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QRadioButton,
@@ -60,6 +59,7 @@ from PySide6.QtWidgets import (
 from ...llm.config import load_config
 from ...llm.providers import get_provider
 from ...models import FIELD_TYPES, FIELD_TYPE_LABELS, PROTECTED_FIELD_KEYS
+from ..dialogs import confirm, error, info, warn
 from .base import WizardMeta, WizardPlugin
 
 # =============================================================================
@@ -2172,7 +2172,7 @@ class LibraryInitWizard(WizardPlugin):
     def _on_show_raw_dialog(self) -> None:
         """弹出窗口展示 LLM 原始响应；窗口内含「再次应用 LLM 建议」按钮。"""
         if not self._last_raw_response:
-            QMessageBox.information(
+            info(
                 self, "暂无内容",
                 "本轮还没有 LLM 回复内容可供查看。",
             )
@@ -2259,18 +2259,17 @@ class LibraryInitWizard(WizardPlugin):
             for ua in conflicts:
                 # LLM 在 fresh 里同名条目（一定存在）
                 llm_ann = next(a for a in fresh if a.name == ua.name)
-                ans = QMessageBox.question(
+                if confirm(
                     self, "字段名重复",
                     f"字段名「{ua.name}」既被你手加过，也是 LLM 这一轮的新建议。\n\n"
                     f"  • 你手加的：类型=<b>{ua.type}</b>，"
                     f"提示=<i>{(ua.prompt_hint or '（空）')[:60]}</i>\n"
                     f"  • LLM 的：类型=<b>{llm_ann.type}</b>，"
                     f"提示=<i>{(llm_ann.prompt_hint or '（空）')[:60]}</i>\n\n"
-                    f"是 = 保留<b>你手加</b>的版本（丢弃 LLM 的同名建议）；"
-                    f"否 = 用 <b>LLM</b> 的版本覆盖（丢弃你手加的）。",
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes,
-                )
-                if ans == QMessageBox.Yes:
+                    "请选择保留哪个版本：",
+                    yes="保留我的版本", no="用 LLM 的版本",
+                    default_yes=True,
+                ):
                     keep_user_for.add(ua.name)
 
         # 应用合并：
@@ -2466,7 +2465,7 @@ class LibraryInitWizard(WizardPlugin):
         try:
             self.repo.add_field(name.strip(), "text")
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "失败", str(e))
+            warn(self, "失败", str(e))
             return
         self._reload_existing_fields_table()
 
@@ -2487,7 +2486,7 @@ class LibraryInitWizard(WizardPlugin):
         try:
             self.repo.rename_field(fid, new_name.strip())
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "失败", str(e))
+            warn(self, "失败", str(e))
             return
         self._reload_existing_fields_table()
 
@@ -2501,7 +2500,7 @@ class LibraryInitWizard(WizardPlugin):
         """字段助手「现有字段」表里手动改类型 — 复用库设置同款护栏
         （task #19 Phase A）。"""
         from ...models import is_compatible_type_change
-        from ..settings_dialog import _FieldTypeChangeConfirmDialog
+        from ..settings.field_dialogs import _FieldTypeChangeConfirmDialog
 
         f = self.repo.get_field(fid)
         if f is None or f.type == ftype:
@@ -2517,11 +2516,7 @@ class LibraryInitWizard(WizardPlugin):
             # 用户字段读 project_field_values）；只查 project_field_values
             # 会让系统字段永远算 0、误走静默路径
             n_values = self.repo.count_field_filled(f)
-            m_pending = self.repo.conn.execute(
-                "SELECT COUNT(*) FROM project_field_suggestions "
-                "WHERE field_id=? AND status='pending'",
-                (fid,),
-            ).fetchone()[0]
+            m_pending = self.repo.count_pending_suggestions_for_field(fid)
             if (
                 int(n_values) == 0 and int(m_pending) == 0
                 and not (f.prompt_hint or "").strip()
@@ -2543,7 +2538,7 @@ class LibraryInitWizard(WizardPlugin):
                 clear_prompt_hint=clear_hint,
             )
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "失败", str(e))
+            warn(self, "失败", str(e))
         self._reload_existing_fields_table()
 
     def _existing_field_move(self, delta: int) -> None:
@@ -2564,7 +2559,7 @@ class LibraryInitWizard(WizardPlugin):
         self.tbl_existing.setCurrentCell(target, 0)
 
     def _existing_field_delete(self) -> None:
-        from ..settings_dialog import _DeleteFieldChoiceDialog
+        from ..settings.field_dialogs import _DeleteFieldChoiceDialog
 
         fid = self._existing_current_field_id()
         if fid is None:
@@ -2573,7 +2568,7 @@ class LibraryInitWizard(WizardPlugin):
         if not f:
             return
         if f.is_required:
-            QMessageBox.information(self, "提示", f"『{f.name}』字段不可删除。")
+            info(self, "提示", f"『{f.name}』字段不可删除。")
             return
         cnt = self.repo.count_field_filled(f)
         dlg = _DeleteFieldChoiceDialog(f.name, cnt, parent=self)
@@ -2582,7 +2577,7 @@ class LibraryInitWizard(WizardPlugin):
         try:
             self.repo.delete_field(fid, append_to_description=dlg.append_to_desc)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.warning(self, "失败", str(e))
+            warn(self, "失败", str(e))
             return
         self._reload_existing_fields_table()
 
@@ -2604,7 +2599,7 @@ class LibraryInitWizard(WizardPlugin):
     def _on_first_call(self) -> None:
         text = self.ed_scenario.toPlainText().strip()
         if not text:
-            QMessageBox.warning(
+            warn(
                 self, "请填写库描述",
                 "请先描述这个库的目的与字段偏好。",
             )
@@ -2631,16 +2626,15 @@ class LibraryInitWizard(WizardPlugin):
             or self._history
         )
         if has_invested:
-            ret = QMessageBox.question(
+            ret = confirm(
                 self,
                 "确认退出库字段设计助手",
                 "退出会丢弃当前的场景描述、所有 LLM 建议与你的批准/驳回"
                 "决策。\n\n"
                 "确定要退出吗？",
-                QMessageBox.Yes | QMessageBox.No,
-                QMessageBox.No,
+                yes="退出", danger=True,
             )
-            if ret != QMessageBox.Yes:
+            if not ret:
                 return
         super().reject()
 
@@ -2648,7 +2642,7 @@ class LibraryInitWizard(WizardPlugin):
         # 仅当已经至少调过一轮 LLM（有建议或原始回复在手）时才弹确认；
         # 没建议时点重新开始无破坏性，直接回场景页。
         if self._suggestions or self._last_raw_response:
-            ret = QMessageBox.question(
+            if not confirm(
                 self,
                 "确认重新开始",
                 "重新开始会丢弃当前这一轮 LLM 给出的所有建议（包括你已经做过的"
@@ -2657,10 +2651,8 @@ class LibraryInitWizard(WizardPlugin):
                 "里的「🔄 再次应用 LLM 建议」，会把所有 LLM 触达过的字段重置为"
                 "本轮 LLM 给出的版本。\n\n"
                 "确认重新开始？",
-                QMessageBox.Yes | QMessageBox.Cancel,
-                QMessageBox.Cancel,
-            )
-            if ret != QMessageBox.Yes:
+                yes="重新开始", danger=True,
+            ):
                 return
         self._history = []
         self._suggestions = []
@@ -2681,7 +2673,7 @@ class LibraryInitWizard(WizardPlugin):
 
     def _on_refine(self) -> None:
         if self._current_round >= self._max_rounds:
-            QMessageBox.information(
+            info(
                 self, "已达上限",
                 f"已达 {self._current_round}/{self._max_rounds} 轮，"
                 "请『重新开始』或采用当前结果。",
@@ -2707,7 +2699,7 @@ class LibraryInitWizard(WizardPlugin):
         cfg = load_config(self.repo)
         active = cfg.active()
         if active is None or not active.api_key:
-            QMessageBox.warning(
+            warn(
                 self, "未配置 API Key",
                 "请先到「设置 → API」配置默认 LLM 平台的 API Key。",
             )
@@ -2715,7 +2707,7 @@ class LibraryInitWizard(WizardPlugin):
         try:
             provider = get_provider(active)
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(self, "LLM 平台连接失败", str(e))
+            error(self, "LLM 平台连接失败", str(e))
             return
 
         use_json_mode = bool(getattr(provider, "supports_json_mode", True))
@@ -2769,7 +2761,7 @@ class LibraryInitWizard(WizardPlugin):
         self._refresh_round_label()
         if payload is None:
             # 失败：留在预览页（如果之前已经有结果）或回到场景页
-            QMessageBox.critical(self, "LLM 调用失败", raw_text)
+            error(self, "LLM 调用失败", raw_text)
             if self._suggestions:
                 self.stack.setCurrentIndex(PAGE_PREVIEW)
             else:
@@ -3537,7 +3529,7 @@ class LibraryInitWizard(WizardPlugin):
             and self.repo is not None
         ):
             from ...models import is_compatible_type_change
-            from ..settings_dialog import _FieldTypeChangeConfirmDialog
+            from ..settings.field_dialogs import _FieldTypeChangeConfirmDialog
 
             # 用初始类型（original_type 优先；兜底用 repo.get_field().type）
             base_type = d.original_type or old_type
@@ -3555,11 +3547,9 @@ class LibraryInitWizard(WizardPlugin):
                         n_values = self.repo.count_field_filled(f)
                     except Exception:
                         n_values = 0
-                    m_pending = self.repo.conn.execute(
-                        "SELECT COUNT(*) FROM project_field_suggestions "
-                        "WHERE field_id=? AND status='pending'",
-                        (d.existing_field_id,),
-                    ).fetchone()[0]
+                    m_pending = self.repo.count_pending_suggestions_for_field(
+                        d.existing_field_id,
+                    )
                     has_hint = bool((d.prompt_hint or "").strip())
                     if int(n_values) == 0 and int(m_pending) == 0 and not has_hint:
                         d.type = new_type
@@ -3628,7 +3618,7 @@ class LibraryInitWizard(WizardPlugin):
                 DRAFT_ORIGIN_LLM_NEW: "LLM 新建的字段",
                 DRAFT_ORIGIN_LLM_TYPECHANGED: "LLM 建议改类型后保留的字段",
             }.get(conflict.origin, "其它字段")
-            QMessageBox.warning(
+            warn(
                 self, "无法撤销删除",
                 f"无法撤销删除「{self._drafts[row].name}」：当前字段表里已有同名字段。\n\n"
                 f"冲突来源：{origin_desc}\n\n"
@@ -3652,7 +3642,7 @@ class LibraryInitWizard(WizardPlugin):
         # 防止与未删除行重名
         existing = {(d.name or "").strip() for d in self._drafts if not d.deleted}
         if name in existing:
-            QMessageBox.warning(
+            warn(
                 self, "字段名重复",
                 f"「{name}」已存在于当前字段表。请换一个名字。",
             )
@@ -3679,7 +3669,7 @@ class LibraryInitWizard(WizardPlugin):
         """
         r = self.tbl_step2.currentRow()
         if r < 0 or r >= len(self._drafts):
-            QMessageBox.information(
+            info(
                 self, "请先选择一行",
                 "请先点选一行字段，再点上移 / 下移。",
             )
@@ -3696,15 +3686,14 @@ class LibraryInitWizard(WizardPlugin):
     def _on_step2_back(self) -> None:
         """点"← 放弃修改并返回"按钮：检测 drafts 是否被编辑过；有编辑则弹确认。"""
         if self._drafts_dirty():
-            ret = QMessageBox.question(
+            ret = confirm(
                 self, "确认返回",
                 "返回会丢弃你在字段表里做的所有修改（增/删/改名/改类型/改提示）。\n"
                 "上一步对 LLM 建议的批准/驳回会保留。\n\n"
                 "确认返回？",
-                QMessageBox.Cancel | QMessageBox.Yes,
-                QMessageBox.Cancel,
+                yes="返回", danger=True,
             )
-            if ret != QMessageBox.Yes:
+            if not ret:
                 return
         # 丢弃 drafts，回 Step 1
         self._drafts = []
@@ -3788,7 +3777,7 @@ class LibraryInitWizard(WizardPlugin):
         # 校验 drafts 合法性
         self._refresh_step2_warnings()
         if self.lbl_step2_warnings.isVisible():
-            QMessageBox.warning(
+            warn(
                 self, "字段表存在问题",
                 "请先解决底部警告区列出的问题（重名 / 空字段名）后再应用。",
             )
@@ -3796,7 +3785,7 @@ class LibraryInitWizard(WizardPlugin):
 
         plan = self._build_field_plan_from_drafts()
         if plan.is_empty:
-            QMessageBox.information(
+            info(
                 self, "无变更",
                 "当前字段表与现有库一致，没有可应用的变更。",
             )
@@ -3824,11 +3813,7 @@ class LibraryInitWizard(WizardPlugin):
                     n_values = self.repo.count_field_filled(f)
                 except Exception:
                     n_values = 0
-                m_pending = self.repo.conn.execute(
-                    "SELECT COUNT(*) FROM project_field_suggestions "
-                    "WHERE field_id=? AND status='pending'",
-                    (fid,),
-                ).fetchone()[0]
+                m_pending = self.repo.count_pending_suggestions_for_field(fid)
                 type_entries.append(
                     (f.name, f.type, new_type, int(n_values), int(m_pending)),
                 )
@@ -3875,7 +3860,7 @@ class LibraryInitWizard(WizardPlugin):
                 )
             )
         except Exception as e:  # noqa: BLE001
-            QMessageBox.critical(
+            error(
                 self, "应用失败",
                 f"应用字段方案时出错，已回滚（库内字段表无变化）：\n{e}",
             )
@@ -3992,7 +3977,7 @@ class LibraryInitWizard(WizardPlugin):
             msg_parts.append(f"删除字段 {n_deleted} 个")
         if not msg_parts:
             msg_parts.append("已应用")
-        QMessageBox.information(self, "已应用", "，".join(msg_parts) + "。")
+        info(self, "已应用", "，".join(msg_parts) + "。")
 
     def _fid_to_name(self, fid: int, *, prefer_old: bool = False) -> str:
         """工具：fid → 字段名（用于结果消息）。"""

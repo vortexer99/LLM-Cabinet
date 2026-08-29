@@ -28,6 +28,7 @@ from .db import SCHEMA_VERSION
 from .library import Library
 from .models import Project
 from .repository import Repository
+from .utils import OperationCancelled  # noqa: F401  # 供进度回调透传判断
 
 # project.json 的 schema 标识，导入端用这个匹配版本
 # @3 起 files.json 含 subfolder + is_cover + origin（task #28 / task #30）
@@ -295,6 +296,8 @@ def export_project(
             if progress is not None:
                 try:
                     progress(i + 1, total, Path(f.path).name)
+                except OperationCancelled:
+                    raise  # task #36：取消语义要穿透到 worker
                 except Exception:
                     pass
 
