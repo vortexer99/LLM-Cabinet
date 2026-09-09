@@ -2,7 +2,7 @@
 
 > 简体中文版本：[PRIVACY.zh-CN.md](PRIVACY.zh-CN.md)
 
-Last updated: 2026-05-31
+Last updated: 2026-09-09
 
 LLM Cabinet is a **local desktop application**. This document explains what the app stores on your machine, and what data leaves your machine when you use the *"LLM metadata suggestion"* feature.
 
@@ -27,7 +27,7 @@ The following data lives **only on your local disk** and is never proactively up
   - Only the path string is recorded. The app does not copy or move these files.
   - Deleting a project does **not** delete the original files.
 
-**Important**: since v0.6, API keys are stored in the **Windows Credential Manager** (via the `keyring` library); the database only keeps a reference marker (`keyring:1`) and **no longer contains plaintext keys**. Plaintext keys from older libraries are migrated automatically on first read. Backup zips and exported project bundles do **not** include API keys. If the OS credential store is unavailable (rare), the app falls back to plaintext storage and shows a clear notice on the Settings → API page.
+**Important**: since v0.6, saving API keys first attempts the system credential store (`keyring`, Windows Credential Manager). On success, the active configuration stores only `keyring:1`; on failure it stores plaintext, and Settings → API reports the actual result immediately. Migration does not scrub the original database history: WAL files, free pages and old migration backups may retain earlier plaintext. Do not assume a copied library directory is credential-free. App-created backups sanitize a separate database snapshot and exclude SQLite sidecars and `cabinet.v*.bak`; keys must be re-entered after restore, even on the same machine. User files and metadata are not scrubbed.
 
 ---
 
@@ -78,7 +78,7 @@ Once data leaves your machine it is governed by **that provider's own privacy po
 - **Hidden fields**: in older versions, "Visible = No" excluded a field from LLM context entirely. The current version decouples them — "Visible" only controls the list view, and **all fields go into the prompt**. If you do not want a field's value sent, leave it blank or clear it before triggering LLM
 - **Reference file granularity**: every trigger lets you tick which files to include
 - **Target field granularity**: every trigger lets you also adjust the list of "fields you want suggestions for"
-- **Clear API keys**: Settings → API → clear the API Key input. The app no longer holds the key
+- **Clear API keys**: Settings → API → clear the API Key input. The active configuration is cleared; historical database copies may retain it
 - **Wipe everything**: delete the `%APPDATA%/LLMCabinet/` directory
 
 ---
@@ -94,7 +94,7 @@ An export bundle is a plain directory containing:
 - `README.md`: human-readable summary
 - `files/`: actual file copies ("📦 copy" mode files are always copied; "🔗 link" mode files are copied only if the corresponding checkbox is ticked)
 
-**Sensitivity note**: an export bundle contains your project metadata in plaintext (which may include private content in description fields) plus copies of the source files. **Before sharing an export, confirm it does not contain anything you don't want disclosed.** Export bundles do **not** include API keys or other provider credentials.
+**Sensitivity note**: an export bundle contains your project metadata in plaintext (which may include private content in description fields) plus copies of the source files. **Before sharing an export, confirm it does not contain anything you don't want disclosed.** Export bundles do not copy the app’s API configuration; any secrets embedded in user files or metadata remain.
 
 ---
 
@@ -110,7 +110,7 @@ An export bundle is a plain directory containing:
 
 ## 5. Known limitations and risks
 
-- **API key storage**: by default keys live in the Windows Credential Manager (isolated per library); library files and backups contain no keys. After moving to a new machine or clearing the credential store, re-enter keys in Settings → API. If the credential store is unavailable, the app falls back to plaintext (with a UI notice) — do not share `cabinet.db` in that case
+- **API key storage**: by default keys live in the Windows Credential Manager (isolated per library); app-created backups remove configured keys, but source library files may retain plaintext history. After moving to a new machine or clearing the credential store, re-enter keys in Settings → API. If the credential store is unavailable, the app falls back to plaintext (with a UI notice) — do not share `cabinet.db` in that case
 - **Filenames are data too**: when you trigger an LLM suggestion, the **filenames of every file in the project** are sent as project-structure context regardless of which files are ticked. If a filename itself contains sensitive information (real names, internal codenames, contract numbers, etc.), rename it to a redacted form or remove that file from the project before triggering
 - **LLM provider retention**: DeepSeek / OpenAI / Gemini / Grok each have their own data retention and training policies. If you tick sensitive files as reference, that content may be retained by the provider. If unsure, read the provider's privacy policy or use a "no-training" tier (such as OpenAI's zero-data-retention agreements or Gemini's paid tier)
 - **Open and auditable**: you can always read the source under `app/llm/` to verify that the outbound requests match what this document describes

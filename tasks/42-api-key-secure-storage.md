@@ -42,18 +42,18 @@
 
 ## T2 · 告知与文档
 
-- 设置页 API 区加一行说明："API Key 保存在 Windows 凭据管理器中，不会随库文件/备份外泄"
+- 设置页 API 区加一行说明："根据当前配置实际保存结果提示凭据引用或明文回退"
 - `PRIVACY.md` / `PRIVACY.zh-CN.md` 补充密钥存储方式段落
-- 备份/恢复文档（`docs/`）说明：备份 zip 不含 API Key，恢复后需重新填写（或同机自动可用）
+- 备份/恢复文档（`docs/`）说明：备份 zip 不含 API Key，恢复后需重新填写（同机也需重填）
 
 ---
 
 ## 校验
 
-- [ ] 填写 key → cabinet.db 中不出现明文（grep 验证），keyring 中有对应条目
-- [ ] 老库（明文 key）启动后自动迁移：功能不断、db 中明文消失
+- [ ] 填写 key → 当前 llm_config 中不出现明文，keyring 中有对应条目
+- [ ] 老库（明文 key）启动后自动迁移：功能不断、当前 llm_config 中明文替换为引用，源库历史可能留存
 - [ ] 清空 Windows 凭据后：LLM 功能按"未配置"提示，设置页可重填
-- [ ] 备份库 zip 内不含 key；恢复到新目录后按预期提示重填（或同机 keyring 命中直接可用）
+- [ ] 备份库 zip 内不含 key；恢复到新目录后按预期提示重填（同机也需重填）
 - [ ] 从其它库导入 API 配置：base_url/model/默认值导入，key 按 keyring 语义处理且反馈文案说明
 - [ ] PRIVACY 两份文档更新
 
@@ -68,3 +68,8 @@
 1. **是否引入 `keyring` 依赖**
    - 默认决定：**引入**。Windows 桌面场景下 keyring 后端成熟（ Credential Manager），用户零配置。
    - 若你不想加依赖：本卡退化为"UI 明确告知明文存储 + PRIVACY 写明 + 备份时提示剔除"，工作量 XS。
+
+## 2026-09-09 回归修复
+
+- [x] 备份快照移除配置密钥并排除历史日志；凭据失败/恢复的设置提示即时刷新。
+- [x] 已加入 `selftests/task42_security_regressions.py` / `selftests/gui_release_regressions.py` 对应自动回归。

@@ -101,3 +101,8 @@ def info(parent, title, text) -> None
 1. **是否引入 `Send2Trash` 依赖**
    - 默认决定：**引入**（纯 Python 小包，Windows 下走 SHFileOperation，稳）。回收站语义对"仓储模式误删"是最低成本的安全网。
    - 若你不想加依赖：T3 退化为"删除前确认框文案强化 + 失败如实汇报"，维持硬删除。
+
+## 2026-09-09 回归修复
+
+- [x] 文件/项目删除前披露永久删除回退，操作后一次汇总实际回退结果。
+- [x] 已加入 `selftests/task42_security_regressions.py` / `selftests/gui_release_regressions.py` 对应自动回归。

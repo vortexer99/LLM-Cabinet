@@ -11,6 +11,8 @@ English · [简体中文](README.zh-CN.md)
 
 </div>
 
+Current release: **v0.6.0** (2026-09-09). See [CHANGELOG](CHANGELOG.md) for UI, preview, background-task and security changes.
+
 ## Notice
 
 > **Heads-up — UI is Chinese-only for now.** The application's interface, prompts, and in-app dialogs are written in Simplified Chinese. Due to limited maintainer bandwidth, an English UI is not planned at the moment. This README and [PRIVACY.md](PRIVACY.md) are available in English so you can decide whether the app fits your use case. If you can read Chinese, the app is fully usable; otherwise expect to rely on machine translation for the in-app text.
@@ -221,7 +223,9 @@ Each LLM Cabinet library is **one self-contained directory** (containing `cabine
 
 Cross-device syncing (OneDrive / Dropbox / etc.) works the same way. **Caveat**: only one client may have the library open at a time (SQLite single-writer lock). Keep the app closed while the sync agent finishes uploading to avoid write conflicts.
 
-For point-in-time snapshots, use **Tools → 📦 Backup this library** to zip the whole directory; restore with **Tools → 📥 Restore library from backup** by picking the zip + an empty target directory.
+For point-in-time snapshots, use **Tools → 📦 Backup this library**; restore with **Tools → 📥 Restore library from backup** by picking the zip + an empty target directory. Backups use a database snapshot with configured API keys removed, excluding SQLite sidecars and old migration backups (`cabinet.v*.bak`). Re-enter API keys after restoring, including on the same machine. User files are copied unchanged; check their contents before sharing. Avoid changing library files while a backup runs.
+
+Deleting stored files or projects sends files to the recycle bin. If that fails, deletion becomes permanent; the confirmation explains this and the result dialog lists affected files.
 
 ## FAQ
 

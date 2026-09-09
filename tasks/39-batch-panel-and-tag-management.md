@@ -89,3 +89,8 @@
 
 - `repo.batch_add_tag`（#25 已存在）可直接复用
 - 确认框样式与 #37 联动（弱依赖）
+
+## 2026-09-09 回归修复
+
+- [x] 标签前缀按字面匹配；父子重叠迁移保留全部关联。
+- [x] 已加入 `selftests/task42_security_regressions.py` / `selftests/gui_release_regressions.py` 对应自动回归。

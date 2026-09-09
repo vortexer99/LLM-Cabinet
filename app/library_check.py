@@ -157,6 +157,33 @@ def apply_consistency_action(
 # =============================================================================
 # 备份 / 恢复
 # =============================================================================
+def _write_backup_database(source: Path, destination: Path) -> None:
+    """创建无凭据、无历史空闲页的独立快照，不修改源库或访问凭据管理器。"""
+    import json
+    import sqlite3
+    from contextlib import closing
+
+    with closing(sqlite3.connect(source.resolve().as_uri() + "?mode=ro", uri=True)) as src:
+        with closing(sqlite3.connect(destination)) as dst:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+            dst.execute("PRAGMA secure_delete=ON")
+            row = dst.execute("SELECT value FROM settings WHERE key='llm_config'").fetchone()
+            if row:
+                try:
+                    data = json.loads(row[0])
+                    for provider in data.get("providers", {}).values():
+                        provider["api_key"] = ""
+                    cleaned = json.dumps(data, ensure_ascii=False)
+                except (ValueError, TypeError, AttributeError):
+                    # 配置损坏时不能把不可解析的原文（可能含密钥）带进备份。
+                    log.warning("备份中移除了无法解析的 LLM 配置")
+                    cleaned = "{}"
+                dst.execute("UPDATE settings SET value=? WHERE key='llm_config'", (cleaned,))
+            dst.commit()
+            dst.execute("VACUUM")
+
+
 def backup_library(
     library_root: Path,
     target_zip: Path,
@@ -167,8 +194,8 @@ def backup_library(
     """把库目录打成 zip。
 
     返回最终 zip 路径（带 .zip 后缀）。target_zip 不带 .zip 时自动加上。
-    用户负责事先关闭 LLM worker 与 db connection 以避免锁问题（建议主调用方
-    用『让用户先关闭应用 → 在外部跑此函数』；GUI 内嵌调用方需先 PRAGMA wal_checkpoint）。
+    数据库使用在线快照并移除 API Key；不打包 WAL、journal 和旧迁移备份。
+    文件复制期间应避免修改仓储文件，以保证文件与数据库快照相符。
 
     内容控制：
     - **始终跳过** ``cabinet.json`` 等"软件全局配置"（``_is_app_global_entry``）：
@@ -183,7 +210,7 @@ def backup_library(
     progress 回调签名 ``(current, total, name) -> None``：``current/total`` 都是
     粗略文件计数，``name`` 是当前文件名。
     """
-    import zipfile
+    import tempfile
     # 在函数内部 import 同包内的 helper，避免文件顶部循环依赖
     from .cabinet import _is_app_global_entry, _is_library_owned_entry
 
@@ -202,6 +229,10 @@ def backup_library(
     selected_top: list[Path] = []
     try:
         for p in library_root.iterdir():
+            if (p.resolve() == target_zip.resolve()
+                    or p.name in ("cabinet.db-wal", "cabinet.db-shm", "cabinet.db-journal")
+                    or (p.name.startswith("cabinet.v") and p.name.endswith(".bak"))):
+                continue
             if _is_app_global_entry(p.name):
                 continue  # 软件全局：永不备份（防孤儿）
             if _is_library_owned_entry(p.name):
@@ -226,6 +257,8 @@ def backup_library(
             had_any = False
             for sub in top.rglob("*"):
                 if sub.is_file():
+                    if sub.resolve() == target_zip.resolve():
+                        continue
                     rel = sub.relative_to(library_root).as_posix()
                     arc = f"{base_name_in_zip}/{rel}"
                     files_to_pack.append((sub, arc))
@@ -235,19 +268,27 @@ def backup_library(
                 rel = top.relative_to(library_root).as_posix()
                 empty_dirs.append(f"{base_name_in_zip}/{rel}/")
 
+    with tempfile.TemporaryDirectory(prefix="cabinet_backup_") as tmp:
+        snapshot = Path(tmp) / "cabinet.db"
+        _write_backup_database(library_root / "cabinet.db", snapshot)
+        # 快照失败时尚未打开输出 zip，保留用户原有备份。
+        return _pack_backup_files(target_zip, snapshot, files_to_pack, empty_dirs, progress)
+
+
+def _pack_backup_files(
+    target_zip: Path, snapshot: Path, files_to_pack: list[tuple[Path, str]],
+    empty_dirs: list[str], progress: Callable[[int, int, str], None] | None,
+) -> Path:
+    """打包已筛选文件；数据库只使用已清理快照，读失败如实报错。"""
+    import zipfile
     total = len(files_to_pack)
-    with zipfile.ZipFile(
-        target_zip, "w", compression=zipfile.ZIP_DEFLATED,
-    ) as zf:
+    with zipfile.ZipFile(target_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
         for arc in empty_dirs:
             # ZipInfo 名字以 "/" 结尾被解释为目录条目
             zf.writestr(zipfile.ZipInfo(arc), "")
         for i, (src, arc) in enumerate(files_to_pack, 1):
-            try:
-                zf.write(src, arcname=arc)
-            except OSError:
-                # 单个文件读不到（被占用 / 权限）→ 跳过，继续打包剩下的
-                continue
+            zf.write(snapshot if src.name == "cabinet.db" and arc.count("/") == 1 else src,
+                     arcname=arc)
             if progress is not None:
                 try:
                     progress(i, total, src.name)

@@ -8,6 +8,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-09
+
 📦 schema v7 → v8 — `files` 表新增 `origin` 列（`user`=用户原始文件 / `generated`=软件衍生物）。
 
 ### Added
@@ -109,7 +111,7 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 封面改走缩略图缓存（新增 `app/ui/cover_cache.py`）：`QImageReader` 解码阶段即按卡片尺寸 × DPR 缩放，结果入 `QPixmapCache`（64MB，按 mtime 失效）；卡片 delegate 不再在 paint 热点做实时缩放，网格滚动更顺滑、内存占用显著下降。
   - 项目列表文件数改为一条 GROUP BY 聚合查询，替代逐项目 `list_files` 的 N+1；字段定义未变化时跳过列表列重建（不再每次刷新都 model reset）。
   - MCP 轮询（10s）发现新操作时不再整屏重建：仅更新标签树计数，只有正在看「未读 MCP 修改」筛选时才整刷。
-  - 文件表「大小」列改为会话级缓存（按 mtime/size 自动失效），重复切换项目不再重复 stat；项目详情只查一次文件列表。
+  - 文件表「大小」列改为会话级缓存（1 秒有效期，过期后重新读取），有效期内重复读取不再 stat；项目详情只查一次文件列表。
   - 「当前库信息」对话框的 library/ 大小统计挪到后台线程回填，大库不再卡住弹窗。
 - **MainWindow 拆分与 UI 分层（task #35，纯重构零行为变化）**：
   - `main_window.py`（约 4900 行）拆为 5 个 mixin：`mw_library.py`（库菜单/工具）、`mw_projects.py`（项目列表/操作/LLM 入口）、`mw_files.py`（文件面板/封面）、`mw_dnd.py`（拖放导入）、`mw_search.py`（搜索框/历史收藏）；主文件只留组装与接线，降到 568 行。
@@ -126,6 +128,10 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
   - 同步 `docs/file-handling.md` 任务地图、推荐执行顺序、`tasks/README.md` 索引表、`TODO.md` 条目。
 
 ### Fixed
+- 修复标签名包含 `_` / `%` 时误改其它标签，以及父标签重命名到子标签时丢失关联（#39）。
+- 备份改用清除 API Key 的 SQLite 快照，排除 WAL、journal 和历史迁移备份；恢复后需重填密钥。设置页根据实际保存结果即时提示明文回退（#42）。
+- 文件及项目删除前说明回收站失败时的永久删除回退，并在操作后一次汇总实际结果（#37）。
+- 文件大小缓存改为 1 秒有效期，命中时不再执行 stat，过期后读取文件变化（#33）。
 - 全新库直接创建到当前 schema 时补建 `mcp_audit` 表，避免主窗口首次启动查询 MCP 审计状态时崩溃。
 - 主界面左/中/右三栏宽度在拖拽后会写入设置，重启后恢复上次宽度。
 - 项目右键菜单的「已读MCP修改」会固定使用本次右键目标，避免因当前选区未更新而清错或没有清除 MCP 未读标记。
@@ -276,7 +282,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 📦 schema v1 — 初始 schema。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/vortexer99/llm-cabinet/releases/tag/v0.4.0

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 import shutil
 import warnings
 from pathlib import Path
@@ -463,18 +464,21 @@ class FilesPanelMixin:
 
 
     def _file_size_str(self, f: FileItem) -> str:
-        """文件大小显示串（task #33：会话级缓存，按 (mtime, size) 自动失效）。"""
+        """大小缓存有效期 1 秒；连续读取不 stat，外部变动最多延迟 1 秒反映。"""
         try:
             abs_path = self.library.resolve(f.path, f.is_relative)
+            key = str(abs_path)
+            now = time.monotonic()
+            ent = self._file_size_cache.get(key)
+            if ent is not None and now - ent[0] < 1.0:
+                return ent[2]
             st = abs_path.stat()
         except Exception:
+            if "key" in locals():
+                self._file_size_cache.pop(key, None)
             return "—"
-        key = str(abs_path)
-        ent = self._file_size_cache.get(key)
-        if ent is not None and ent[0] == st.st_mtime_ns and ent[1] == st.st_size:
-            return ent[2]
         s = _human_size(st.st_size)
-        self._file_size_cache[key] = (st.st_mtime_ns, st.st_size, s)
+        self._file_size_cache[key] = (now, st.st_size, s)
         return s
 
 
@@ -1174,6 +1178,7 @@ class FilesPanelMixin:
             parts.append(
                 f"📦 仓储（物理文件将移入系统回收站） · {len(copy_files)} 个：\n"
                 + _fmt_list(copy_files)
+                + "\n⚠ 回收站不可用时将直接永久删除，无法从回收站恢复。"
             )
 
         if not confirm(
@@ -1186,10 +1191,12 @@ class FilesPanelMixin:
 
         # task #37：仓储文件进回收站；失败收集后统一汇报
         delete_failures: list[str] = []
+        permanently_deleted: list[str] = []
         for f in files_to_delete:
             if f.is_relative:
                 try:
-                    move_to_trash(self.library.resolve(f.path, True))
+                    if move_to_trash(self.library.resolve(f.path, True)) == "deleted":
+                        permanently_deleted.append(Path(f.path).name)
                 except OSError as e:
                     delete_failures.append(f"{Path(f.path).name}：{e}")
             if f.id is not None:
@@ -1197,11 +1204,12 @@ class FilesPanelMixin:
         if self._current_project_id is not None:
             self.repo.touch_project(self._current_project_id)
             self._show_project(self.repo.get_project(self._current_project_id))
+        if permanently_deleted:
+            delete_failures.append("回收站不可用，以下文件已永久删除：\n" + "\n".join(permanently_deleted))
         if delete_failures:
             warn(
-                self, "部分文件删除失败",
-                f"{len(delete_failures)} 个仓储文件的磁盘副本未能删除"
-                "（项目中的记录已移除），可到仓库目录手动清理。",
+                self, "文件移除结果",
+                "文件记录已移除。以下磁盘操作失败或回退为永久删除，请查看明细。",
                 detailed="\n".join(delete_failures),
             )
 

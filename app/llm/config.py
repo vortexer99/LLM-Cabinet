@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 from dataclasses import dataclass, field
 
@@ -80,6 +81,8 @@ _SETTING_KEY = "llm_config"
 # ---------------------------------------------------------------------------
 _KEYRING_SERVICE = "llm-cabinet"
 KEYRING_SENTINEL = "keyring:1"
+_keyring_write_failed = False
+log = logging.getLogger(__name__)
 
 
 def _kr():
@@ -99,8 +102,8 @@ def keyring_available() -> bool:
     if kr is None:
         return False
     try:
-        kr.get_keyring()
-        return True
+        backend = kr.get_keyring()
+        return getattr(backend, "priority", 1) > 0 and not _keyring_write_failed
     except Exception:
         return False
 
@@ -124,6 +127,7 @@ def _keyring_scope(repo) -> str:
 
 def _store_key(repo, pid: str, api_key: str) -> bool:
     """把 key 写入 keyring（当前库作用域）。成功返回 True。"""
+    global _keyring_write_failed
     kr = _kr()
     if kr is None or not api_key:
         return False
@@ -131,9 +135,26 @@ def _store_key(repo, pid: str, api_key: str) -> bool:
         kr.set_password(
             _KEYRING_SERVICE, f"{_keyring_scope(repo)}:{pid}", api_key,
         )
+        _keyring_write_failed = False
         return True
     except Exception:
+        _keyring_write_failed = True
+        log.warning("系统凭据写入失败，配置回退为明文存储")
         return False
+
+
+def key_storage_notice(repo) -> str:
+    """根据当前库实际保存结果提示，不把后端存在等同于密钥写入成功。"""
+    try:
+        data = json.loads(repo.get_setting(_SETTING_KEY, "") or "{}")
+        values = [p.get("api_key", "") for p in data.get("providers", {}).values()]
+    except (ValueError, TypeError, AttributeError):
+        return "⚠ 密钥存储状态无法确认，请重新保存 API 配置。"
+    if any(value and value != KEYRING_SENTINEL for value in values):
+        return "⚠ 部分 API Key 以明文保存在库文件中，请勿直接分享库目录。应用备份会移除配置密钥。"
+    if any(value == KEYRING_SENTINEL for value in values):
+        return "🔒 API Key 已保存为系统凭据引用。应用备份移除密钥，恢复后需重新填写。"
+    return "尚未保存 API Key。保存时优先使用系统凭据管理器；失败时会提示明文存储。"
 
 
 def _read_key(repo, pid: str) -> str:

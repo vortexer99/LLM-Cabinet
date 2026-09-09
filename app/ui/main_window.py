@@ -157,8 +157,8 @@ class MainWindow(
 
         self._current_project_id: int | None = None
         self._current_file_id: int | None = None
-        # task #33：文件大小会话级缓存 {abs_path: (mtime_ns, size, 显示串)}
-        self._file_size_cache: dict[str, tuple[int, int, str]] = {}
+        # task #33：文件大小缓存 {abs_path: (单调时钟, size, 显示串)}，1 秒过期
+        self._file_size_cache: dict[str, tuple[float, int, str]] = {}
         # task #33：字段定义指纹，没变就跳过列重建
         self._fields_fingerprint: tuple | None = None
 

@@ -29,7 +29,7 @@
 |---|---|---|
 | **T1** | 封面缩略图缓存：按目标尺寸一次缩放、缓存复用，杜绝全尺寸解码 + paint 热点缩放 | M |
 | **T2** | 查询减重：文件数 GROUP BY 单查；`_show_project` 复用一次 `list_files`；MCP 轮询只精准刷新受影响项 | S |
-| **T3** | 文件大小列会话级缓存（按 `(path, mtime)` 失效）；库信息大小统计挪到后台线程 | S |
+| **T3** | 文件大小列会话级缓存（按路径缓存，1 秒过期）；库信息大小统计挪到后台线程 | S |
 
 **不做（本卡内）**：
 - 虚拟化/分页加载项目列表 —— 百级项目量，缩略图 + 查询减重足够；真到万级再说
@@ -73,8 +73,8 @@
 
 ## T3 · 文件大小与库信息
 
-1. 文件大小列：会话级缓存 `{(path, mtime): size_str}` 挂在 MainWindow 生命周期上，
-   `_get_size` 先查缓存；`mtime` 变了才重新 `stat`
+1. 文件大小列：会话级缓存 `{path: (monotonic_time, size, size_str)}` 挂在 MainWindow 生命周期上，
+   `_get_size` 先查缓存；有效期内不 `stat`，1 秒过期后重新读取大小
 2. `_lib_info` 的 library/ 大小：弹窗先显示「统计中…」，`QThreadPool`/`QThread` 后台算完回填；
    对话框关闭时线程结果直接丢弃（参考 `settings_dialog.py:984` `_run_ping_async` 的既有模式）
 
@@ -101,3 +101,8 @@
 1. **缩略图缓存是否落磁盘**
    - 默认决定：**只做内存 LRU（`QPixmapCache`）**。进程内够用，免去缓存目录管理、失效清理、打包路径等一堆事。代价是每次启动重新解码一遍首屏封面（几十张缩略图，秒级内可接受）。
    - 若你库里封面图特别多（几百张）且启动就要秒开，告诉我，改成磁盘缓存（`library/.cache/thumbs/`）。
+
+## 2026-09-09 回归修复
+
+- [x] 大小缓存 1 秒有效，命中不 stat；过期识别大小变化与文件缺失。
+- [x] 已加入 `selftests/task42_security_regressions.py` / `selftests/gui_release_regressions.py` 对应自动回归。

@@ -105,3 +105,8 @@ with closing_repos(repo_a, repo_b):
 - 这些脚本是开发者写完 task 时的"自我交代"，不是回归基线
 - 等单元测试体系建起来后，端到端可以用 pytest fixture 重写并接 CI；
   那时这层会被自然替代
+
+### 发布前回归（2026-09-09）
+
+- `task42_security_regressions.py`：字面标签前缀/重叠迁移、模拟凭据失败与恢复、备份全字节密钥检查、恢复完整性和损坏配置处理。
+- `gui_release_regressions.py`：大小缓存避免 stat、过期更新、文件/项目永久删除回退汇总、API 保存后即时反馈。全部使用临时库与模拟密钥。

@@ -572,15 +572,15 @@ class Repository:
         row = self.conn.execute(
             """SELECT COUNT(DISTINCT pt.project_id) AS c
                FROM project_tags pt JOIN tags t ON t.id = pt.tag_id
-               WHERE t.name = ? OR t.name LIKE ?""",
-            (tag, tag + "/%"),
+               WHERE t.name = ? OR substr(t.name, 1, length(?) + 1) = ? || '/'""",
+            (tag, tag, tag),
         ).fetchone()
         return int(row["c"])
 
     def rename_tag(self, old: str, new: str) -> int:
         """全库重命名标签（含 ``old/...`` 子标签整体前缀迁移）。
 
-        目标标签名已存在时自然合并（同一项目不会去重）。返回受影响项目数。
+        目标标签名已存在时自然合并并去重。返回受影响项目数。
         """
         new = (new or "").strip()
         if not new or new == (old or "").strip():
@@ -602,8 +602,9 @@ class Repository:
         if not old_prefix:
             return 0
         rows = self.conn.execute(
-            "SELECT id, name FROM tags WHERE name=? OR name LIKE ?",
-            (old_prefix, old_prefix + "/%"),
+            "SELECT id, name FROM tags WHERE name=? "
+            "OR substr(name, 1, length(?) + 1) = ? || '/'",
+            (old_prefix, old_prefix, old_prefix),
         ).fetchall()
         if not rows:
             return 0
@@ -612,6 +613,9 @@ class Repository:
         try:
             cur.execute("BEGIN")
             affected: set[int] = set()
+            # 先快照全部关联，再移除源标签，最后重建目标。
+            # 目标落在源子树中时也不会读到刚写入的关联或删掉新目标。
+            snapshots: list[tuple[str, list[int]]] = []
             for r in rows:
                 src_id = int(r["id"])
                 src_name = r["name"]
@@ -622,6 +626,10 @@ class Repository:
                     ).fetchall()
                 ]
                 affected.update(pids)
+                snapshots.append((src_name, pids))
+                cur.execute("DELETE FROM project_tags WHERE tag_id=?", (src_id,))
+                cur.execute("DELETE FROM tags WHERE id=?", (src_id,))
+            for src_name, pids in snapshots:
                 if new_prefix is not None:
                     dst_name = new_prefix + src_name[len(old_prefix):]
                     cur.execute(
@@ -636,8 +644,6 @@ class Repository:
                             "VALUES(?,?)",
                             (pid, dst_id),
                         )
-                cur.execute("DELETE FROM project_tags WHERE tag_id=?", (src_id,))
-                cur.execute("DELETE FROM tags WHERE id=?", (src_id,))
             if affected:
                 placeholders = ",".join("?" for _ in affected)
                 cur.execute(

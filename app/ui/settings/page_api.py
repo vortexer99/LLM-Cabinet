@@ -71,18 +71,9 @@ class ApiPageMixin:
         outer.addWidget(tip)
 
         # task #42：密钥存储方式说明（keyring 可用 / 回退明文两种形态）
-        from ...llm.config import keyring_available
-        if keyring_available():
-            storage_tip = QLabel(
-                "🔒 API Key 保存在 Windows 凭据管理器中，不会写入库文件，"
-                "也不会随备份 zip 外泄。"
-            )
-            storage_tip.setProperty("hint", True)
-        else:
-            storage_tip = QLabel(
-                "⚠ 当前系统不支持凭据管理器，API Key 将以明文保存在库文件"
-                "（cabinet.db）中，请注意备份与分享范围。"
-            )
+        from ...llm.config import key_storage_notice
+        storage_tip = QLabel(key_storage_notice(self.repo))
+        self._key_storage_tip = storage_tip
         storage_tip.setWordWrap(True)
         outer.addWidget(storage_tip)
 
@@ -213,11 +204,13 @@ class ApiPageMixin:
     def _on_default_provider(self, _i: int) -> None:
         self._llm_cfg.default_provider = self.cmb_default_provider.currentData() or "deepseek"
         self._llm_save_config(self.repo, self._llm_cfg)
+        self._refresh_key_storage_notice()
 
 
     def _on_default_language(self, _i: int) -> None:
         self._llm_cfg.default_language = self.cmb_default_lang.currentData() or "中文"
         self._llm_save_config(self.repo, self._llm_cfg)
+        self._refresh_key_storage_notice()
 
 
     def _update_provider(self, pid: str, key: str, value: str) -> None:
@@ -226,6 +219,12 @@ class ApiPageMixin:
             return
         setattr(pc, key, (value or "").strip())
         self._llm_save_config(self.repo, self._llm_cfg)
+        self._refresh_key_storage_notice()
+
+    def _refresh_key_storage_notice(self) -> None:
+        """保存后立即更新提示，包含本次凭据写入失败的明文回退结果。"""
+        from ...llm.config import key_storage_notice
+        self._key_storage_tip.setText(key_storage_notice(self.repo))
 
 
     def _test_provider(self, pid: str, lbl: QLabel) -> None:

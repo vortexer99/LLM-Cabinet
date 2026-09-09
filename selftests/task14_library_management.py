@@ -266,7 +266,11 @@ def _run_all(tmp: Path, t: T, repos: list[Repository]) -> None:
     (legacy_src / "cabinet.json").write_text('{"active_library": ""}',
                                              encoding="utf-8")
     (legacy_src / "user_note.md").write_text("u", encoding="utf-8")
-    legacy_zip = backup_library(legacy_src, tmp / "legacy_backup.zip")
+    # 手工构造旧版归档，确保 restore 确实收到旧备份夹带的全局配置。
+    legacy_zip = tmp / "legacy_backup.zip"
+    with _zipfile.ZipFile(legacy_zip, "w") as zf:
+        for entry in legacy_src.iterdir():
+            zf.write(entry, f"legacy_lib/{entry.name}")
     legacy_target = tmp / "legacy_restored"
     restore_library(legacy_zip, legacy_target)
     t.assert_true("legacy 恢复后含 cabinet.db",

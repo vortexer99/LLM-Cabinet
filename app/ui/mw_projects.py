@@ -787,6 +787,7 @@ class ProjectsMixin:
             if total_copy:
                 lines.append(
                     f"📦 仓储 · {total_copy} 个：物理文件将移入系统回收站。"
+                    "\n⚠ 回收站不可用时将直接永久删除，无法从回收站恢复。"
                 )
 
         if not confirm(self, "确认删除", "\n".join(lines), yes="删除", danger=True):
@@ -794,6 +795,7 @@ class ProjectsMixin:
 
         # 逐个删除（task #37：仓储文件进回收站；失败收集后统一汇报）
         delete_failures: list[str] = []
+        permanently_deleted: list[str] = []
         for pid in selected_ids:
             p = self.repo.get_project(pid)
             if not p:
@@ -806,30 +808,36 @@ class ProjectsMixin:
             if copy_files:
                 for f in copy_files:
                     try:
-                        move_to_trash(self.library.resolve(f.path, True))
+                        if move_to_trash(self.library.resolve(f.path, True)) == "deleted":
+                            permanently_deleted.append(Path(f.path).name)
                     except OSError as e:
                         delete_failures.append(f"{Path(f.path).name}：{e}")
                 pdir = self.library.project_dir(pid)  # type: ignore[arg-type]
                 try:
                     # 目录里可能还有未登记的残留（如旧封面快照），一并进回收站
+                    registered = {self.library.resolve(f.path, True) for f in copy_files}
                     for child in pdir.iterdir():
+                        if child in registered:
+                            continue  # 已失败的文件不再次删除或重复报告
                         if child.is_file():
                             try:
-                                move_to_trash(child)
-                            except OSError:
-                                pass
+                                if move_to_trash(child) == "deleted":
+                                    permanently_deleted.append(child.name)
+                            except OSError as e:
+                                delete_failures.append(f"{child.name}：{e}")
                     pdir.rmdir()
                 except OSError:
-                    pass
+                    logger.warning("项目目录未能清理：%s", pdir, exc_info=True)
             self.repo.delete_project(pid)
 
         self.refresh_projects()
         self.statusBar().showMessage(f"已删除 {len(selected_ids)} 个项目", 3000)
+        if permanently_deleted:
+            delete_failures.append("回收站不可用，以下文件已永久删除：\n" + "\n".join(permanently_deleted))
         if delete_failures:
             warn(
-                self, "部分文件删除失败",
-                f"{len(delete_failures)} 个仓储文件的磁盘副本未能删除"
-                "（项目已删除），可到仓库目录手动清理。",
+                self, "项目删除结果",
+                "项目已删除。以下磁盘操作失败或回退为永久删除，请查看明细。",
                 detailed="\n".join(delete_failures),
             )
 
