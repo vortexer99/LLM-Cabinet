@@ -97,10 +97,11 @@
   `files.json` / `README.md` / `files/`；可选是否把链接模式（🔗）原始文件也复制进去。
   反向操作：把多个项目目录拖到底部 DropZone，可选择"分别建一个项目"，自动识别 `project.json`
   并恢复元数据/字段/标签——构成完整的导出/导入闭环。
+- **Skill + CLI**：将 [`skills/llm-cabinet`](skills/llm-cabinet/SKILL.md) 安装到支持技能和本地命令执行的客户端，agent 即可搜索项目、维护元数据、登记文件和导出项目，无需启动 MCP 服务。每次调用显式选择库，写入需加 `--write`。安装与命令说明见 [技能指南](docs/skill.md)。
 - **MCP Agent 集成**：通过 [MCP](https://modelcontextprotocol.io/) 把库暴露给外部 AI agent
   （Claude Desktop / Cursor / Cline / Cherry Studio），支持搜索、创建、管理项目并填写元数据。
-  附带四个预置 Agent 技能（整理 / 审核 / 概览 / 推荐标签）、操作审计日志、MCP 修改项目
-  追踪。从 **设置 → MCP** 配置。
+  附带四个预置 MCP prompts（整理 / 审核 / 概览 / 推荐标签）、操作审计日志、MCP 修改项目
+  追踪。Prompt 的选择方式取决于客户端。从 **设置 → MCP** 配置，详见 [MCP 指南](docs/mcp.md)。
 - **数据库**：SQLite，便携、零配置
 
 ## 运行
@@ -113,6 +114,19 @@ python -m app.main
 ```
 
 > 需要 Python 3.10+。首次启动会弹 Welcome 对话框：选目录新建库（多页向导会让你填一段库描述、默认存储方式、可选预置字段等），或打开已存在的库。库目录里包含 `cabinet.db` + `library/` + `.llm-cabinet` 标记；当前路径可在 **设置 → 项目库** 查看，搬家 / 切换库走 **库 → 切换库**。
+
+## 连接外部 agent
+
+把整个 `skills/llm-cabinet/` 文件夹复制到客户端的技能目录。仍需保留项目源码及安装好依赖的 Python 环境，技能包不包含应用本体。在项目根目录执行：
+
+```powershell
+.\.venv\Scripts\python.exe skills/llm-cabinet/scripts/cabinet.py libraries list
+.\.venv\Scripts\python.exe skills/llm-cabinet/scripts/cabinet.py --library "论文库" projects search --keyword "注意力"
+```
+
+使用安装后的技能脚本时，在命令前加 `--app-root "D:\path\to\LLM-Cabinet"`，或将环境变量 `LLM_CABINET_HOME` 指向该项目目录；建议使用项目的 Python 解释器。全局选项必须放在子命令前。除 `libraries list` 外，每次都需指定 `--library 库名` 或 `--db 路径`。写入和导出加 `--write`，读取文件内容加 `--allow-file-read`。结果为 UTF-8 JSON，失败时退出码非零；也可从项目根目录直接运行 `python -m app.cli`。安装、权限和文件登记语义见 [docs/skill.md](docs/skill.md)。
+
+MCP 入口继续保留，使用 MCP 工具和资源的客户端可从 **设置 → MCP** 配置。
 
 ## 数据隐私
 
@@ -152,6 +166,7 @@ pyinstaller -w -F -n "LLM Cabinet" `
 ```
 app/
 ├── main.py            入口
+├── cli.py             面向技能与本地 agent 的 JSON CLI
 ├── db.py              SQLite 连接与建表 / 迁移
 ├── models.py          数据类
 ├── repository.py      数据访问层
@@ -165,10 +180,10 @@ app/
 │   ├── server.py              MCP 服务端（17 → 5 聚合工具）
 │   ├── standalone.py          独立进程入口
 │   ├── tools.py                工具实现
-│   ├── prompts.py             Agent 技能模板
+│   ├── prompts.py             MCP prompt 模板
 │   ├── resources.py           数据资源
 │   ├── context.py             库上下文与切换
-│   └── skills/                Agent 技能（整理 / 审核 / 概览 / 推荐标签）
+│   └── skills/                MCP prompt 指令（整理 / 审核 / 概览 / 推荐标签）
 ├── llm/
 │   ├── config.py      LLM 配置（providers + 默认值）
 │   ├── providers.py   DeepSeek / OpenAI / Gemini / Grok 适配
@@ -197,6 +212,8 @@ app/
     ├── wizards/               LLM 助手们（如库字段设计助手）
     └── widgets.py
 ```
+
+可安装到客户端的技能包独立放在 [`skills/llm-cabinet/`](skills/llm-cabinet/SKILL.md)。
 
 > 开发期端到端自检脚本见 [`selftests/`](./selftests/README.md)（手动跑，不进 CI）。
 

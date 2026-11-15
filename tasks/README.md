@@ -49,6 +49,7 @@
 | [40-preview-panel-enhancements.md](./40-preview-panel-enhancements.md) | 预览面板增强（图片缩放 / 视频音量 / PDF 翻页） | M | P2 | ✅ 2026-08-01（v0.6 未发布） |
 | [41-window-state-and-polish.md](./41-window-state-and-polish.md) | 窗口状态持久化与细节打磨合集（geometry / 快捷键 / splitter hack / 字号） | S+M | P2 | ✅ 2026-08-01（v0.6 未发布） |
 | [42-api-key-secure-storage.md](./42-api-key-secure-storage.md) | API Key 安全存储（keyring + 明文迁移 + PRIVACY 同步） | S | P2 | ✅ 2026-08-01（v0.6 未发布） |
+| [43-skill-cli.md](./43-skill-cli.md) | Skill + CLI 入口（复用工具层与审计，保留 MCP） | M | P1 | ✅ 2026-11-15（Unreleased） |
 
 ## 约定
 

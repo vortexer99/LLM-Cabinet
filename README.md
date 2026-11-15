@@ -101,11 +101,13 @@ This is a **direction**, not a finished story — Cabinet today is already a usa
   multiple project folders onto the bottom DropZone and choose "one project per folder" —
   each `project.json` is recognized and its metadata / fields / tags restored, closing the
   export/import loop.
+- **Skill + CLI**: install [`skills/llm-cabinet`](skills/llm-cabinet/SKILL.md) in a client that supports skills and local command execution. Agents can search projects, update metadata, register files, and export projects without starting an MCP server. Each invocation selects its library explicitly; writes require `--write`. See the [setup and command guide](docs/skill.md) (Chinese).
 - **MCP Agent integration**: expose your library via [MCP](https://modelcontextprotocol.io/) so
   any compatible client (Claude Desktop / Cursor / Cline / Cherry Studio) can drive an agent
   that searches, creates, and manages projects with metadata — complete with four pre-built
-  Agent skills (organize / audit / summarize / suggest-tags), audit logging, and MCP-modified
-  project tracking. Configure from **Settings → MCP**.
+  MCP prompts (organize / audit / summarize / suggest-tags), audit logging, and MCP-modified
+  project tracking. Prompt selection depends on the client. Configure from **Settings → MCP**;
+  see the [MCP guide](docs/mcp.md) (Chinese).
 - **Database**: SQLite — portable, zero-config
 
 ## Run
@@ -118,6 +120,19 @@ python -m app.main
 ```
 
 > Requires Python 3.10+. On first launch the app shows a Welcome dialog: pick a directory to create a brand-new library (a multi-step wizard collects the library description, default storage mode, optional preset fields, etc.) or open an existing one. The chosen library directory holds `cabinet.db` + `library/` + a `.llm-cabinet` marker; inspect the current paths under **Settings → Library**, and use **Library → Switch Library** to relocate or jump between libraries.
+
+## Use with an agent
+
+Copy the entire `skills/llm-cabinet/` folder into your client's skills directory. Keep the project source and Python environment installed; the skill package does not bundle the application. From the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe skills/llm-cabinet/scripts/cabinet.py libraries list
+.\.venv\Scripts\python.exe skills/llm-cabinet/scripts/cabinet.py --library "My Library" projects search --keyword "report"
+```
+
+For an installed copy of the skill, pass `--app-root "D:\path\to\LLM-Cabinet"` before the command, or set `LLM_CABINET_HOME` to that project directory. Use the project's Python interpreter. All global options precede the subcommand. Except for `libraries list`, specify `--library NAME` or `--db PATH` on every call. Add `--write` for a write operation or export, and `--allow-file-read` to read file contents. Results are UTF-8 JSON; failures return a nonzero exit code. The same CLI is available as `python -m app.cli` from the project root. See [docs/skill.md](docs/skill.md) for installation, permissions, and file-registration semantics.
+
+MCP remains available for clients that use MCP tools and resources; configure it under **Settings → MCP**.
 
 ## Data Privacy
 
@@ -157,6 +172,7 @@ The resulting `dist/LLM Cabinet.exe` is portable.
 ```
 app/
 ├── main.py            entry point
+├── cli.py             JSON CLI for skills and local agents
 ├── db.py              SQLite connection, schema & migrations
 ├── models.py          dataclasses
 ├── repository.py      data access layer
@@ -170,10 +186,10 @@ app/
 │   ├── server.py              MCP server (17 → 5 aggregate tools)
 │   ├── standalone.py          standalone entry point
 │   ├── tools.py               tool implementations
-│   ├── prompts.py             Agent skill templates
+│   ├── prompts.py             MCP prompt templates
 │   ├── resources.py           data resources
 │   ├── context.py             library context & switching
-│   └── skills/                Agent skills (organize / audit / summarize / suggest-tags)
+│   └── skills/                MCP prompt instructions (organize / audit / summarize / suggest-tags)
 ├── llm/
 │   ├── config.py      LLM config (providers + defaults)
 │   ├── providers.py   DeepSeek / OpenAI / Gemini / Grok adapters
@@ -202,6 +218,8 @@ app/
     ├── wizards/              LLM assistants (library field design wizard, …)
     └── widgets.py
 ```
+
+The installable agent skill lives separately in [`skills/llm-cabinet/`](skills/llm-cabinet/SKILL.md).
 
 > Developer end-to-end self-check scripts live in [`selftests/`](./selftests/README.md) (run manually, not in CI).
 

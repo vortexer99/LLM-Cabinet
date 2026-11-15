@@ -42,6 +42,7 @@ class LibraryContext:
         self._library: Optional[Library] = None
         self._current_handle: Optional[LibraryHandle] = None
         self._db_override = db_override  # single-library mode (--db)
+        self._library_root: Path | None = None
         self.client_name: str = "standalone"  # MCP client identifier for audit log
         self.write_permission: str = "disabled"  # disabled / session / permanent
 
@@ -60,10 +61,21 @@ class LibraryContext:
     def from_single_db(cls, db_path: Path, library_root: Optional[Path] = None) -> "LibraryContext":
         """Single-library mode: bind to a specific ``cabinet.db`` path.
 
-        ``library_root`` defaults to ``db_path.parent / "library"``.
+        ``library_root`` 优先于库中保存的有效仓储设置，最后回退到
+        ``db_path.parent / "library"``。
         """
         cfg = CabinetConfig._default()
-        return cls(cfg, db_override=Path(db_path).resolve())
+        ctx = cls(cfg, db_override=Path(db_path).resolve())
+        ctx._library_root = Path(library_root).resolve() if library_root else None
+        return ctx
+
+    def close(self) -> None:
+        """释放当前连接，供一次性 CLI 调用和上下文切换使用。"""
+        if self._repo is not None:
+            self._repo.conn.close()
+        self._repo = None
+        self._library = None
+        self._current_handle = None
 
     # ---- properties -------------------------------------------------------
 
@@ -167,13 +179,6 @@ class LibraryContext:
                 "path": str(match.path),
             }
 
-        # Close old connection
-        try:
-            if self._repo is not None and self._repo.conn is not None:
-                self._repo.conn.close()
-        except Exception:
-            pass
-
         # Open new library
         db_path = match.path / "cabinet.db"
         if not db_path.exists():
@@ -184,19 +189,27 @@ class LibraryContext:
                 "error": f"库文件不存在：{db_path}",
             }
 
+        conn = None
         try:
-            conn = db_connect(db_path)
-            self._repo = Repository(conn)
-            self._library = Library(match.path / "library")
-            self._current_handle = match
-            log.info("Switched to library: %s (%s)", match.display_name, db_path)
+            conn = db_connect(db_path, recover_tasks=False)
+            new_repo = Repository(conn)
+            new_library = self._make_library(new_repo, match.path / "library")
         except Exception as exc:
+            if conn is not None:
+                conn.close()
             return {
                 "ok": False,
                 "library_name": match.display_name,
                 "path": str(match.path),
                 "error": f"无法打开库：{exc}",
             }
+
+        # 新库完整打开后再释放旧连接，失败时仍能继续访问原库。
+        self.close()
+        self._repo = new_repo
+        self._library = new_library
+        self._current_handle = match
+        log.info("Switched to library: %s (%s)", match.display_name, db_path)
 
         return {
             "ok": True,
@@ -211,7 +224,7 @@ class LibraryContext:
 
         if self._db_override:
             db_path = self._db_override
-            library_root = db_path.parent / "library"
+            library_root = self._library_root or db_path.parent / "library"
         else:
             # TODO: switch to ``self._config.libraries`` after refactoring
             libs = self._config.recent_libraries  # ← 重构后改为 .libraries
@@ -224,7 +237,16 @@ class LibraryContext:
             library_root = h.path / "library"
             self._current_handle = h
 
-        conn = db_connect(db_path)
+        conn = db_connect(db_path, recover_tasks=False)
         self._repo = Repository(conn)
-        self._library = Library(library_root)
-        log.info("LibraryContext loaded: db=%s library=%s", db_path, library_root)
+        self._library = self._make_library(self._repo, library_root)
+        log.info("LibraryContext loaded: db=%s library=%s", db_path, self._library.root)
+
+    def _make_library(self, repo: Repository, fallback: Path) -> Library:
+        """与 GUI 使用同一仓储设置，显式命令行路径优先。"""
+        if self._library_root is not None:
+            return Library(self._library_root)
+        saved = repo.get_setting("library_root", "")
+        if saved and Path(saved).is_dir():
+            return Library(Path(saved))
+        return Library(fallback)

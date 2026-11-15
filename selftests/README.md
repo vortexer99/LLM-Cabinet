@@ -76,6 +76,7 @@ with closing_repos(repo_a, repo_b):
 
 | 脚本 | 验证范围 | 关联 task |
 |---|---|---|
+| [task43_skill_cli.py](./task43_skill_cli.py) | 真实 CLI 子进程与临时双库：UTF-8 JSON/退出码、显式选库、误选数据库/未来 schema 只读保护、读写/正文授权、字段 ID/保护字段校验与无半写、仓储设置/参数优先级及回退、标签/文件/导出、MCP 审计与后台任务保护、异地 skill 入口 | [tasks/43](../tasks/43-skill-cli.md) |
 | [task03_search_phase_a.py](./task03_search_phase_a.py) | 基础搜索 Phase A：宽关键词、keyword + tag/tag_prefix AND、未分类 keyword、MCP `search_projects` 透传 tag_prefix | [tasks/03](../tasks/03-search-calibre-like.md) Phase A |
 | [task03_search_phase_b.py](./task03_search_phase_b.py) | 类 Calibre 搜索 Phase B：宽关键词命中字段值/标签/文件清单、字段 key / 显示名、rating/date 比较、多标签 AND、括号/NOT、语法错误与 MCP 精确搜索 | [tasks/03](../tasks/03-search-calibre-like.md) Phase B |
 | [task03_search_phase_c.py](./task03_search_phase_c.py) | 搜索历史与收藏表达式 Phase C：settings JSON 容错、历史去重/上限、收藏新增/覆盖/删除 | [tasks/03](../tasks/03-search-calibre-like.md) Phase C |

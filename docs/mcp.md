@@ -2,6 +2,8 @@
 
 LLM Cabinet 通过 [MCP（Model Context Protocol）](https://modelcontextprotocol.io/) 把项目库暴露给外部 AI agent。支持 Claude Desktop、Cursor、Cline 等任何 MCP 兼容客户端。
 
+支持技能和本地命令执行的客户端也可安装 [`skills/llm-cabinet/`](../skills/llm-cabinet/SKILL.md)，通过 CLI 访问库，无需启动 MCP 服务。两种入口共用现有工具层和审计记录；技能安装、显式选库和每次调用的写权限见 [Skill + CLI 指南](skill.md)。本页参数仅适用于 MCP 独立进程，CLI 的 `--library` 表示库名。
+
 ## 快速开始
 
 在 LLM Cabinet 中打开「设置 → MCP 集成」，点击「导出 JSON」，选择模式和权限后复制配置。
@@ -153,7 +155,7 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器（JSON 内容由导出对�
 |------|------|------|
 | `query_projects` | `search` / `get` / `count` | 搜索项目、查看详情、统计数量 |
 | `manage_project` | `create` / `update` / `add_tag` / `remove_tag` | 创建项目、修改信息、增减标签 |
-| `manage_files` | `list` / `add` / `remove` | 列出文件、添加文件、删除文件 |
+| `manage_files` | `list` / `add` / `remove` | 列出文件、登记文件、移除数据库记录（不删除实体文件） |
 | `manage_libraries` | `list` / `switch` / `get_field` / `get_fields` | 列出库、切换库、查看字段定义 |
 | `export_project` | — | 导出项目到本地目录 |
 
@@ -170,13 +172,13 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器（JSON 内容由导出对�
 | `cabinet://project/{id}/files` | 项目文件清单 |
 | `cabinet://file/{id}` | 文件内容（需开启 `--allow-file-read`） |
 
-### 技能（Prompts）
+### 任务模板（Prompts）
 
-技能是给 agent 的结构化任务指令（SOP），告诉它调哪些工具、按什么顺序。每个技能对应 `app/mcp/skills/` 下的一个 `.md` 文件，你可以直接编辑这些文件来定制 agent 行为，无需改代码。
+MCP prompts 是给 agent 的结构化任务指令，描述可以调用哪些工具以及工作步骤。每个模板对应 `app/mcp/skills/<模板目录>/SKILL.md`，可以直接编辑来定制行为。这些模板由 MCP 服务提供，与可安装到客户端的 `skills/llm-cabinet/` 技能包是两个入口。
 
-**如何使用**：在 agent 对话中直接说出对应场景即可，agent 会自动调用对应技能：
+**如何使用**：在客户端的 prompt 选择入口调用对应模板；是否支持自动发现、按自然语言选用或需要手动选择，取决于客户端。以下为场景对应关系：
 
-| 你说的话 | agent 自动使用的技能 |
+| 场景 | 对应 prompt |
 |---|---|
 | "帮我整理下载的论文" | `organize_new_files` |
 | "审核一下库里的元数据质量" | `audit_metadata` |
@@ -185,21 +187,21 @@ Cursor 通过 `.cursor/mcp.json` 配置 MCP 服务器（JSON 内容由导出对�
 
 也可以显式指定参数：
 
-| 技能 | 参数 | 示例 |
+| Prompt | 参数 | 示例 |
 |------|------|------|
 | `organize_new_files` | `directory`（可选） | "整理 `D:\Downloads\papers\` 里的文件" |
 | `suggest_tags` | `project_id`（可选，0=全部未分类） | "给项目 #42 推荐标签" |
 | `audit_metadata` | 无 | — |
 | `summarize_library` | 无 | — |
 
-**自定义技能**：打开 `app/mcp/skills/llm-cabinet/` 下的对应目录编辑 `SKILL.md` 即可。修改后重启 MCP 服务器生效（重新加载 Claude Desktop 或 Cursor 窗口）。
+**自定义模板**：打开 `app/mcp/skills/` 下的对应目录编辑 `SKILL.md` 即可。修改后重启 MCP 服务器，并按客户端需要重新加载连接。
 
 | Prompt 名称 | 技能文件 |
 |------|------|
-| `organize_new_files` | `app/mcp/skills/llm-cabinet/organize-new-files/SKILL.md` |
-| `audit_metadata` | `app/mcp/skills/llm-cabinet/audit-metadata/SKILL.md` |
-| `summarize_library` | `app/mcp/skills/llm-cabinet/summarize-library/SKILL.md` |
-| `suggest_tags` | `app/mcp/skills/llm-cabinet/suggest-tags/SKILL.md` |
+| `organize_new_files` | `app/mcp/skills/organize-new-files/SKILL.md` |
+| `audit_metadata` | `app/mcp/skills/audit-metadata/SKILL.md` |
+| `summarize_library` | `app/mcp/skills/summarize-library/SKILL.md` |
+| `suggest_tags` | `app/mcp/skills/suggest-tags/SKILL.md` |
 
 ---
 

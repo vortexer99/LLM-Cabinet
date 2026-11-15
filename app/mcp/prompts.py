@@ -4,7 +4,7 @@ Prompts are NOT executed code. They are SOP scripts that tell the agent
 which Tools to call and in what order. All actual execution happens
 through the agent calling the registered Tools.
 
-Skill content is loaded from ``app/mcp/skills/*.md`` files so you can edit
+Skill content is loaded from ``app/mcp/skills/<name>/SKILL.md`` files so you can edit
 the instructions without touching Python code.
 """
 
@@ -17,8 +17,8 @@ _SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 
 def _load_skill(dir_name: str) -> str:
-    """Load skill content from ``skills/llm-cabinet/<dir_name>/SKILL.md``, stripping YAML frontmatter."""
-    path = _SKILLS_DIR / "llm-cabinet" / dir_name / "SKILL.md"
+    """读取 skills/<dir_name>/SKILL.md，并去掉 YAML 元信息。"""
+    path = _SKILLS_DIR / dir_name / "SKILL.md"
     if not path.is_file():
         raise FileNotFoundError(f"Skill file not found: {path}")
     raw = path.read_text(encoding="utf-8")

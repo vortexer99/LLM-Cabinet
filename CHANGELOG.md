@@ -8,6 +8,15 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+### Added
+- **Skill + CLI（task #43）**：新增可安装的 `skills/llm-cabinet/` 技能包与 `python -m app.cli` JSON 入口，支持库发现、项目查询与元数据维护、文件登记及项目导出。每次显式选库，写操作需 `--write`，文件内容读取需 `--allow-file-read`；复用现有工具层与审计记录，MCP 入口继续保留。
+- 设置中的 MCP 页新增 Skill 使用说明和文件夹入口；发布流程另行打包 `llm-cabinet-cli-skill.zip`，保留原 MCP 技能包。
+
+### Fixed
+- 修正 MCP prompt 模板的旧目录引用，并说明 prompt 是否自动选用取决于客户端。
+- 修复共享工具层的标签统计、仓储文件读取、导出结果及自定义仓储路径的过时接口；沿用 GUI 保存的仓储路径，切库失败时保留原库连接。CLI/MCP 连接不再将 GUI 正在排队或运行的 LLM 任务误标为中断，审计记录失败写入日志。
+- 将 MCP SDK 依赖限定为 `<2`，匹配现有 FastMCP 接口，避免安装不兼容的 2.x 后无法启动 MCP。
+
 ## [0.6.0] - 2026-09-09
 
 📦 schema v7 → v8 — `files` 表新增 `origin` 列（`user`=用户原始文件 / `generated`=软件衍生物）。

@@ -106,7 +106,7 @@ async def read_library_info(ctx: LibraryContext) -> dict[str, Any]:
     return {
         "total_projects": repo.count_projects_total(),
         "total_fields": len(fields),
-        "tag_count": len(repo.list_tag_counts()),
+        "tag_count": len(repo.tag_counts()),
         "default_storage_mode": repo.get_setting("default_storage_mode", "link") or "link",
     }
 
@@ -117,7 +117,7 @@ async def read_library_stats(ctx: LibraryContext) -> dict[str, Any]:
     return {
         "total_projects": repo.count_projects_total(),
         "untagged_projects": repo.count_projects_untagged(),
-        "tag_distribution": {name: c for name, c in repo.list_tag_counts()},
+        "tag_distribution": {name: c for name, c in repo.tag_counts()},
         "pending_suggestions": repo.count_projects_with_pending_suggestions(),
     }
 
@@ -126,7 +126,7 @@ async def read_tags(ctx: LibraryContext) -> list[dict[str, Any]]:
     """``cabinet://tags``"""
     return [
         {"name": name, "count": count}
-        for name, count in ctx.repo.list_tag_counts()
+        for name, count in ctx.repo.tag_counts()
     ]
 
 
@@ -199,7 +199,7 @@ async def read_file_content(
     if f is None:
         raise ValueError(f"文件 {file_id} 不存在")
 
-    full_path = ctx.library.resolve(f.path) if f.is_relative else f.path
+    full_path = ctx.library.resolve(f.path, f.is_relative)
     import pathlib
 
     fp = pathlib.Path(full_path)

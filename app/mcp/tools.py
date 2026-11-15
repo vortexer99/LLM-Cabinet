@@ -193,7 +193,7 @@ def _audit_log(ctx: LibraryContext, tool_name: str, arguments: dict, status: str
         )
         ctx.repo.conn.commit()
     except Exception:
-        pass  # audit failure should not block the tool
+        log.exception("记录外部 Agent 操作审计失败：%s", tool_name)
 
 
 # ---- Confirmation --------------------------------------------------------
@@ -207,7 +207,7 @@ def _check_write_permission(ctx: LibraryContext, tool_name: str) -> tuple[bool, 
     """
     permission = ctx.write_permission
     if permission == "disabled":
-        return False, "MCP 写操作已禁用（可在设置中调整）"
+        return False, "写操作已禁用（CLI 使用 --write；MCP 使用 --write-permission session）"
     return True, ""
 
 
@@ -477,8 +477,9 @@ async def export_project(
         _audit_log(ctx, "export_project", {"project_id": project_id, "target_dir": target_dir}, "success")
         return {
             "ok": True,
-            "target_dir": str(target),
-            "files_exported": len(result.files_exported),
+            "target_dir": str(result.project_dir),
+            "files_exported": result.n_files_copied,
+            "warnings": result.warnings,
         }
     except Exception as e:
         _audit_log(ctx, "export_project", {"project_id": project_id}, "error", str(e))

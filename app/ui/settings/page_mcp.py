@@ -95,28 +95,34 @@ class McpPageMixin:
         lay.setContentsMargins(20, 18, 20, 18)
         lay.setSpacing(14)
 
-        title = QLabel("MCP 集成")
+        title = QLabel("Agent 集成（Skill / MCP）")
         title.setProperty("h1", True)
         lay.addWidget(title)
 
         desc = QLabel(
-            "通过 MCP 协议把项目库暴露给外部 AI agent（Claude Desktop / Cursor / Cline 等），"
-            "让 agent 可以搜索、浏览和管理你的项目。独立进程通过 stdio 通信，不开放网络端口。"
+            "外部 AI agent 可以通过 Skill 脚本或 MCP 搜索、浏览和管理项目库。"
+            "Skill 直接执行本地命令；MCP 通过 stdio 与客户端通信。"
         )
         desc.setWordWrap(True)
         lay.addWidget(desc)
 
         # 使用提示
         tip = QLabel(
-            "💡 启动方法：<code>python -m app.mcp.standalone</code>（或通过下方导出 JSON 后由客户端自动启动）\n"
-            "💡 建议安装 Agent 技能：将 <code>app/mcp/skills/llm-cabinet/</code> 目录下的四个技能添加到你的 AI 客户端（或从 Release 页面下载 <code>llm-cabinet-skills.zip</code>），"
-            "可获得文件整理、元数据审核、库概览和标签推荐等自动化能力。详见 <a href='https://github.com/vortexer99/LLM-Cabinet'>项目文档</a>。"
+            "💡 Skill：将源码中的 <code>skills/llm-cabinet/</code> 文件夹添加到支持技能与本地命令的客户端。"
+            "可用于文件整理、元数据审核、库概览和标签推荐，无需启动 MCP。<br>"
+            "💡 Skill 仍需项目源码和 Python 环境；安装后通过 <code>--app-root</code> 或 "
+            "<code>LLM_CABINET_HOME</code> 指向源码目录。使用方法见源码中的 <code>docs/skill.md</code>。<br>"
+            "💡 MCP：通过下方导出 JSON 由客户端启动，或运行 <code>python -m app.mcp.standalone</code>。"
         )
         tip.setWordWrap(True)
         tip.setStyleSheet("color: gray; font-size: 11px;")
         tip.setTextFormat(Qt.RichText)
         tip.setOpenExternalLinks(True)
         lay.addWidget(tip)
+
+        skill_button = QPushButton("打开 Skill 文件夹")
+        skill_button.clicked.connect(self._open_skill_folder)
+        lay.addWidget(skill_button)
 
         gb = QGroupBox("导出 MCP 配置")
         gv = QVBoxLayout(gb)
@@ -165,6 +171,14 @@ class McpPageMixin:
         lay.addWidget(gb_caps, 1)
 
         return w
+
+    def _open_skill_folder(self) -> None:
+        """打开可安装技能；桌面打包版提示使用源码包。"""
+        folder = Path(_app_module.__file__).resolve().parent.parent / "skills" / "llm-cabinet"
+        if not (folder / "SKILL.md").is_file():
+            warn(self, "未找到 Skill", "请下载项目源码，使用其中的 skills/llm-cabinet 文件夹。\nSkill 脚本需要项目源码和 Python 环境。")
+            return
+        reveal_in_explorer(folder)
 
 
     def _mcp_show_export_dialog(self) -> None:

@@ -258,7 +258,7 @@ def _ensure_protected_fields(conn: sqlite3.Connection) -> None:
 
 
 
-def connect(db_path: Path) -> sqlite3.Connection:
+def connect(db_path: Path, *, recover_tasks: bool = True) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
 
     # ---- 迁移前：版本探测 + 自动备份 ----
@@ -279,10 +279,12 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _seed_fields(conn)
     _ensure_protected_fields(conn)
     # 启动时把卡在 running 的任务标记为 failed（应用上次异常退出留下的）
-    conn.execute(
-        "UPDATE llm_tasks SET status='failed', error='中断（程序退出）', "
-        "finished_at=datetime('now') WHERE status IN ('queued','running')"
-    )
+    # 外部 Agent 连接可能与 GUI 并行，不能把 GUI 正在执行的任务判为中断。
+    if recover_tasks:
+        conn.execute(
+            "UPDATE llm_tasks SET status='failed', error='中断（程序退出）', "
+            "finished_at=datetime('now') WHERE status IN ('queued','running')"
+        )
     conn.commit()
     return conn
 
