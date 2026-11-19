@@ -112,6 +112,12 @@ def test_clear_button(root: Path, t: T) -> None:
         def settle() -> None:
             app.processEvents()
             QTest.qWait(200)
+            # 清空按钮的动画和搜索防抖是独立定时器，等待搜索真正刷新。
+            for _ in range(100):
+                if not win._search_timer.isActive():
+                    return
+                QTest.qWait(10)
+            raise AssertionError("等待搜索防抖定时器超时")
 
         with patch.object(win, "_refresh_filtered_projects", wraps=win._refresh_filtered_projects) as refresh:
             win._set_filter_query(parse_search("tag=测试标签 AND has:video").ast)

@@ -86,6 +86,7 @@ from .project_card import (
     ProjectModel,
 )
 from .project_dialog import ProjectDialog
+from .project_field_editor import ProjectFieldDelegate, ProjectTableView
 from .export_dialog import ExportDialog
 from .settings import SettingsDialog
 from .palette import current as _current_palette
@@ -405,6 +406,7 @@ class MainWindow(
         self.proj_view.setObjectName("ProjectGrid")
         self.proj_view.setModel(self.proj_model)
         self.proj_view.setModelColumn(0)
+        self.proj_view.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self._proj_delegate = ProjectCardDelegate(self.proj_view)
         self._proj_delegate.favorite_toggled.connect(self.action_toggle_project_favorite)
         self.proj_view.setItemDelegate(self._proj_delegate)
@@ -420,7 +422,7 @@ class MainWindow(
         self.proj_view.doubleClicked.connect(lambda _i: self.action_edit_project())
 
         # 列表 (QTableView)
-        self.proj_table = QTableView()
+        self.proj_table = ProjectTableView()
         self.proj_table.setObjectName("ProjectTable")
         self.proj_table.setModel(self.proj_model)
         self.proj_table.setSelectionBehavior(QAbstractItemView.SelectRows)
@@ -438,7 +440,10 @@ class MainWindow(
         self.proj_table.verticalHeader().setDefaultSectionSize(28)
         self.proj_table.horizontalHeader().setStretchLastSection(False)
         self.proj_table.horizontalHeader().setHighlightSections(False)
-        self.proj_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        self.proj_table.setEditTriggers(QAbstractItemView.SelectedClicked | QAbstractItemView.EditKeyPressed)
+        field_delegate = ProjectFieldDelegate(self.repo, self.proj_table)
+        self.proj_table.setItemDelegate(field_delegate)
+        field_delegate.finished.connect(self._on_project_field_finished, Qt.QueuedConnection)
         self.proj_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.proj_table.customContextMenuRequested.connect(self._project_context_menu)
         self.proj_table.doubleClicked.connect(self._on_project_table_double_clicked)

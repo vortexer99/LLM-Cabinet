@@ -8,6 +8,16 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-11-20
+
+### Added
+- 多选项目后可批量设置封面。每个项目优先选取自然顺序的第一张图片，也可在没有图片时截取第一个视频的首帧。视频选项沿用当前库偏好，已有封面默认保留，可在运行前选择替换。
+- 项目列表中单独选中项目后，左键单击字段值即可编辑。按 Esc 取消，单行字段按回车或移开焦点保存。
+
+### Fixed
+- 修复 Windows 单文件 EXE 切换库时可能找不到 `shiboken6` 的启动错误。重启后的实例使用独立的 Qt 运行目录。
+- 文件列表支持把单个或多个链接文件、仓储文件拖到接受文件的其他软件中打开或添加为附件，树形和平铺视图均可使用。
+
 ## [0.7.1] - 2026-11-20
 
 ### Fixed
@@ -346,7 +356,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 📦 schema v1 — 初始 schema。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.1...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.2...HEAD
+[0.7.2]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.1...v0.7.2
 [0.7.1]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.5.0...v0.6.0

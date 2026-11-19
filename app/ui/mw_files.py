@@ -70,7 +70,7 @@ from ..utils import (
 )
 from .cover_cache import get_cover
 from .dialogs import ask_yes_no_cancel, confirm, error, info, warn
-from .dnd import FilesTableDnD, ProjectViewDnD
+from .dnd import FILE_PATH_ROLE, FilesTableDnD, ProjectFileTree
 from .export_dialog import ExportDialog
 from .file_sorting import FileTreeItem, RAW_NAME_ROLE, natural_name_key
 from .files_table_columns import (
@@ -171,6 +171,7 @@ class FilesPanelMixin:
         bp.setSpacing(6)
         for text, slot in [
             ("🏷  批量加标签…", self._batch_add_tag_dialog),
+            ("批量设置封面…", lambda: self.action_batch_auto_cover()),
             ("✨  LLM 元数据建议", self._batch_llm_suggest),
             ("📤  导出选中项目…", self.action_export_project),
             ("👁  标记 MCP 修改已读", self._batch_mark_mcp_seen),
@@ -236,7 +237,7 @@ class FilesPanelMixin:
         btn_add_file.clicked.connect(self.action_add_files)
         files_header.addWidget(btn_add_file)
 
-        self.tbl_files = QTreeWidget()
+        self.tbl_files = ProjectFileTree()
         self.tbl_files.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Expanding)
         self.tbl_files.setHeaderLabels([c.label for c in FILES_COLUMNS])
         self._files_dnd = FilesTableDnD(self.tbl_files)
@@ -705,6 +706,7 @@ class FilesPanelMixin:
             item.setText(4, self._fmt_added_at(f.added_at))
             item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
             item.setData(0, Qt.UserRole, f.id)
+            item.setData(0, FILE_PATH_ROLE, str(self._resolve(f).absolute()))
             item.setData(0, Qt.UserRole + 2, f.subfolder or "")
             # 文件节点默认不可编辑（label 编辑通过 _on_file_item_changed 控制）
             item.setFlags(
@@ -759,6 +761,7 @@ class FilesPanelMixin:
             item.setText(4, self._fmt_added_at(f.added_at))
             item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
             item.setData(0, Qt.UserRole, f.id)
+            item.setData(0, FILE_PATH_ROLE, str(self._resolve(f).absolute()))
             item.setFlags(item.flags() & ~Qt.ItemIsDropEnabled)
 
             # task #41 T5：文件名列 hover 显示完整文件名（缺失时追加说明）

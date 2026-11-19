@@ -76,10 +76,13 @@ class LibraryRestartTests(unittest.TestCase):
 
     def test_frozen_launch_does_not_repeat_executable(self) -> None:
         executable = str(self.temporary / "program with spaces" / "LLM Cabinet.exe")
-        program, argv = self.capture_restart(
-            [executable, "--debug", "--welcome"], frozen=True, executable=executable)
-        self.assertEqual(program, executable)
-        self.assertEqual(argv, [executable, "--debug"])
+        with patch.object(sys, "argv", [executable, "--debug", "--welcome"]), \
+                patch.object(sys, "executable", executable), patch.object(sys, "frozen", True, create=True), \
+                patch.dict(os.environ, {"PYINSTALLER_RESET_ENVIRONMENT": "0"}), \
+                patch.object(subprocess, "Popen") as launch:
+            self.application._restart_self()
+            launch.assert_called_once_with([executable, "--debug"], env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+            self.assertEqual(os.environ["PYINSTALLER_RESET_ENVIRONMENT"], "0")
 
     def test_welcome_is_one_time_and_extra_arguments_are_deduplicated(self) -> None:
         _, normal = self.capture_restart(["run.py", "--welcome", "--debug", "--welcome"])

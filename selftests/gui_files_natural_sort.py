@@ -37,6 +37,10 @@ class _Panel(FilesPanelMixin):
     def _file_size_str(self, file: FileItem) -> str:
         return f"{file.ord} KB"
 
+    def _resolve(self, file: FileItem) -> Path:
+        """为拖放角色提供合成路径，排序测试无需读取文件。"""
+        return Path(file.path)
+
     def _update_preview_file_navigation(self, *_args) -> None:
         """此最小面板不构建预览，翻页联动由独立主窗口回归覆盖。"""
         return

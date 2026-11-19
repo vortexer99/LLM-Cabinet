@@ -15,9 +15,9 @@ _core_application: QCoreApplication | None = None
 
 
 def save_first_video_frame(
-    source: Path, target: Path, *, timeout_ms: int = 15000
+    source: Path, target: Path, *, timeout_ms: int = 15000, show_progress: bool = True,
 ) -> None:
-    """将视频第一个有效且可转换的解码帧保存为 PNG；失败抛出中文错误。"""
+    """将视频首个有效帧保存为 PNG；批量调用可关闭单视频进度对话框。"""
     global _core_application
 
     source, target = Path(source), Path(target)
@@ -94,7 +94,7 @@ def save_first_video_frame(
     player.mediaStatusChanged.connect(on_status)
     timer.timeout.connect(on_timeout)
     try:
-        if isinstance(application, QApplication):
+        if show_progress and isinstance(application, QApplication):
             progress = QProgressDialog(
                 "正在提取视频首帧…", "取消", 0, 0, application.activeWindow()
             )

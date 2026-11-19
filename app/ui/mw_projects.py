@@ -295,6 +295,16 @@ class ProjectsMixin:
                     return
         self.action_edit_project()
 
+    def _on_project_field_finished(self, message: str) -> None:
+        """等单元格编辑结束再刷新搜索结果、排序和当前项目简介。"""
+        self.refresh_projects(preserve_selection=True)
+        if self._current_project_id is not None:
+            index = self.proj_model.index_of_id(self._current_project_id)
+            project = index.data(ProjectModel.RoleProject)
+            if project is not None:
+                self._show_project_metadata(project)
+        self.statusBar().showMessage(message, 5000)
+
 
     def _rebuild_columns(self) -> None:
         """根据当前 fields schema + 附加列 重建 QTableView 的列。
@@ -624,6 +634,17 @@ class ProjectsMixin:
         )
 
 
+    def action_batch_auto_cover(self, project_ids: list[int] | None = None) -> None:
+        """为当前选区运行一次封面选择，并保留项目选择。"""
+        from .batch_auto_cover import run_batch_auto_cover
+
+        ids = self._selected_project_ids() if project_ids is None else project_ids
+        if run_batch_auto_cover(self, self.repo, self.library, ids):
+            self.refresh_projects(preserve_selection=True)
+            if self._current_project_id in ids:
+                self._show_project(self.repo.get_project(self._current_project_id), preserve_preview=True)
+
+
     def _batch_llm_suggest(self) -> None:
         ids = self._selected_project_ids()
         if not ids or self.llm_queue is None:
@@ -656,6 +677,12 @@ class ProjectsMixin:
     def _batch_mark_mcp_seen(self) -> None:
         self._on_mark_mcp_seen(self._selected_project_ids())
 
+
+    def _show_project_metadata(self, p: Project) -> None:
+        """更新简介和标签，保留文件选择和预览播放状态。"""
+        self.lbl_meta_title.setText(p.title or "(未命名)")
+        self.lbl_meta_desc.setText(self._desc_plain((p.description_md or "").strip() or "（暂无描述）"))
+        self.project_tags.set_tags(p.tags)
 
     def _show_project(self, p: Project | None, *, preserve_preview: bool = False) -> None:
         # Repository 也参与身份判定，避免不同库中相同项目 ID 被当成重复选择。
@@ -690,9 +717,8 @@ class ProjectsMixin:
         # 单选/无选中时隐藏批量面板（task #39 T1）
         self._batch_panel.setVisible(False)
 
-        self.project_tags.set_tags(p.tags if p is not None else [])
-
         if p is None:
+            self.project_tags.set_tags([])
             self.lbl_meta_title.setText("（未选择项目）")
             self.lbl_meta_desc.setText("")
             self.lbl_files_hint.setText("")
@@ -701,16 +727,7 @@ class ProjectsMixin:
             return
 
         self._update_cached_project_sizes([p.id])
-        # 标题
-        self.lbl_meta_title.setText(p.title or "(未命名)")
-
-        # 描述（取 description_md 的前几行 / 前 ~160 字符；空则提示）
-        desc = (p.description_md or "").strip()
-        if not desc:
-            desc = "（暂无描述）"
-        # 把 Markdown 简化成纯文本（去掉常见标记），单段显示
-        desc = self._desc_plain(desc)
-        self.lbl_meta_desc.setText(desc)
+        self._show_project_metadata(p)
 
         # 文件表（task #17：按 subfolder 建树；task #04：按 origin 过滤）
         # task #33：只查一次，总数在过滤前先记下
@@ -1351,6 +1368,10 @@ class ProjectsMixin:
         menu.addAction(
             "更新项目体积",
             lambda _checked=False, ids=list(selected_ids): self.action_update_project_sizes(ids),
+        )
+        menu.addAction(
+            "批量设置封面…" if is_multi else "自动设置封面…",
+            lambda _checked=False, ids=list(selected_ids): self.action_batch_auto_cover(ids),
         )
         menu.addSeparator()
         if is_multi:

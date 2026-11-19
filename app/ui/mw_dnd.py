@@ -121,6 +121,12 @@ class DnDMixin:
     def eventFilter(self, obj, ev):  # noqa: D401
         """全局监听 drag 进出，控制 DropZone 显隐（task #41 T4：仅拖放事件）。"""
         et = ev.type()
+        if et in (QEvent.DragEnter, QEvent.DragMove, QEvent.Drop) and ev.source() is self.tbl_files:
+            # 本表只接管自身的逻辑移动，经过项目卡片或新建区时不触发文件导入。
+            if isinstance(obj, QWidget) and obj is not self.tbl_files and obj is not self.tbl_files.viewport():
+                ev.ignore()
+                return True
+            return super().eventFilter(obj, ev)
         if et == QEvent.DragEnter:
             md = ev.mimeData() if hasattr(ev, "mimeData") else None
             if md and md.hasUrls():

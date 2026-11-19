@@ -263,7 +263,7 @@ def _sort_files_tree(self, *, column_key: str | None = None, descending: bool = 
 
 - **键盘可达性**：方向键移动 + Enter 重命名 + Delete 删除（资源管理器全套键盘操作）
 - **复制粘贴 ord/subfolder**：复用系统剪贴板的 mime 类型
-- **拖出到外部**：拖文件到资源管理器 = 导出（#28 的轻量入口）
+- ✅ **文件拖出到外部**：树形与平铺视图支持把所选文件拖到资源管理器或其他接受文件的软件，外部按复制处理。
 
 ---
 

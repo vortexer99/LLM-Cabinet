@@ -302,6 +302,9 @@ class ProjectModel(QAbstractTableModel):
         flags = super().flags(index)
         if index.isValid():
             flags |= Qt.ItemIsDragEnabled
+            column = self.column_kind(index.column())
+            if column and column[0] == "field":
+                flags |= Qt.ItemIsEditable
         return flags
 
     def mimeTypes(self) -> list[str]:  # noqa: N802 (Qt 命名)

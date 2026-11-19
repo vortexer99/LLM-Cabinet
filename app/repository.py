@@ -1342,6 +1342,35 @@ class Repository:
             else:
                 project.field_values.pop(f.id, None)
 
+    def update_project_field(self, pid: int, field: Field, original: str, value: str) -> None:
+        """按打开编辑器时的值校验冲突，原子更新单个字段和项目时间。"""
+        with self.conn:
+            self.conn.execute("BEGIN IMMEDIATE")
+            current = self.get_field(field.id)
+            project = self.get_project(pid)
+            if project is None or current is None or current.type != field.type:
+                raise ValueError("项目或字段已变更，请重新编辑")
+            if self.get_field_value(project, current) != original:
+                raise ValueError("该字段已被其他操作修改，请重新编辑")
+            self.set_field_value_on_project(project, current, value)
+            if current.is_title:
+                if not project.title.strip():
+                    raise ValueError("标题不能为空")
+                self.conn.execute("UPDATE projects SET title=? WHERE id=?", (project.title, pid))
+            elif current.key == "description":
+                self.conn.execute("UPDATE projects SET description_md=? WHERE id=?", (project.description_md, pid))
+            elif current.is_tags:
+                self._set_tags(pid, project.tags)
+            elif current.id in project.field_values:
+                self.conn.execute(
+                    "INSERT INTO project_field_values(project_id,field_id,value) VALUES(?,?,?) "
+                    "ON CONFLICT(project_id,field_id) DO UPDATE SET value=excluded.value",
+                    (pid, current.id, project.field_values[current.id]),
+                )
+            else:
+                self.conn.execute("DELETE FROM project_field_values WHERE project_id=? AND field_id=?", (pid, current.id))
+            self.conn.execute("UPDATE projects SET updated_at=datetime('now') WHERE id=?", (pid,))
+
     # 旧版接口（用户字段值的低层读写，保留）
     def get_field_values(self, pid: int) -> dict[int, str]:
         rows = self.conn.execute(

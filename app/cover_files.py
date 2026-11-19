@@ -5,6 +5,7 @@ import logging
 import os
 from pathlib import Path, PureWindowsPath
 import stat
+from typing import Callable
 from uuid import uuid4
 
 from .library import Library
@@ -125,7 +126,7 @@ def discard_cover_snapshot(repo: Repository, library: Library, file: FileItem) -
 
 
 def replace_project_cover(repo: Repository, library: Library, project: Project,
-                          cover_id: int) -> list[str]:
+                          cover_id: int, *, cover_only: bool = False) -> list[str]:
     """先确认新引用保存成功，再按偏好仅回收前一个生成封面。"""
     old_id = project.cover_file_id
     new_file = None
@@ -146,7 +147,18 @@ def replace_project_cover(repo: Repository, library: Library, project: Project,
     details: list[str] = []
     project.cover_file_id = cover_id
     try:
-        repo.save_project(project)
+        if cover_only:
+            # 自动批量操作只修改封面，不能用抽帧前的对象覆盖外部修改的元数据。
+            cursor = repo.conn.execute(
+                """UPDATE projects SET cover_file_id=?, updated_at=datetime('now')
+                   WHERE id=? AND cover_file_id IS ?""",
+                (cover_id, project.id, old_id),
+            )
+            if cursor.rowcount != 1:
+                raise RuntimeError("项目已删除或封面被其他操作修改，请刷新后重试。")
+            repo.conn.commit()
+        else:
+            repo.save_project(project)
     except Exception as exc:
         _log.exception("保存项目封面引用失败")
         details.append(_detail(new_file, library, "保存项目封面引用", exc,
@@ -185,17 +197,17 @@ def replace_project_cover(repo: Repository, library: Library, project: Project,
         return details
 
 
-def save_cover_snapshot(repo: Repository, library: Library, project: Project,
-                        pix, source_kind: str) -> int:
-    """新快照落盘并登记；写入失败时清理本次生成物，不接触旧封面。"""
+def save_generated_cover(
+    repo: Repository, library: Library, project: Project,
+    writer: Callable[[Path], bool], *, label: str, source_description: str,
+) -> FileItem:
+    """调用写入器生成并登记封面，统一保证路径安全及失败补偿。"""
     if project.id is None:
         raise ValueError("项目尚未保存。")
-    labels = {"clipboard": "封面（来自剪切板）", "pdf": "封面（截取自 PDF）",
-              "video": "封面（截取自视频）"}
     file = FileItem(project_id=int(project.id),
                     path=f"project_{project.id}/__cover_{uuid4().hex}.png",
                     is_relative=True, kind="image", origin="generated",
-                    label=labels.get(source_kind, f"封面（{source_kind}）"))
+                    label=label)
     if repo.conn.in_transaction:
         raise CoverFileError([_detail(file, library, "创建新封面",
                                      RuntimeError("已有未提交事务，不能提交或回滚其他操作。"),
@@ -209,16 +221,16 @@ def save_cover_snapshot(repo: Repository, library: Library, project: Project,
         target = _safe_generated_path(library, file, missing_ok=True)
         stage = "保存新封面 PNG"
         attempted_save = True
-        if not pix.save(str(target), "PNG"):
-            raise OSError("QPixmap.save 返回失败。")
+        if not writer(target):
+            raise OSError("封面图片写入器返回失败。")
         stage = "登记新封面文件记录"
         file.id = repo.add_file(file)
-        return file.id
+        return file
     except Exception as exc:
         _log.exception("新封面快照保存失败")
         details.append(_detail(file, library, stage, exc,
                                "未修改旧封面引用；将尝试回滚本次新生成物。",
-                               f"当前预览画面（{source_kind}）"))
+                               source_description))
         rolled_back = _rollback(repo, file, library, details)
         if attempted_save and rolled_back:
             try:
@@ -236,3 +248,16 @@ def save_cover_snapshot(repo: Repository, library: Library, project: Project,
                 details.append(_detail(file, library, "清理本次新生成物", cleanup_exc,
                                        f"实际保留位置：{library.resolve(file.path, True)}"))
         raise CoverFileError(details, rollback_failed=not rolled_back) from exc
+
+
+def save_cover_snapshot(repo: Repository, library: Library, project: Project,
+                        pix, source_kind: str) -> int:
+    """保留手动预览截图接口，复用统一的生成物登记与失败补偿。"""
+    labels = {"clipboard": "封面（来自剪切板）", "pdf": "封面（截取自 PDF）",
+              "video": "封面（截取自视频）"}
+    file = save_generated_cover(
+        repo, library, project, lambda target: pix.save(str(target), "PNG"),
+        label=labels.get(source_kind, f"封面（{source_kind}）"),
+        source_description=f"当前预览画面（{source_kind}）",
+    )
+    return int(file.id)

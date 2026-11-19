@@ -10,12 +10,13 @@
 3. Welcome 返回 ``None`` → 用户退出，应用直接 ``return 0``。
 4. 派生 ``db_path = root/cabinet.db`` 与 ``library_root = root/library``。
 
-切换库走重启：``QApplication.quit() + os.execv``，简单稳定。
+切换库时退出 Qt 事件循环，打包版启动独立实例，源码版替换当前进程。
 """
 from __future__ import annotations
 
 import logging
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
@@ -305,13 +306,14 @@ def _restart_self(*, extra_args: Optional[list[str]] = None) -> None:
             if a not in arguments:
                 arguments.append(a)
         if getattr(sys, "frozen", False):
-            # 打包版 argv[0] 已是可执行文件，不能再作为业务参数重复传入。
+            # 旧进程退出时会清理解包目录，独立实例必须重新解包 Qt 和 shiboken。
             argv = [sys.executable, *arguments]
-        else:
-            entry = Path(__file__).resolve().parent.parent / "run.py"
-            argv = [sys.executable, str(entry), *arguments]
-            if not entry.is_file():
-                raise FileNotFoundError(f"找不到应用重启入口：{entry}")
+            subprocess.Popen(argv, env={**os.environ, "PYINSTALLER_RESET_ENVIRONMENT": "1"})
+            return
+        entry = Path(__file__).resolve().parent.parent / "run.py"
+        argv = [sys.executable, str(entry), *arguments]
+        if not entry.is_file():
+            raise FileNotFoundError(f"找不到应用重启入口：{entry}")
         os.execv(sys.executable, argv)
     except Exception as e:
         log.exception("自动重启失败")
