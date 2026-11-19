@@ -14,6 +14,7 @@ from typing import Any
 
 from .context import LibraryContext
 from ..search import combine_and, field_term, parse_search
+from ..utils import ARCHIVE_EXTS
 
 log = logging.getLogger(__name__)
 
@@ -504,7 +505,6 @@ def _guess_file_kind(suffix: str) -> str:
     aud_exts = {".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma"}
     if suffix in aud_exts:
         return "audio"
-    arch_exts = {".zip", ".rar", ".7z", ".tar", ".gz", ".bz2"}
-    if suffix in arch_exts:
+    if suffix in ARCHIVE_EXTS:
         return "archive"
     return "other"

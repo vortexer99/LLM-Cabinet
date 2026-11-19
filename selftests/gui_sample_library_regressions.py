@@ -87,10 +87,9 @@ def _field_id(repo: Repository, name: str) -> int:
     raise AssertionError(f"field not found: {name}")
 
 
-def _search(win: MainWindow, text: str, *, all_library: bool = True) -> set[str]:
+def _search(win: MainWindow, text: str) -> set[str]:
     win.search_box.setText(text)
     win._search_timer.stop()
-    win.btn_search_all.setChecked(all_library)
     win.refresh_projects()
     _app().processEvents()
     return _titles(win)
@@ -162,16 +161,14 @@ def test_sample_baseline_and_search(tmp: Path, t: T) -> None:
             )
             t.assert_eq("sample broad file keyword search", _search(win, "深层目录笔记"), {"三体研究资料"})
 
-            win._current_filter_kind = "tag"
-            win._current_filter_value = "领域/科幻"
+            _search(win, "视频说明")
+            win.tag_tree.filter_changed.emit("tag", "领域/科幻")
+            t.assert_eq("sample sidebar tag combines with keyword", _titles(win), set())
+            win.btn_search_all.click()
+            t.assert_eq("sample full-library button resets filters", _titles(win), expected)
             t.assert_eq(
-                "sample sidebar tag combines with keyword",
-                _search(win, "视频说明", all_library=False),
-                set(),
-            )
-            t.assert_eq(
-                "sample full-library search ignores sidebar",
-                _search(win, "视频说明", all_library=True),
+                "sample keyword search after clearing filters",
+                _search(win, "视频说明"),
                 {"未分类草稿"},
             )
         finally:
@@ -189,16 +186,10 @@ def test_sample_sidebar_filters(tmp: Path, t: T) -> None:
                 ("mcp", "", {"AI Team Workspace 方案"}),
             ]
             for kind, value, expected in cases:
-                win._current_filter_kind = kind
-                win._current_filter_value = value
-                win.search_box.setText("")
-                win.refresh_projects()
+                win.tag_tree.filter_changed.emit(kind, value)
                 t.assert_eq(f"sample sidebar filter {kind}", _titles(win), expected)
 
             win._on_mark_mcp_seen([_project_id(repo, "AI Team Workspace 方案")])
-            win._current_filter_kind = "mcp"
-            win._current_filter_value = ""
-            win.refresh_projects()
             t.assert_eq("sample mcp filter refreshes after mark seen", _titles(win), set())
         finally:
             _close_window(win)
@@ -220,15 +211,16 @@ def test_sample_file_view_modes_and_origin_filter(tmp: Path, t: T) -> None:
                 "notes/drafts",
                 "figures",
                 "research/2024/phase-a/notes/deep",
-                "generated",
             ):
                 t.assert_in(f"sample file tree dir: {expected_dir}", expected_dir, dirs)
 
             labels = _file_labels(win)
-            t.assert_in("sample generated file visible by default", "生成封面", labels)
+            t.assert_true("sample generated file hidden by default", "生成封面" not in labels)
             t.assert_true("sample origin filter button visible", win._btn_origin_filter.isVisible())
-            win._btn_origin_filter.setChecked(True)
-            win._on_origin_filter_toggled()
+            win._btn_origin_filter.click()
+            t.assert_in("sample generated directory in all-files view", "generated", _dir_paths(win))
+            t.assert_in("sample generated cover in all-files view", "生成封面", _file_labels(win))
+            win._btn_origin_filter.click()
             _app().processEvents()
             t.assert_true("sample generated hidden in user-only mode", "生成封面" not in _file_labels(win))
             t.assert_eq(
@@ -237,8 +229,7 @@ def test_sample_file_view_modes_and_origin_filter(tmp: Path, t: T) -> None:
                 "user",
             )
 
-            win._btn_origin_filter.setChecked(False)
-            win._on_origin_filter_toggled()
+            win._btn_origin_filter.click()
             win._set_files_view_mode("flat", three_body_id)
             _app().processEvents()
             t.assert_eq("sample file view mode is flat", win._files_view_mode, "flat")
@@ -304,9 +295,7 @@ def test_sample_llm_suggestions_in_project_dialog(tmp: Path, t: T) -> None:
             dlg2._reject_all()
             dlg2._accept()
             repo.save_project(dlg2.project())
-            win._current_filter_kind = "review"
-            win._current_filter_value = ""
-            win.refresh_projects()
+            win.tag_tree.filter_changed.emit("review", "")
             t.assert_true("sample review filter clears after resolving suggestions", "AI Team Workspace 方案" not in _titles(win))
             dlg2.deleteLater()
         finally:

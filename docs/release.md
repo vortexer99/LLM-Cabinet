@@ -130,6 +130,7 @@ git tag -d v0.2.0
 | Checkout | 拉源码 | — |
 | Set up Python 3.11 + pip cache | 装 Python、缓存依赖 | requirements.txt 文件不存在 |
 | Install dependencies | `pip install -r requirements.txt && pip install pyinstaller` | PySide6 / pypdf wheel 临时下载失败（重跑即可） |
+| Prepare 7-Zip runtime | 固定版本、SHA-256 校验的官方解码组件，放入 `.tools/7zip/` | 官方下载源不可达或校验不匹配；不要绕过校验 |
 | **Smoke import check** | 不开窗口直接 import 核心模块 | 代码 SyntaxError / 循环 import / 缺包 |
 | Resolve version | 解析最终文件名用的版本号 | — |
 | **Verify tag matches __version__** | tag 触发专用，校验 tag 与 `__version__` 一致 | 忘了改 `app/__init__.py`，详见 §3.2 |
@@ -148,6 +149,11 @@ pyinstaller -w -F -n "LLM Cabinet" \
   --add-data "PRIVACY.md;." \
   --add-data "PRIVACY.zh-CN.md;." \
   --add-data "app/ui/assets;app/ui/assets" \
+  --add-binary ".tools/7zip/7z.exe;tools/7zip" \
+  --add-binary ".tools/7zip/7z.dll;tools/7zip" \
+  --add-data ".tools/7zip/License.txt;tools/7zip" \
+  --add-data ".tools/7zip/readme.txt;tools/7zip" \
+  --add-data ".tools/7zip/THIRD_PARTY_NOTICES.txt;tools/7zip" \
   run.py
 ```
 
@@ -199,6 +205,7 @@ PySide6 onefile 大约 65-80MB（含 Qt 全套）。低于 50MB 或高于 100MB 
 .venv\Scripts\activate
 pip install -r requirements.txt
 pip install pyinstaller
+python tools/prepare_7zip.py
 
 # 冒烟
 python -c "import importlib; mods = ['app.utils','app.db','app.models','app.library','app.repository','app.llm','app.llm.providers','app.llm.queue']; [importlib.import_module(m) for m in mods]; print('OK')"
@@ -211,6 +218,11 @@ pyinstaller -w -F -n "LLM Cabinet" `
   --add-data "PRIVACY.md;." `
   --add-data "PRIVACY.zh-CN.md;." `
   --add-data "app/ui/assets;app/ui/assets" `
+  --add-binary ".tools/7zip/7z.exe;tools/7zip" `
+  --add-binary ".tools/7zip/7z.dll;tools/7zip" `
+  --add-data ".tools/7zip/License.txt;tools/7zip" `
+  --add-data ".tools/7zip/readme.txt;tools/7zip" `
+  --add-data ".tools/7zip/THIRD_PARTY_NOTICES.txt;tools/7zip" `
   run.py
 
 dist/"LLM Cabinet.exe"
@@ -252,3 +264,10 @@ onedir 启动更快但用户要解压一个文件夹，分发体验比 onefile �
 - 本地编译检查和 28 个自测脚本全部通过，共 1190 条断言；含离屏 GUI 回归。
 - 备份使用移除配置 API Key 的数据库快照，排除 SQLite 日志及旧迁移备份；恢复后需重填密钥，同机也一样。用户文件保持原样。
 - 离屏测试不替代真实屏幕的字体、布局验收；发布 exe 仍需单独验证启动。
+
+## v0.7.0 本地发布验证（2026-11-19）
+
+- 应用、CLI 技能、工具及自测脚本通过编译检查，核心模块通过 CI 使用的导入检查。数据库 schema 为 v8。
+- 81 个自测脚本均通过。样例库回归覆盖「全库」清空筛选和默认隐藏生成封面；项目标签回归在预览探测完成后验证筛选会保留视频位置和暂停状态。涉及数据库的验证使用隔离测试库。
+- 另外运行 `selftests/task48_archives.py --real-fixtures`，验证了真实 7Z、ZIP 及 RAR 加密样本的解压。
+- Windows 单文件 exe 的构建与启动验收待发布时验证。

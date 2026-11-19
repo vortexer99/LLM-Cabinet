@@ -23,8 +23,13 @@ from pathlib import Path
 from typing import Callable, Literal, Optional
 
 from .library import Library
+from .import_preferences import apply_import_auto_cover
 from .models import FIELD_TYPES, FileItem, PendingFile, Project
 from .repository import Repository
+from .storage_cleanup import (
+    STORAGE_RECYCLE_SOURCE_KEY, SourceSnapshot, capture_storage_source,
+    cleanup_storage_sources,
+)
 from .utils import detect_kind
 
 # 当前导入器已知的最高 project-export schema 版本
@@ -261,7 +266,9 @@ def import_folder_as_project(
     prepared = copy_files_for_import(
         library, pid, plan, options, warnings, progress=progress,
     )
-    n_files = write_import_file_rows(repo, project, plan, prepared, warnings)
+    n_files = write_import_file_rows(
+        repo, project, plan, prepared, warnings, library=library,
+    )
     return ImportResult(project_id=pid, n_files=n_files, warnings=warnings)
 
 
@@ -310,30 +317,32 @@ def copy_files_for_import(
     *,
     progress: Callable[[int, int, str], None] | None = None,
     is_cancelled: Callable[[], bool] | None = None,
-) -> list[tuple[PendingFile, str, bool, "int | None"]]:
+) -> list[tuple[PendingFile, str, bool, int | None, SourceSnapshot | None]]:
     """阶段 2（纯文件 IO，可放 worker 线程）：收集并（copy 模式）复制文件。
 
-    返回 ``[(PendingFile, stored_path, is_relative, old_file_id), ...]``：
+    返回 ``[(PendingFile, stored_path, is_relative, old_file_id, source_snapshot), ...]``：
     - copy 模式：``stored_path`` 为库内相对路径（已物理复制）
     - link 模式：``stored_path`` 为源文件绝对路径（无 IO）
+    - ``source_snapshot`` 是非 ZIP 仓储复制前的源文件状态，其余情况为 None
     失败项跳过并记 ``warnings``。``is_cancelled()`` 为 True 时提前返回
     已处理完的部分（不抛异常，由调用方决定如何收尾）。
     """
     pending_files, file_id_map = _collect_files_to_import(plan)
     pf_to_old_id = {id(pf): old_id for old_id, pf in file_id_map.items()}
 
-    prepared: list[tuple[PendingFile, str, bool, "int | None"]] = []
+    prepared: list[tuple[PendingFile, str, bool, int | None, SourceSnapshot | None]] = []
     total = len(pending_files)
     for i, pf in enumerate(pending_files):
         if is_cancelled is not None and is_cancelled():
             break  # 已复制的部分照常返回，主线程决定收尾
         try:
             if options.storage_mode == "copy":
+                snapshot = None if plan.is_zip else capture_storage_source(pf.src)
                 rel = library.import_copy(project_id, pf.src)
-                prepared.append((pf, rel, True, pf_to_old_id.get(id(pf))))
+                prepared.append((pf, rel, True, pf_to_old_id.get(id(pf)), snapshot))
             else:
                 prepared.append(
-                    (pf, str(pf.src.resolve()), False, pf_to_old_id.get(id(pf)))
+                    (pf, str(pf.src.resolve()), False, pf_to_old_id.get(id(pf)), None)
                 )
         except Exception as e:
             warnings.append(f"导入文件失败 {pf.src.name}：{e}")
@@ -349,26 +358,32 @@ def write_import_file_rows(
     repo: Repository,
     project: Project,
     plan: ImportPlan,
-    prepared: list[tuple[PendingFile, str, bool, "int | None"]],
+    prepared: list[tuple[PendingFile, str, bool, int | None, SourceSnapshot | None]],
     warnings: list[str],
+    *,
+    library: Library | None = None,
+    cleanup_candidates: list[tuple[SourceSnapshot, str, int]] | None = None,
 ) -> int:
     """阶段 3（主线程）：把阶段 2 的结果写成 files 行 + 封面还原。"""
     assert project.id is not None
     n_added = 0
     old_to_new_id: dict[int, int] = {}
-    for pf, stored_path, is_rel, old_file_id in prepared:
+    candidates: list[tuple[SourceSnapshot, str, int]] = []
+    for pf, stored_path, is_rel, old_file_id, snapshot in prepared:
         try:
             fi = FileItem(
                 project_id=project.id,
                 path=stored_path,
                 is_relative=is_rel,
                 label=pf.label,
-                kind=detect_kind(pf.src.suffix),
+                kind=detect_kind(pf.src),
                 ord=n_added,
                 subfolder=pf.subfolder,
                 origin=pf.origin,
             )
             new_id = repo.add_file(fi)
+            if is_rel and snapshot is not None:
+                candidates.append((snapshot, stored_path, new_id))
             if old_file_id:
                 try:
                     old_to_new_id[int(old_file_id)] = new_id
@@ -383,7 +398,22 @@ def write_import_file_rows(
     old_cover_id = pj.get("project", {}).get("cover_file_id")
     if old_cover_id and old_cover_id in old_to_new_id:
         project.cover_file_id = old_to_new_id[old_cover_id]
-        repo.save_project(project)
+        try:
+            repo.save_project(project)
+        except Exception as e:
+            warnings.append(f"恢复导出包封面失败：{e}")
+
+    try:
+        apply_import_auto_cover(repo, project, library)
+    except Exception as e:
+        warnings.append(f"自动设置导入封面失败：{e}")
+
+    if cleanup_candidates is not None:
+        cleanup_candidates.extend(candidates)
+    elif library is not None:
+        warnings.extend(cleanup_storage_sources(repo, library, candidates))
+    elif candidates and repo.get_setting(STORAGE_RECYCLE_SOURCE_KEY, "0") == "1":
+        warnings.append("未提供当前仓库信息，已保留导入的源文件。")
 
     return n_added
 

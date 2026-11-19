@@ -23,12 +23,13 @@ from ..importer import FieldPolicy, ImportOptions, ImportPlan
 class ImportDialog(QDialog):
     """批量导入文件夹对话框。"""
 
-    def __init__(self, plans: list[ImportPlan], parent=None):
+    def __init__(self, plans: list[ImportPlan], parent=None, *, recycle_source: bool = False):
         super().__init__(parent)
         self.setWindowTitle("批量导入文件夹")
         self.resize(720, 560)
 
         self._plans = plans
+        self._recycle_source = recycle_source
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(16, 14, 16, 12)
@@ -141,6 +142,14 @@ class ImportDialog(QDialog):
         )
         link_hint.setStyleSheet("color: gray; font-size: 11px;")
         v.addWidget(link_hint)
+
+        if self._recycle_source:
+            recycle_hint = QLabel(
+                "本库已开启原文件回收：选择仓储模式时，成功复制并入库的原文件将移入回收站。\n"
+                "原目录、未导入文件和解包导入的 ZIP 原包保留；回收站不可用时保留原文件。"
+            )
+            recycle_hint.setWordWrap(True)
+            v.addWidget(recycle_hint)
 
         # 标题来源
         row2 = QHBoxLayout()

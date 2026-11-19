@@ -10,8 +10,8 @@
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt, Signal
-from PySide6.QtWidgets import QAbstractItemView, QListWidget, QListWidgetItem
+from PySide6.QtCore import QEvent, QObject, Qt, QTimer, Signal
+from PySide6.QtWidgets import QApplication, QAbstractItemView, QListWidget, QListWidgetItem, QWidget
 
 # 候选条目在 UserRole 里存 (insert_text, mode)：
 #   mode == "token"：替换当前 token（字段语法 / 标签值）
@@ -26,14 +26,17 @@ class SearchCompletionPopup(QListWidget):
     item_chosen = Signal(str, str)
 
     def __init__(self, parent=None):
+        # 主题样式可能在 QWidget 构造过程中调用 eventFilter，先准备它读取的状态。
+        self._shown = False
+        self._anchor: QWidget | None = None
         super().__init__(parent)
         self.setWindowFlags(Qt.Popup)
         self.setFocusPolicy(Qt.NoFocus)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
         self.setMouseTracking(True)
         self.itemClicked.connect(self._on_clicked)
-        # offscreen 平台下 popup 的 isVisible() 不可靠，用内部标志跟踪显隐
-        self._shown = False
+        # Qt.Popup 的原生自动关闭在不同平台上有差异，显式监听窗口内点击和焦点。
+        QApplication.instance().installEventFilter(self)
 
     # ---------------------------------------------------------- 内容
     def show_candidates(
@@ -48,6 +51,7 @@ class SearchCompletionPopup(QListWidget):
             sections: ``[(区名, [(显示文本, 插入文本, mode)], ...)]``；
                 全空的区自动跳过；没有任何候选时隐藏。
         """
+        self._anchor = anchor
         self.clear()
         first: QListWidgetItem | None = None
         for sec_name, items in sections:
@@ -82,8 +86,52 @@ class SearchCompletionPopup(QListWidget):
         self._shown = False
         super().hide()
 
+    def hideEvent(self, event) -> None:  # noqa: N802
+        """原生弹窗关闭不一定经过 Python hide，仍须同步候选状态。"""
+        self._shown = False
+        super().hideEvent(event)
+
     def has_candidates(self) -> bool:
         return self._shown and self.count() > 0
+
+    def _owns_focus(self, widget: QWidget | None) -> bool:
+        return widget is not None and (
+            widget is self or self.isAncestorOf(widget)
+            or widget is self._anchor
+            or (self._anchor is not None and self._anchor.isAncestorOf(widget))
+        )
+
+    def _dismiss_if_focus_outside(self) -> None:
+        """等待焦点落定，避免搜索框转入补全窗口时抢先关闭候选。"""
+        if not self.has_candidates():
+            return
+        focused = QApplication.focusWidget()
+        if self._owns_focus(focused):
+            return
+        self.hide()
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if not self.has_candidates():
+            return False
+        kind = event.type()
+        if kind == QEvent.MouseButtonPress:
+            point = event.globalPosition().toPoint()
+            over_popup = self.rect().contains(self.mapFromGlobal(point))
+            over_anchor = self._anchor is not None and self._anchor.rect().contains(
+                self._anchor.mapFromGlobal(point)
+            )
+            if not over_popup and not over_anchor:
+                # 不消费点击，让本次侧栏/按钮操作继续执行。
+                self.hide()
+        elif kind == QEvent.FocusIn and isinstance(obj, QWidget):
+            if not self._owns_focus(obj):
+                self.hide()
+        elif kind == QEvent.FocusOut and obj is self._anchor:
+            if event.reason() != Qt.PopupFocusReason:
+                QTimer.singleShot(0, self._dismiss_if_focus_outside)
+        elif kind == QEvent.ApplicationDeactivate:
+            self.hide()
+        return False
 
     # ---------------------------------------------------------- 键盘
     def handle_key(self, key: int) -> bool:

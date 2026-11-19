@@ -71,6 +71,9 @@ jobs:
           Write-Host "OK: tag and __version__ match."
 
       # PyInstaller 单 exe；参数与 README.zh-CN.md 中保持一致
+      - name: Prepare verified official 7-Zip runtime
+        run: python tools/prepare_7zip.py
+
       - name: Build with PyInstaller
         shell: pwsh
         run: |
@@ -81,6 +84,11 @@ jobs:
             --add-data "PRIVACY.md;." `
             --add-data "PRIVACY.zh-CN.md;." `
             --add-data "app/ui/assets;app/ui/assets" `
+            --add-binary ".tools/7zip/7z.exe;tools/7zip" `
+            --add-binary ".tools/7zip/7z.dll;tools/7zip" `
+            --add-data ".tools/7zip/License.txt;tools/7zip" `
+            --add-data ".tools/7zip/readme.txt;tools/7zip" `
+            --add-data ".tools/7zip/THIRD_PARTY_NOTICES.txt;tools/7zip" `
             run.py
 
       # 把版本号写进文件名：LLM Cabinet-<version>.exe

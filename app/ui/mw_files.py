@@ -45,6 +45,10 @@ from PySide6.QtWidgets import (
 
 from ..models import FileItem, Project
 from ..repository import Repository
+from ..storage_cleanup import (
+    STORAGE_RECYCLE_SOURCE_KEY, SourceSnapshot,
+    capture_storage_source,
+)
 from ..search import combine_and, field_term, parse_search
 from ..search_history import (
     HISTORY_SETTING_KEY,
@@ -68,6 +72,7 @@ from .cover_cache import get_cover
 from .dialogs import ask_yes_no_cancel, confirm, error, info, warn
 from .dnd import FilesTableDnD, ProjectViewDnD
 from .export_dialog import ExportDialog
+from .file_sorting import FileTreeItem, RAW_NAME_ROLE, natural_name_key
 from .files_table_columns import (
     COLUMNS as FILES_COLUMNS,
     SETTING_KEY as FILES_COLUMNS_SETTING_KEY,
@@ -79,6 +84,7 @@ from .files_table_columns import (
 from .palette import current as _current_palette
 from .widgets import NoElideDelegate
 from .preview import PreviewPanel
+from .project_tags import ProjectTagsWidget
 from .project_card import (
     CARD_W as _CARD_W,
     COVER_H as _COVER_H,
@@ -89,9 +95,36 @@ from .project_card import (
 from .project_dialog import ProjectDialog
 from .search_completion import SearchBoxKeyFilter, SearchCompletionPopup, current_token
 from .settings import SettingsDialog
+from .storage_cleanup import recycle_sources_with_progress
 from .workers import ExportSnapshotRepo, run_with_progress
 
 logger = logging.getLogger("llm_cabinet.ui")
+
+
+def _file_operation_error(
+    file: FileItem, source: str | Path, target: str | Path,
+    stage: str, exc: Exception, *, outcome: str = "",
+) -> str:
+    """统一保留失败文件、完整路径、阶段和原始异常，供结果详情与日志使用。"""
+    detail = (
+        f"文件 ID：{file.id}；名称：{file.label or Path(file.path).name}\n"
+        f"源路径：{source}\n目标路径：{target}\n"
+        f"失败阶段：{stage}\n异常：{type(exc).__name__}: {exc}"
+    )
+    if outcome:
+        detail += f"\n处理结果：{outcome}"
+    logger.error("文件操作失败：%s", detail, exc_info=(type(exc), exc, exc.__traceback__))
+    return detail
+
+
+def _rollback_file_update(repo: Repository) -> str:
+    """写回失败后结束未提交事务，避免后续成功项意外提交失败记录。"""
+    try:
+        repo.conn.rollback()
+        return ""
+    except Exception as exc:
+        logger.exception("文件记录写回失败后的数据库回滚失败")
+        return f"\n数据库回滚失败：{type(exc).__name__}: {exc}；记录状态需检查。"
 
 
 class FilesPanelMixin:
@@ -119,7 +152,17 @@ class FilesPanelMixin:
         self.lbl_meta_desc.setMaximumHeight(fm.lineSpacing() * 3 + 4)
         self.lbl_meta_desc.setTextInteractionFlags(Qt.TextSelectableByMouse)
 
-        self.preview = PreviewPanel()
+        self.project_tags = ProjectTagsWidget()
+        self.project_tags.tag_clicked.connect(lambda tag: self._on_tag_filter_changed("tag", tag))
+
+        self.preview = PreviewPanel(
+            wheel_navigation_enabled=lambda: self.repo.get_setting("preview_wheel_navigation", "0") == "1",
+        )
+        self.preview.previous_requested.connect(lambda: self._navigate_preview_file(-1))
+        self.preview.next_requested.connect(lambda: self._navigate_preview_file(1))
+        self.preview.video_finished.connect(self._on_preview_video_finished)
+        self.preview.status_changed.connect(lambda text: self.statusBar().showMessage(text, 5000))
+        self.preview.relink_requested.connect(self._relink_preview_file)
 
         # task #39 T1：多选批量操作面板（默认隐藏，多选项目时显示）
         self._batch_panel = QWidget()
@@ -146,6 +189,7 @@ class FilesPanelMixin:
         top_l.setSpacing(4)
         top_l.addWidget(self.lbl_meta_title)
         top_l.addWidget(self.lbl_meta_desc)
+        top_l.addWidget(self.project_tags)
         top_l.addWidget(self._batch_panel)
         top_l.addSpacing(6)
         top_l.addWidget(self.preview, 1)
@@ -165,9 +209,9 @@ class FilesPanelMixin:
         # task #04：文件来源过滤 toggle（仅用户文件 / 显示所有）
         self._btn_origin_filter = QToolButton()
         self._btn_origin_filter.setText("👤")
-        self._btn_origin_filter.setToolTip("仅显示用户文件")
+        self._btn_origin_filter.setToolTip("仅显示用户文件（默认隐藏封面快照等生成文件）；点击显示全部文件")
         self._btn_origin_filter.setCheckable(True)
-        self._btn_origin_filter.setChecked(False)
+        self._btn_origin_filter.setChecked(True)
         self._btn_origin_filter.setVisible(False)  # 项目无 generated 文件时隐藏
         self._btn_origin_filter.clicked.connect(self._on_origin_filter_toggled)
         files_header.addWidget(self._btn_origin_filter)
@@ -223,6 +267,8 @@ class FilesPanelMixin:
         )
         self.tbl_files.itemChanged.connect(self._on_file_item_changed)
         self.tbl_files.itemSelectionChanged.connect(self._on_file_selected)
+        self.tbl_files.currentItemChanged.connect(lambda *_: self._update_preview_file_navigation())
+        self.tbl_files.model().layoutChanged.connect(self._update_preview_file_navigation)
         self.tbl_files.setContextMenuPolicy(Qt.CustomContextMenu)
         self.tbl_files.customContextMenuRequested.connect(self._file_context_menu)
         self.tbl_files.itemDoubleClicked.connect(self._on_file_double_clicked)
@@ -264,11 +310,12 @@ class FilesPanelMixin:
         self._right_v_split.addWidget(self._files_panel)
         self._right_v_split.setStretchFactor(0, 1)
         self._right_v_split.setStretchFactor(1, 1)
-        self._right_v_split.setSizes([320, 480])
+        self._right_v_split.setSizes(self.RIGHT_SPLITTER_DEFAULT_SIZES)
         self._right_v_split.setHandleWidth(1)
 
         self._files_detach_window: QDialog | None = None
         self._files_detach_placeholder: QLabel | None = None
+        self._right_v_split.splitterMoved.connect(self._on_right_splitter_moved)
 
         return self._right_v_split
 
@@ -283,6 +330,8 @@ class FilesPanelMixin:
     def _detach_files_panel(self) -> None:
         if self._files_detach_window is not None:
             return
+        self._on_right_splitter_moved(0, 0)
+        self._files_panel_splitter_sizes = self._right_v_split.sizes()
         placeholder = QLabel("文件列表已弹出为独立窗口\n关闭该窗口即可恢复")
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.setProperty("muted", True)
@@ -320,7 +369,7 @@ class FilesPanelMixin:
             self._files_detach_placeholder = None
 
         self._right_v_split.addWidget(self._files_panel)
-        self._right_v_split.setSizes([320, 480])
+        self._right_v_split.setSizes(self._files_panel_splitter_sizes)
 
         if dlg.isVisible():
             dlg.close()
@@ -342,7 +391,7 @@ class FilesPanelMixin:
 
         # 刷新文件列表
         if pid is not None:
-            self._show_project(self.repo.get_project(pid))
+            self._show_project(self.repo.get_project(pid), preserve_preview=True)
 
 
     def _toggle_files_view_mode(self) -> None:
@@ -526,7 +575,7 @@ class FilesPanelMixin:
     def _tree_sort_state(self) -> tuple[str, bool]:
         pid = self._current_project_id
         if pid is None:
-            return "custom", False
+            return "name", False
         raw = self.repo.get_project_setting(
             int(pid), self.FILES_TREE_SORT_SETTING_KEY, "",
         )
@@ -539,7 +588,9 @@ class FilesPanelMixin:
                     return key, descending
             except Exception:
                 pass
-        return "custom", False
+        # 无排序偏好时直接按自然名称排列，避免导入顺序中的 (10) 排到 (2) 前。
+        # 用户明确保存的 custom 仍在上方返回，保留拖拽顺序。
+        return "name", False
 
 
     def _set_tree_sort_state(self, key: str, descending: bool = False) -> None:
@@ -558,6 +609,8 @@ class FilesPanelMixin:
 
     def _connect_files_tree_header(self) -> None:
         self._disconnect_files_header_clicked()
+        # setSortingEnabled(False) 也会禁用表头点击；树形排序由自己的槽处理。
+        self.tbl_files.header().setSectionsClickable(True)
         self.tbl_files.header().sectionClicked.connect(self._on_files_tree_header_clicked)
 
 
@@ -584,6 +637,7 @@ class FilesPanelMixin:
         self._sort_files_tree()
         order = Qt.DescendingOrder if descending else Qt.AscendingOrder
         self.tbl_files.header().setSortIndicator(col, order)
+        self._update_preview_file_navigation()
 
 
     def _populate_files_tree(self, files: list[FileItem]) -> None:
@@ -597,7 +651,7 @@ class FilesPanelMixin:
         task #31b: 新增 size / added_at 列显示
         """
         kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
-                      "code": "💻", "other": "📦"}
+                      "code": "💻", "archive": "🗜", "other": "📦"}
 
         # dir_nodes: "a/b" → QTreeWidgetItem，逐级缓存避免重复创建
         dir_nodes: dict[str, QTreeWidgetItem] = {}
@@ -616,6 +670,7 @@ class FilesPanelMixin:
                     parent_node = dir_nodes[partial]
                     continue
                 node = QTreeWidgetItem()
+                node.setData(0, RAW_NAME_ROLE, parts[depth - 1])
                 node.setText(0, f"📁 {parts[depth - 1]}/")
                 node.setFlags(node.flags() & ~Qt.ItemIsEditable)
                 node.setToolTip(0, partial)  # task #41 T5：目录完整路径
@@ -637,13 +692,15 @@ class FilesPanelMixin:
 
         for f in files:
             name = Path(f.path).name
-            kind_icon = kind_icons.get(f.kind, "📦")
+            display_kind = "archive" if detect_kind(f.path) == "archive" else f.kind
+            kind_icon = kind_icons.get(display_kind, "📦")
             warn_prefix = "⚠ " if f.missing else ""
 
-            item = QTreeWidgetItem()
+            item = FileTreeItem()
+            item.setData(0, RAW_NAME_ROLE, name)
             item.setText(0, f"{warn_prefix}{kind_icon}  {name}")
             item.setText(1, f.label)
-            item.setText(2, f.kind)
+            item.setText(2, "archive" if detect_kind(f.path) == "archive" else f.kind)
             item.setText(3, self._file_size_str(f))
             item.setText(4, self._fmt_added_at(f.added_at))
             item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
@@ -685,17 +742,19 @@ class FilesPanelMixin:
         task #31b: 支持按列排序
         """
         kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
-                      "code": "💻", "other": "📦"}
+                      "code": "💻", "archive": "🗜", "other": "📦"}
 
         for f in files:
             name = Path(f.path).name
-            kind_icon = kind_icons.get(f.kind, "📦")
+            display_kind = "archive" if detect_kind(f.path) == "archive" else f.kind
+            kind_icon = kind_icons.get(display_kind, "📦")
             warn_prefix = "⚠ " if f.missing else ""
 
-            item = QTreeWidgetItem()
+            item = FileTreeItem()
+            item.setData(0, RAW_NAME_ROLE, name)
             item.setText(0, f"{warn_prefix}{kind_icon}  {name}")
             item.setText(1, f.label)
-            item.setText(2, f.kind)
+            item.setText(2, "archive" if detect_kind(f.path) == "archive" else f.kind)
             item.setText(3, self._file_size_str(f))
             item.setText(4, self._fmt_added_at(f.added_at))
             item.setText(5, "📦 仓储" if f.is_relative else "🔗 链接")
@@ -724,7 +783,12 @@ class FilesPanelMixin:
         if pid:
             sort_col = self.repo.get_project_setting(pid, "files_flat_sort_col", "0")
             sort_order = self.repo.get_project_setting(pid, "files_flat_sort_order", "0")
-            self.tbl_files.sortByColumn(int(sort_col), Qt.SortOrder(int(sort_order)))
+            # 兼容早期 PySide 将枚举写成 SortOrder.DescendingOrder 的偏好值。
+            order = (
+                Qt.DescendingOrder if sort_order in ("1", "SortOrder.DescendingOrder")
+                else Qt.AscendingOrder
+            )
+            self.tbl_files.sortByColumn(int(sort_col), order)
 
         # 连接排序信号
         self._disconnect_files_header_clicked()
@@ -740,7 +804,7 @@ class FilesPanelMixin:
         # 获取当前排序状态
         order = self.tbl_files.header().sortIndicatorOrder()
         self.repo.set_project_setting(pid, "files_flat_sort_col", str(col))
-        self.repo.set_project_setting(pid, "files_flat_sort_order", str(order))
+        self.repo.set_project_setting(pid, "files_flat_sort_order", str(order.value))
 
 
     def _sort_files_tree(self) -> None:
@@ -754,6 +818,8 @@ class FilesPanelMixin:
                 f = self.repo.get_file(int(fid)) if fid is not None and fid > 0 else None
                 return (f.ord if f else 0, f.id if f and f.id is not None else 0)
             col = key_to_col.get(sort_key, 0)
+            if col == 0:
+                return natural_name_key(item.data(0, RAW_NAME_ROLE) or item.text(0))
             text = item.text(col) or ""
             return text.casefold()
 
@@ -771,8 +837,8 @@ class FilesPanelMixin:
             dirs = [c for c in children if c.data(0, Qt.UserRole) == -1]
             files = [c for c in children if c.data(0, Qt.UserRole) != -1]
 
-            # 目录按文本排序，文件保持原序
-            dirs.sort(key=lambda n: n.text(0))
+            # 目录始终在前并按自然名称升序，文件遵循所选列及方向。
+            dirs.sort(key=lambda n: natural_name_key(n.data(0, RAW_NAME_ROLE) or n.text(0)))
             files.sort(key=_file_sort_value, reverse=descending)
 
             # 重新放回
@@ -883,6 +949,11 @@ class FilesPanelMixin:
         lay.addWidget(rb_copy)
 
         hint = QLabel("默认值来自「设置 → 默认存储方式」，可逐次更改。")
+        if self.repo.get_setting(STORAGE_RECYCLE_SOURCE_KEY, "0") == "1":
+            hint.setText(
+                "本库已开启原文件回收：仓储复制及入库成功后，原文件将移入回收站。\n"
+                "原目录及未导入文件保留；回收站不可用时保留原文件并提示。"
+            )
         hint.setProperty("hint", True)
         hint.setWordWrap(True)
         lay.addWidget(hint)
@@ -925,6 +996,7 @@ class FilesPanelMixin:
         added = 0
         # task #37：批量导入不在循环里逐文件弹窗，失败收集后一次汇总
         errors: list[str] = []
+        cleanup_candidates: list[tuple[SourceSnapshot, str, int]] = []
         for item in paths:
             if isinstance(item, PendingFile):
                 src = str(item.src)
@@ -933,18 +1005,23 @@ class FilesPanelMixin:
                 src = str(item)
                 subfolder = ""
             try:
-                self._import_one(project, src, ask_label=ask_label, storage=storage,
-                                 subfolder=subfolder)
+                candidate = self._import_one(
+                    project, src, ask_label=ask_label, storage=storage, subfolder=subfolder,
+                )
+                if candidate is not None:
+                    cleanup_candidates.append(candidate)
                 added += 1
             except Exception as e:
                 errors.append(f"{src}：{e}")
         if added and project.id is not None:
             self.repo.touch_project(project.id)
-        if errors:
+        cleanup_warnings = recycle_sources_with_progress(self, self.repo, self.library, cleanup_candidates)
+        if errors or cleanup_warnings:
             warn(
-                self, "部分文件导入失败",
-                f"成功 {added} 个，失败 {len(errors)} 个。",
-                detailed="\n".join(errors),
+                self, "文件导入结果",
+                f"成功 {added} 个，失败 {len(errors)} 个。"
+                + (f"\n原文件处理有 {len(cleanup_warnings)} 条提示，入库结果已保留。" if cleanup_warnings else ""),
+                detailed="\n".join(errors + cleanup_warnings),
             )
         return added
 
@@ -956,14 +1033,17 @@ class FilesPanelMixin:
         ask_label: bool = False,
         storage: str | None = None,
         subfolder: str = "",
-    ) -> None:
+    ) -> tuple[SourceSnapshot, str, int] | None:
         src_path = Path(src)
         if not src_path.exists():
             raise FileNotFoundError(src)
         mode = storage or (
             self.repo.get_setting("default_storage_mode", "link") or "link"
         )
+        snapshot = None
         if mode == "copy":
+            if self.repo.get_setting(STORAGE_RECYCLE_SOURCE_KEY, "0") == "1":
+                snapshot = capture_storage_source(src_path)
             rel = self.library.import_copy(p.id, src_path)  # type: ignore[arg-type]
             f = FileItem(
                 project_id=p.id,  # type: ignore[arg-type]
@@ -985,7 +1065,10 @@ class FilesPanelMixin:
             )
             if ok:
                 f.label = label.strip()
-        self.repo.add_file(f)
+        fid = self.repo.add_file(f)
+        if snapshot is not None:
+            return snapshot, f.path, fid
+        return None
 
 
     def _current_file_row_id(self) -> int | None:
@@ -1053,7 +1136,89 @@ class FilesPanelMixin:
         )
 
 
-    def _on_file_selected(self) -> None:
+    def _preview_file_items(self) -> list[QTreeWidgetItem]:
+        """按当前显示排序遍历文件，含折叠目录内容，排除隐藏节点和目录。"""
+        files: list[QTreeWidgetItem] = []
+
+        def collect(parent: QTreeWidgetItem) -> None:
+            for index in range(parent.childCount()):
+                item = parent.child(index)
+                if item.isHidden():
+                    continue
+                fid = item.data(0, Qt.UserRole)
+                if fid is not None and fid > 0:
+                    files.append(item)
+                collect(item)
+
+        collect(self.tbl_files.invisibleRootItem())
+        return files
+
+    def _preview_file_index(self, items: list[QTreeWidgetItem]) -> int:
+        """没有实际选中文件时视为未开始浏览，避免沿用清空选择后的 current。"""
+        current = self.tbl_files.currentItem()
+        if current is None or not current.isSelected():
+            return -1
+        return next((index for index, item in enumerate(items) if item is current), -1)
+
+    def _update_preview_file_navigation(self, *_args) -> None:
+        items = self._preview_file_items()
+        index = self._preview_file_index(items)
+        self.preview.set_file_navigation(index > 0, index + 1 < len(items), index + 1, len(items))
+
+    def _navigate_preview_file(self, step: int, *, autoplay: bool | None = None) -> None:
+        """翻页等同于在文件列表单选相邻文件，沿用原预览和自动播放逻辑。"""
+        if step not in (-1, 1):
+            return
+        items = self._preview_file_items()
+        index = self._preview_file_index(items)
+        target_index = index + step
+        if not 0 <= target_index < len(items):
+            self._update_preview_file_navigation()
+            return
+        target = items[target_index]
+        parent = target.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        # Qt 的选择/current 信号先后顺序不同，合并成一次完整选择后再更新预览。
+        blocked = self.tbl_files.blockSignals(True)
+        try:
+            self.tbl_files.setCurrentItem(target, 0, QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows)
+        finally:
+            self.tbl_files.blockSignals(blocked)
+        self.tbl_files.scrollToItem(target)
+        self._on_file_selected(autoplay=autoplay)
+
+    def _on_preview_video_finished(self, path: str) -> None:
+        """播完动作按当前库即时读取；仅处理当前选中文件的自然播放结束。"""
+        from PySide6.QtMultimedia import QMediaPlayer
+        video = self.preview._video
+        player = video._player
+        if (self.preview._stack.currentWidget() is not video
+                or player.mediaStatus() != QMediaPlayer.EndOfMedia
+                or player.source().toLocalFile() != path):
+            return
+        fid = self._current_file_row_id()
+        file = self.repo.get_file(fid) if fid is not None else None
+        if file is None or self._resolve(file) != Path(path):
+            return
+        action = self.repo.get_setting("video_end_action", "stop")
+        if action == "loop":
+            player.setPosition(0)
+            player.play()
+        elif action == "next":
+            # 连播是独立的显式偏好，不受手动选中视频的自动播放开关影响。
+            self._navigate_preview_file(1, autoplay=True)
+            if (self._current_file_row_id() != fid
+                    and self.preview._stack.currentWidget() is video
+                    and player.source().toLocalFile() == path
+                    and player.mediaStatus() == QMediaPlayer.EndOfMedia):
+                # 两条登记记录可能引用同一个路径；重复源保护不会重新载入它。
+                player.setPosition(0)
+                player.play()
+
+    def _on_file_selected(self, *, autoplay: bool | None = None) -> None:
+        self._update_preview_file_navigation()
         fid = self._current_file_row_id()
         self._current_file_id = fid
         if fid is None:
@@ -1064,7 +1229,19 @@ class FilesPanelMixin:
             self.preview.show_file(None)
             return
         path = self._resolve(f)
-        self.preview.show_file(str(path) if path.exists() else None)
+        self.preview.set_file_context(f.id, f.label or Path(f.path).name)
+        self.preview.show_file(
+            str(path),
+            autoplay=(self.repo.get_setting("video_autoplay", "0") == "1"
+                      if autoplay is None else autoplay),
+        )
+
+    def _relink_preview_file(self) -> None:
+        """离线预览只重关联当前文件，多选时不扩大操作范围。"""
+        fid = self._current_file_id
+        file = self.repo.get_file(fid) if fid is not None else None
+        if file is not None:
+            self._relink_files_to_directory([file])
 
 
     def _on_file_item_changed(self, item: QTreeWidgetItem, column: int) -> None:
@@ -1077,10 +1254,11 @@ class FilesPanelMixin:
             if f and column == 0:
                 name = Path(f.path).name
                 kind_icons = {"image": "🖼", "video": "🎬", "pdf": "📄", "doc": "📝",
-                              "code": "💻", "other": "📦"}
-                item.setText(0, f"{kind_icons.get(f.kind, '📦')}  {name}")
+                              "code": "💻", "archive": "🗜", "other": "📦"}
+                display_kind = "archive" if detect_kind(f.path) == "archive" else f.kind
+                item.setText(0, f"{kind_icons.get(display_kind, '📦')}  {name}")
             elif f and column == 2:
-                item.setText(2, f.kind)
+                item.setText(2, "archive" if detect_kind(f.path) == "archive" else f.kind)
             elif f and column == 3:
                 item.setText(3, "📦 仓储" if f.is_relative else "🔗 链接")
             self.tbl_files.blockSignals(False)
@@ -1110,6 +1288,11 @@ class FilesPanelMixin:
             warn(self, "提示", f"文件不存在：{path}")
             return
         open_with_default_app(path)
+
+    def action_extract_archive(self) -> None:
+        """将当前压缩包解压到本项目的同名子目录。"""
+        from .archive_actions import extract_current_archive
+        extract_current_archive(self)
 
 
     def action_reveal_current_file(self) -> None:
@@ -1256,9 +1439,33 @@ class FilesPanelMixin:
         self._convert_files_to_storage(files, scope_label=f"文件夹「{sf}」")
 
 
+    def action_convert_project_to_storage(self, project_id: int) -> None:
+        """转换整个项目的链接文件，不受视图过滤、折叠和文件选择影响。"""
+        self.action_convert_projects_to_storage([project_id])
+
+
+    def action_convert_projects_to_storage(self, project_ids: list[int]) -> None:
+        """合并所选项目为一个转换批次，整批写回后再回收共享源文件。"""
+        projects = [project for pid in dict.fromkeys(project_ids)
+                    if (project := self.repo.get_project(pid)) is not None]
+        if not projects:
+            return
+        files = [file for project in projects for file in self.repo.list_files(project.id)]
+        scope = (f"项目「{projects[0].title}」" if len(projects) == 1
+                 else f"所选 {len(projects)} 个项目")
+        self._convert_files_to_storage(
+            files, scope_label=scope,
+        )
+
+
     def _convert_files_to_storage(
         self, files: list[FileItem], *, scope_label: str = "所选文件",
     ) -> None:
+        from ..storage_move import STORAGE_CONVERT_MOVE_KEY
+        if self.repo.get_setting(STORAGE_CONVERT_MOVE_KEY, "0") == "1":
+            from .storage_move import convert_files_by_move
+            convert_files_by_move(self, files, scope_label=scope_label)
+            return
         if not files:
             info(self, "提示", f"{scope_label}中没有可处理的文件。")
             return
@@ -1274,6 +1481,12 @@ class FilesPanelMixin:
             )
             return
 
+        recycle_source = self.repo.get_setting(STORAGE_RECYCLE_SOURCE_KEY, "0") == "1"
+        source_notice = (
+            "本库已开启原文件回收：复制及入库成功后，将原文件移入回收站。\n"
+            "原目录保留；仍被本库其他链接引用或无法回收的原文件会保留并提示。"
+            if recycle_source else "原外部文件不会被删除（复制语义）。"
+        )
         # 确认对话框
         if not confirm(
             self, "确认转换",
@@ -1281,62 +1494,103 @@ class FilesPanelMixin:
             + "\n".join(f"  • {f.label or f.path}" for f in link_files[:5])
             + (f"\n  … 等共 {len(link_files)} 个" if len(link_files) > 5 else "")
             + f"\n\n已仓储文件 {len(storage_files)} 个将跳过。\n\n"
-            "⚠️ 原外部文件不会被删除（复制语义）。",
+            + source_notice,
             yes="转换",
         ):
             return
 
         # task #36：复制放后台线程；DB 更新回主线程按结果清单应用
         def _do(progress_cb, is_cancelled):
-            results: list = []  # (file_id, rel_path)
+            results: list = []  # (file_id, rel_path, source_snapshot)
             errors: list[str] = []
             total = len(link_files)
             for i, f in enumerate(link_files):
                 if is_cancelled():
                     break
                 progress_cb(i, total, f"正在处理：{f.label or f.path}")
+                abs_src = f.path
+                target = self.library.root / f"project_{f.project_id}" / Path(f.path).name
+                stage = "解析源文件"
                 try:
                     abs_src = self.library.resolve(f.path, is_relative=False)
+                    stage = "检查源文件"
                     if not abs_src.exists():
-                        errors.append(f"原文件不存在：{abs_src}")
-                        continue
+                        raise FileNotFoundError(f"原文件不存在：{abs_src}")
+                    stage = "读取源文件状态"
+                    snapshot = capture_storage_source(abs_src) if recycle_source else None
+                    # 与 import_copy 的冲突命名一致，以便复制失败时仍能显示尝试的目标。
+                    j = 1
+                    while target.exists():
+                        target = target.with_name(f"{abs_src.stem}_{j}{abs_src.suffix}")
+                        j += 1
+                    stage = "复制文件到库内"
                     rel_path = self.library.import_copy(f.project_id, abs_src)
-                    results.append((f.id, rel_path))
+                    results.append((f.id, rel_path, snapshot))
                 except Exception as e:
-                    errors.append(f"{f.path}：{e}")
+                    errors.append(_file_operation_error(f, abs_src, target, stage, e))
             progress_cb(total, total, "")
             return {"results": results, "errors": errors,
                     "cancelled": is_cancelled()}
 
         def _on_done(payload):
             copied = 0
-            for fid, rel_path in payload["results"]:
-                f = self.repo.get_file(fid)
-                if f is None:
-                    continue
-                f.path = rel_path
-                f.is_relative = True
-                self.repo.update_file(f)
-                copied += 1
+            errors = list(payload["errors"])
+            originals = {f.id: f for f in link_files}
+            cleanup_candidates: list[tuple[SourceSnapshot, str, int]] = []
+            for fid, rel_path, snapshot in payload["results"]:
+                original = originals[fid]
+                target = self.library.root / rel_path
+                try:
+                    f = self.repo.get_file(fid)
+                    if f is None:
+                        raise LookupError(f"文件记录 {fid} 已不存在")
+                    f.path = rel_path
+                    f.is_relative = True
+                    self.repo.update_file(f)
+                    copied += 1
+                    if snapshot is not None:
+                        cleanup_candidates.append((snapshot, rel_path, fid))
+                except Exception as exc:
+                    rollback_note = _rollback_file_update(self.repo)
+                    errors.append(_file_operation_error(
+                        original, original.path, target, "写入仓储文件记录", exc,
+                        outcome="保留原文件；库内副本已复制，但未完成记录更新，副本保留于目标路径。" + rollback_note,
+                    ))
 
-            errors = payload["errors"]
+            # 等整批记录更新后再判断剩余引用，避免同源多条记录提前回收。
+            cleanup_warnings = recycle_sources_with_progress(self, self.repo, self.library, cleanup_candidates)
             unhandled = len(link_files) - copied - len(errors)
             lines = [f"✅ 已复制到库内：{copied} 个"]
             if payload["cancelled"] and unhandled > 0:
                 lines.append(f"⏸ 已取消：{unhandled} 个未处理")
             if errors:
                 lines.append(f"⏭ 失败/跳过：{len(errors)} 个")
-                lines.append("\n错误详情：")
-                lines.extend(f"  • {e}" for e in errors[:10])
+                lines.extend(f"  • {detail.splitlines()[0]}" for detail in errors[:3])
+                lines.append("完整失败文件列表和原因请展开「详细信息」。")
+            if cleanup_warnings:
+                lines.append(f"\n原文件处理有 {len(cleanup_warnings)} 条提示（入库结果已保留）：")
+                lines.extend(f"  • {message}" for message in cleanup_warnings[:10])
+            elif recycle_source and copied:
+                lines.append("成功转换的原文件已移入回收站，原目录保留。")
 
-            info(self, "转换完成", "\n".join(lines))
+            info(self, "转换完成", "\n".join(lines),
+                 detailed="\n".join(errors + cleanup_warnings) or None)
             # 刷新文件表
             self._refresh_files_table()
+
+        def _on_error(msg):
+            details = [_file_operation_error(
+                f, f.path, self.library.root / f"project_{f.project_id}",
+                "复制转仓储后台任务", RuntimeError(msg),
+                outcome="批次异常中断，文件处理状态未确认，请检查源路径和库内目标目录。",
+            ) for f in link_files]
+            warn(self, "转换失败", "后台任务异常中断，请展开详细信息查看本批文件清单及错误。",
+                 detailed="\n\n".join(details))
 
         run_with_progress(
             self, "链接转仓储", f"{scope_label}：正在转换...", _do,
             on_done=_on_done,
-            on_error=lambda msg: warn(self, "转换失败", msg),
+            on_error=_on_error,
         )
 
 
@@ -1370,18 +1624,21 @@ class FilesPanelMixin:
 
         # task #36：物理移动放后台线程；DB 更新回主线程按结果清单应用
         def _do(progress_cb, is_cancelled):
-            results: list = []  # (file_id, new_abs_path)
+            results: list = []  # (file_id, source_path, new_abs_path)
             errors: list[str] = []
             total = len(files)
             for i, f in enumerate(files):
                 if is_cancelled():
                     break
                 progress_cb(i, total, f"正在处理：{f.label or f.path}")
+                abs_src = f.path
+                dst = target_dir / Path(f.path).name
+                stage = "解析源文件"
                 try:
                     abs_src = self.library.resolve(f.path, f.is_relative)
+                    stage = "检查源文件"
                     if not abs_src.exists():
-                        errors.append(f"{f.path}：文件不存在")
-                        continue
+                        raise FileNotFoundError(f"文件不存在：{abs_src}")
 
                     # 目标路径（同名冲突自动加序号）
                     dst = target_dir / abs_src.name
@@ -1390,43 +1647,61 @@ class FilesPanelMixin:
                         dst = target_dir / f"{abs_src.stem}_{j}{abs_src.suffix}"
                         j += 1
 
+                    stage = "移动物理文件"
                     shutil.move(str(abs_src), str(dst))
-                    results.append((f.id, str(dst.resolve())))
+                    results.append((f.id, str(abs_src), str(dst.resolve())))
                 except Exception as e:
-                    errors.append(f"{f.path}：{e}")
+                    errors.append(_file_operation_error(f, abs_src, dst, stage, e))
             progress_cb(total, total, "")
             return {"results": results, "errors": errors,
                     "cancelled": is_cancelled()}
 
         def _on_done(payload):
             moved = 0
-            for fid, new_abs in payload["results"]:
-                f = self.repo.get_file(fid)
-                if f is None:
-                    continue
-                f.path = new_abs
-                f.is_relative = False  # 移动后都变成外部链接
-                self.repo.update_file(f)
-                moved += 1
+            errors = list(payload["errors"])
+            originals = {f.id: f for f in files}
+            for fid, source, new_abs in payload["results"]:
+                try:
+                    f = self.repo.get_file(fid)
+                    if f is None:
+                        raise LookupError(f"文件记录 {fid} 已不存在")
+                    f.path = new_abs
+                    f.is_relative = False  # 移动后都变成外部链接
+                    self.repo.update_file(f)
+                    moved += 1
+                except Exception as exc:
+                    rollback_note = _rollback_file_update(self.repo)
+                    errors.append(_file_operation_error(
+                        originals[fid], source, new_abs, "写入移动后的文件记录", exc,
+                        outcome=f"物理文件已移动，实际位置：{new_abs}；记录未完成更新，请重关联到此位置。" + rollback_note,
+                    ))
 
-            errors = payload["errors"]
             unhandled = len(files) - moved - len(errors)
             lines = [f"✅ 已移动：{moved} 个"]
             if payload["cancelled"] and unhandled > 0:
                 lines.append(f"⏸ 已取消：{unhandled} 个未处理")
             if errors:
-                lines.append(f"⏭ 跳过：{len(errors)} 个")
-                lines.append("\n错误详情：")
-                lines.extend(f"  • {e}" for e in errors[:10])
+                lines.append(f"⏭ 失败：{len(errors)} 个")
+                lines.extend(f"  • {detail.splitlines()[0]}" for detail in errors[:3])
+                lines.append("完整失败文件列表、实际位置和原因请展开「详细信息」。")
 
-            info(self, "移动完成", "\n".join(lines))
+            info(self, "移动完成", "\n".join(lines), detailed="\n\n".join(errors) or None)
             # 刷新文件表
             self._refresh_files_table()
+
+        def _on_error(msg):
+            details = [_file_operation_error(
+                f, self.library.root / f.path if f.is_relative else f.path,
+                target_dir / Path(f.path).name, "移动文件后台任务", RuntimeError(msg),
+                outcome="批次异常中断，实际位置未确认；已完成的物理移动不会自动回滚，请检查源路径和目标目录。",
+            ) for f in files]
+            warn(self, "移动失败", "后台任务异常中断，请展开详细信息查看本批文件清单及错误。",
+                 detailed="\n\n".join(details))
 
         run_with_progress(
             self, "移动文件", f"{scope_label}：正在移动...", _do,
             on_done=_on_done,
-            on_error=lambda msg: warn(self, "移动失败", msg),
+            on_error=_on_error,
         )
 
 
@@ -1463,7 +1738,12 @@ class FilesPanelMixin:
         try:
             available_files = {p.name: p for p in source_dir.iterdir() if p.is_file()}
         except OSError as e:
-            warn(self, "无法读取目录", str(e))
+            details = [_file_operation_error(
+                f, self.library.resolve(f.path, f.is_relative), source_dir / Path(f.path).name,
+                "读取重关联目录", e,
+            ) for f in files]
+            warn(self, "无法读取目录", f"读取目录失败，{len(files)} 个文件未处理。",
+                 detailed="\n\n".join(details))
             return
 
         # 匹配文件
@@ -1474,13 +1754,17 @@ class FilesPanelMixin:
             if name in available_files:
                 matched.append((f, available_files[name]))
             else:
-                unmatched.append(name)
+                unmatched.append(_file_operation_error(
+                    f, self.library.resolve(f.path, f.is_relative), source_dir / name,
+                    "匹配重关联文件", FileNotFoundError("指定目录下未找到同名文件"),
+                ))
 
         if not matched:
             warn(
                 self, "未找到匹配文件",
                 f"{scope_label}中没有一个文件能在指定目录下找到同名文件。\n\n"
-                "请确认文件是否在选择的目录中。"
+                "请确认文件是否在选择的目录中。",
+                detailed="\n\n".join(unmatched),
             )
             return
 
@@ -1492,6 +1776,7 @@ class FilesPanelMixin:
             + (f"\n  … 等共 {len(matched)} 个" if len(matched) > 5 else "")
             + (f"\n\n未找到：{len(unmatched)} 个" if unmatched else ""),
             yes="重关联",
+            detailed="\n\n".join(unmatched) or None,
         ):
             return
 
@@ -1499,25 +1784,40 @@ class FilesPanelMixin:
         relinked = 0
         errors: list[str] = []
         for f, new_path in matched:
+            old_path, old_relative = f.path, f.is_relative
+            source = self.library.resolve(old_path, old_relative)
+            stage = "解析重关联目标"
             try:
                 f.path = str(new_path.resolve())
                 f.is_relative = False
-                # 清除 missing 标记
-                self.repo.set_file_missing(f.id, False)
+                stage = "写入重关联文件记录"
                 self.repo.update_file(f)
+                # 更新成功后才清除 missing，避免失败记录提前变成正常。
+                stage = "清除文件缺失标记"
+                self.repo.set_file_missing(f.id, False)
                 relinked += 1
             except Exception as e:
-                errors.append(f"{f.path}：{e}")
+                rollback_note = _rollback_file_update(self.repo)
+                f.path, f.is_relative = old_path, old_relative
+                outcome = "物理文件未改动。"
+                if stage == "清除文件缺失标记":
+                    outcome += "目标路径已更新，但缺失标记未完成更新。"
+                errors.append(_file_operation_error(
+                    f, source, new_path, stage, e, outcome=outcome + rollback_note,
+                ))
 
         # 结果反馈
         lines = [f"✅ 已重关联：{relinked} 个"]
         if errors:
             lines.append(f"⏭ 错误：{len(errors)} 个")
-            lines.extend(f"  • {e}" for e in errors[:10])
+        if unmatched:
+            lines.append(f"⏭ 未找到同名文件：{len(unmatched)} 个")
+        if errors or unmatched:
+            lines.append("完整失败及未匹配文件列表请展开「详细信息」。")
 
         info(
             self, "重关联完成",
-            "\n".join(lines)
+            "\n".join(lines), detailed="\n\n".join(errors + unmatched) or None,
         )
 
         # 刷新
@@ -1592,10 +1892,8 @@ class FilesPanelMixin:
             return
         if f.kind == "image":
             # 直接把图片本身设为封面
-            p.cover_file_id = fid
-            self.repo.save_project(p)
-            self.refresh_projects()
-            self._select_project_by_id(p.id)  # type: ignore[arg-type]
+            if self._apply_project_cover(p, fid):
+                self.statusBar().showMessage("已设为封面", 4000)
             return
         # 非图片：尝试截取当前预览画面
         pix = self.preview.capture_pixmap() if hasattr(self, "preview") else None
@@ -1608,13 +1906,58 @@ class FilesPanelMixin:
         try:
             cover_fid = self._save_cover_snapshot(p, pix, source_kind=f.kind)
         except Exception as e:
-            warn(self, "失败", f"保存封面失败：{e}")
+            logging.getLogger(__name__).exception("保存封面快照失败")
+            warn(self, "保存封面失败", "未能保存新封面，详细信息中包含失败阶段和回滚结果。", detailed=str(e))
             return
-        p.cover_file_id = cover_fid
-        self.repo.save_project(p)
-        self.refresh_projects()
-        self._select_project_by_id(p.id)  # type: ignore[arg-type]
-        self.statusBar().showMessage("已截取当前画面并设为封面", 4000)
+        if self._apply_project_cover(p, cover_fid, new_snapshot=True):
+            self.statusBar().showMessage("已截取当前画面并设为封面", 4000)
+
+
+    def _apply_project_cover(self, project: Project, cover_fid: int,
+                             *, new_snapshot: bool = False) -> bool:
+        """统一图片、截图和剪切板入口，并将清理问题集中报告一次。"""
+        from ..cover_files import CoverFileError, discard_cover_snapshot, replace_project_cover
+        try:
+            cleanup_warnings = replace_project_cover(self.repo, self.library, project, cover_fid)
+        except Exception as exc:
+            logging.getLogger(__name__).exception("保存项目封面失败")
+            snapshot = None
+            details = [str(exc)] if isinstance(exc, CoverFileError) else [
+                f"文件/记录 ID：{cover_fid}\n源路径/目标路径：（新封面路径未能读取）\n"
+                f"失败阶段：设置项目 {project.id} 的封面\n原因：{type(exc).__name__}: {exc}\n"
+                "处理结果：设置未完成，旧封面清理状态需查看后续信息。"
+            ]
+            if new_snapshot and not (isinstance(exc, CoverFileError) and exc.rollback_failed):
+                try:
+                    snapshot = self.repo.get_file(cover_fid)
+                    if snapshot is not None:
+                        failures = discard_cover_snapshot(self.repo, self.library, snapshot)
+                        details.extend(failures or ["回滚结果：本次未使用的新封面已回收，文件记录已移除。"])
+                except Exception as cleanup_exc:
+                    logging.getLogger(__name__).exception("清理未使用的新封面失败")
+                    actual_path = str(self.library.resolve(snapshot.path, snapshot.is_relative)) if snapshot else "（新封面路径未能读取）"
+                    details.append(
+                        f"文件/记录 ID：{cover_fid}\n源路径/目标路径：{actual_path}\n"
+                        f"失败阶段：清理未使用的新封面\n原因：{type(cleanup_exc).__name__}: {cleanup_exc}\n"
+                        f"处理结果：无法确认清理状态；实际保留位置需核实：{actual_path}"
+                    )
+            warn(self, "保存封面失败", "未能完成新封面设置，详细信息中包含失败阶段和回滚结果。",
+                 detailed="\n\n".join(details))
+            return False
+        self._refresh_cover_without_preview_reset(project)
+        if cleanup_warnings:
+            warn(self, "封面已设置，旧封面清理未完成",
+                 "新封面已成功设置；旧封面未能全部清理，请查看详细信息。",
+                 detailed="\n\n".join(cleanup_warnings))
+        return True
+
+
+    def _refresh_cover_without_preview_reset(self, project: Project) -> None:
+        """只刷新封面和文件清单，保留当前选择、视频/PDF 的预览状态。"""
+        self.proj_model.update_project(
+            project, self._cover_pix(project), len(self.repo.list_files(project.id)),
+        )
+        self._show_project(project, preserve_preview=True)
 
 
     def action_set_cover_from_clipboard(self) -> None:
@@ -1657,50 +2000,17 @@ class FilesPanelMixin:
         try:
             cover_fid = self._save_cover_snapshot(p, pix, source_kind="clipboard")
         except Exception as e:
-            warn(self, "失败", f"保存封面失败：{e}")
+            logging.getLogger(__name__).exception("保存剪切板封面快照失败")
+            warn(self, "保存封面失败", "未能保存新封面，详细信息中包含失败阶段和回滚结果。", detailed=str(e))
             return
-        p.cover_file_id = cover_fid
-        self.repo.save_project(p)
-        self.refresh_projects()
-        self._select_project_by_id(p.id)  # type: ignore[arg-type]
-        self.statusBar().showMessage("已从剪切板设置封面", 4000)
+        if self._apply_project_cover(p, cover_fid, new_snapshot=True):
+            self.statusBar().showMessage("已从剪切板设置封面", 4000)
 
 
-    def _save_cover_snapshot(self, p, pix, source_kind: str) -> int:
-        """把 QPixmap 落地到项目仓库目录作为 png，并写入 files 表。
-        返回新建 file 的 id。
-        source_kind: 'pdf' / 'video' / 'image' / 'clipboard' …
-        """
-        from datetime import datetime as _dt
-        if p.id is None:
-            raise RuntimeError("项目尚未保存")
-        # 落到 project_dir 下；不论项目原本是 link 还是 copy 模式，
-        # 截图都是衍生物，统一放仓库
-        target_dir = self.library.project_dir(int(p.id))
-        ts = _dt.now().strftime("%Y%m%d_%H%M%S")
-        fname = f"__cover_{ts}.png"
-        full = target_dir / fname
-        if not pix.save(str(full), "PNG"):
-            raise RuntimeError("QPixmap.save 失败")
-        rel = f"project_{int(p.id)}/{fname}"
-        # 标签按来源区分
-        label_map = {
-            "clipboard": "封面（来自剪切板）",
-            "pdf": "封面（截取自 PDF）",
-            "video": "封面（截取自视频）",
-        }
-        label = label_map.get(source_kind, f"封面（{source_kind}）")
-        from ..models import FileItem
-        fi = FileItem(
-            project_id=int(p.id),
-            path=rel,
-            is_relative=True,
-            label=label,
-            kind="image",
-            origin="generated",  # task #30：封面快照是软件衍生物
-        )
-        new_fid = self.repo.add_file(fi)
-        return new_fid
+    def _save_cover_snapshot(self, p: Project, pix: QPixmap, source_kind: str) -> int:
+        """落盘并登记新快照，失败时回滚本次生成物。"""
+        from ..cover_files import save_cover_snapshot
+        return save_cover_snapshot(self.repo, self.library, p, pix, source_kind)
 
 
     def action_new_subfolder(self) -> None:
@@ -1799,21 +2109,37 @@ class FilesPanelMixin:
 
         new_abs = old_abs.with_name(new_name)
         if new_abs.exists():
-            warn(self, "已存在", f"目标文件已存在：\n{new_abs}")
+            detail = _file_operation_error(f, old_abs, new_abs, "检查重命名目标", FileExistsError("目标文件已存在"))
+            warn(self, "已存在", f"目标文件已存在：\n{new_abs}", detailed=detail)
             return
         if not old_abs.exists():
-            warn(self, "文件不存在", f"原文件不存在：\n{old_abs}")
+            detail = _file_operation_error(f, old_abs, new_abs, "检查重命名源文件", FileNotFoundError("原文件不存在"))
+            warn(self, "文件不存在", f"原文件不存在：\n{old_abs}", detailed=detail)
             return
 
+        old_path, old_relative = f.path, f.is_relative
+        renamed = False
+        stage = "重命名物理文件"
         try:
             old_abs.rename(new_abs)
+            renamed = True
+            stage = "写入重命名后的文件记录"
             if f.is_relative:
                 f.path = (Path(f.path).parent / new_name).as_posix()
             else:
                 f.path = str(new_abs.resolve())
             self.repo.update_file(f)
-        except OSError as e:
-            warn(self, "重命名失败", str(e))
+        except Exception as e:
+            rollback_note = _rollback_file_update(self.repo) if renamed else ""
+            f.path, f.is_relative = old_path, old_relative
+            outcome = (
+                f"物理文件已重命名，实际位置：{new_abs}；记录未完成更新，请重关联到此位置。"
+                if renamed else "物理重命名未完成，请检查源路径和目标路径。"
+            )
+            detail = _file_operation_error(f, old_abs, new_abs, stage, e, outcome=outcome + rollback_note)
+            warn(self, "重命名失败", outcome, detailed=detail)
+            if renamed:
+                self._refresh_files_table()
             return
 
         self._refresh_files_table()
@@ -1911,7 +2237,8 @@ class FilesPanelMixin:
         if not selected_ids:
             return
         if target_file_id in selected_ids:
-            target_file_id = None
+            # 落回所选文件自身不是移动，不能把它解释为追加到目录末尾。
+            return
 
         target_subfolder = (target_subfolder or "").strip("/")
         selected_files = [self.repo.get_file(fid) for fid in selected_ids]
@@ -1923,6 +2250,41 @@ class FilesPanelMixin:
             return
 
         source_subfolders = {f.subfolder or "" for f in selected_files}
+        cross_folder = source_subfolders != {target_subfolder}
+        if not cross_folder and target_file_id is None:
+            # 已在该目录，落到目录/空白处不改变当前排序。
+            return
+
+        all_files = self.repo.list_files(pid)
+        by_id = {f.id: f for f in all_files}
+        target_file = by_id.get(target_file_id)
+        if target_file_id is not None and (target_file is None or target_file.subfolder != target_subfolder):
+            return
+
+        if not cross_folder:
+            # 手工插入时从屏幕上的顺序开始；不能退回旧导入 ord，连带打乱其他目录。
+            displayed_ids = [int(item.data(0, Qt.UserRole)) for item in self._preview_file_items()]
+            selected_set = {f.id for f in selected_files}
+            sibling_ids = [fid for fid in displayed_ids if by_id[fid].subfolder == target_subfolder]
+            selected_order = [fid for fid in sibling_ids if fid in selected_set]
+            remaining = [fid for fid in sibling_ids if fid not in selected_set]
+            if target_file_id not in remaining or len(selected_order) != len(selected_set):
+                return
+            insert_at = remaining.index(target_file_id) + (0 if before else 1)
+            reordered = remaining[:insert_at] + selected_order + remaining[insert_at:]
+            if reordered == sibling_ids:
+                return
+            # 切换项目级自定义顺序前，将所有可见目录的当前顺序作为基线保存。
+            # 隐藏项保留原有相对次序，不在拖动时丢失记录。
+            visible = set(displayed_ids)
+            baseline = displayed_ids + [f.id for f in all_files if f.id not in visible]
+            self.repo.reorder_files(baseline)
+            self.repo.reorder_files(reordered)
+            self._set_tree_sort_state("custom", False)
+            self._refresh_files_table()
+            self.statusBar().showMessage("已调整文件顺序；点击“文件名”表头可恢复自然排序", 4000)
+            return
+
         for f in selected_files:
             if f.subfolder != target_subfolder and f.id is not None:
                 self.repo.set_file_subfolder(f.id, target_subfolder)
@@ -1957,7 +2319,7 @@ class FilesPanelMixin:
             remaining.sort(key=lambda f: (f.ord, f.id or 0))
             self.repo.reorder_files([int(f.id) for f in remaining])
 
-        self._set_tree_sort_state("custom", False)
+        # 跨目录只修改归属；保留名称/类型等列排序，不将全项目切回导入顺序。
         self._refresh_files_table()
         self.statusBar().showMessage(
             f"已移动 {len(selected_files)} 个文件到「{target_subfolder or '顶层'}」",
@@ -1983,7 +2345,12 @@ class FilesPanelMixin:
             menu.exec(self.tbl_files.viewport().mapToGlobal(pos))
             return
 
-        self.tbl_files.setCurrentItem(item)
+        # 对已选中文件打开菜单时保留多选，批量转换等操作才能覆盖完整选择。
+        selection_command = (
+            QItemSelectionModel.NoUpdate if item.isSelected()
+            else QItemSelectionModel.ClearAndSelect | QItemSelectionModel.Rows
+        )
+        self.tbl_files.setCurrentItem(item, 0, selection_command)
         fid = item.data(0, Qt.UserRole)
         if fid is None or fid <= 0:
             # 右键在目录节点上 → 可新建子文件夹
@@ -2023,6 +2390,9 @@ class FilesPanelMixin:
         menu = QMenu(self)
         menu.addAction("▶  打开", self.action_open_current_file)
         menu.addAction("📂  在资源管理器中显示", self.action_reveal_current_file)
+        current_file = self.repo.get_file(fid)
+        if current_file is not None and detect_kind(current_file.path) == "archive":
+            menu.addAction("🗜  解压到当前项目…", self.action_extract_archive)
         menu.addSeparator()
         menu.addAction("🖼  设为封面", self.action_set_cover)
         menu.addSeparator()

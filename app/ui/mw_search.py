@@ -44,7 +44,11 @@ from PySide6.QtWidgets import (
 
 from ..models import FileItem, Project
 from ..repository import Repository
-from ..search import combine_and, field_term, parse_search
+from ..search import SearchNode, parse_search
+from ..search_filters import (
+    combine_tag_filter, file_selection, format_search, quote_value, replace_filter,
+    tag_selection, tag_states,
+)
 from ..search_history import (
     HISTORY_SETTING_KEY,
     SAVED_SEARCHES_SETTING_KEY,
@@ -95,24 +99,127 @@ logger = logging.getLogger("llm_cabinet.ui")
 class SearchMixin:
     """搜索框行为：补全、历史/收藏菜单、保存搜索"""
 
+    def _set_filter_query(self, node: SearchNode | None) -> None:
+        """侧栏生成完整表达式，只刷新一次，不弹补全或留下防抖搜索。"""
+        self._search_timer.stop()
+        self._setting_filter_query = True
+        try:
+            # 保留 textChanged：QLineEdit 的内置清空按钮也依赖它同步显隐。
+            self.search_box.setText(format_search(node))
+        finally:
+            self._setting_filter_query = False
+            self._search_timer.stop()
+        self._completion.hide()
+        self._refresh_filtered_projects()
+
+    def _replace_sidebar_query(self, group: str, node: SearchNode | None) -> None:
+        parsed = parse_search(self.search_box.text().strip())
+        if not parsed.ok:
+            self.statusBar().showMessage("请先修正搜索表达式，再切换侧栏筛选；也可点击“全库”清除。", 5000)
+            self._sync_sidebar_query(getattr(self, "_last_filter_ast", None))
+            return
+        self._set_filter_query(replace_filter(parsed.ast, group, node))
+
+    def _on_file_type_filter_changed(self) -> None:
+        self._replace_sidebar_query("file", self.file_type_filter.search_node())
+
+    def _on_tag_filter_combined(self, kind: str, value: str, mode: str) -> None:
+        """只在左侧标签的明确修饰激活时组合，项目标签按钮仍单项定位。"""
+        parsed = parse_search(self.search_box.text().strip())
+        if not parsed.ok:
+            self.statusBar().showMessage("请先修正搜索表达式，再组合标签筛选。", 5000)
+            self._sync_sidebar_query(getattr(self, "_last_filter_ast", None))
+            return
+        self._set_filter_query(combine_tag_filter(parsed.ast, kind, value, mode))
+
+    def _sync_sidebar_query(self, node: SearchNode | None) -> None:
+        """从完整表达式投影控件状态；阻断信号，避免双向联动递归。"""
+        kind, value = tag_selection(node)
+        self._current_filter_kind, self._current_filter_value = kind, value
+        tree = self.tag_tree
+        blocked = tree.blockSignals(True)
+        try:
+            item = tree._find_item_by_kind_value(kind.removeprefix("not_"), value)
+            # 匹配完整查询才高亮自定义项；同表达式多名称时保留本次点中的名称。
+            current_kind, current_value = tree.current_filter()
+            saved_items = sorted(tree.saved_searches,
+                                 key=lambda saved: saved["name"] != current_value if current_kind == "saved_search" else False)
+            for saved in saved_items:
+                parsed = parse_search(saved["query"])
+                if node is not None and parsed.ok and parsed.ast == node:
+                    item = tree._find_item_by_kind_value("saved_search", saved["name"])
+                    break
+            tree.sync_filter_state(kind, value, tag_states(node))
+            tree.clearSelection()
+            tree.setCurrentItem(item)
+            if item is not None:
+                item.setSelected(True)
+        finally:
+            tree.blockSignals(blocked)
+        selected, mode = file_selection(node)
+        blocked = self.file_type_filter.blockSignals(True)
+        try:
+            self.file_type_filter.set_selected_kinds(selected)
+            if len(selected) > 1:
+                self.file_type_filter.set_match_mode(mode)
+        finally:
+            self.file_type_filter.blockSignals(blocked)
+
     def _update_search_completion(self, _text: str = "") -> None:
         """根据当前输入计算补全候选（字段语法 / 标签值 / 历史收藏）。
 
         不做 hasFocus 判断（offscreen 自检/某些平台焦点时序不可靠）；
         弹出后由 FocusOut / Esc / 选中候选 / 外部显式 hide 关闭。
         """
+        if getattr(self, "_setting_filter_query", False):
+            return
         text = self.search_box.text()
         cursor = self.search_box.cursorPosition()
         _start, token = current_token(text, cursor)
         low = token.lower()
 
+        if low.startswith(("hidden:", "hidden=")):
+            prefix = low[len("hidden:"):].strip('"\'')
+            items = [(f"hidden:{value}    {label}", f"hidden:{value}", "token")
+                     for value, label in (("true", "仅隐藏项目"), ("false", "仅未隐藏项目（默认）"),
+                                          ("all", "包含隐藏和未隐藏项目"))
+                     if value.startswith(prefix)]
+            self._completion.show_candidates(self.search_box, [("项目隐藏范围", items)])
+            return
+
+        if low.startswith(("ext:", "ext=")):
+            prefix = low[4:].strip('"\'').removeprefix(".")
+            items = [(f"ext:{value}    {label}", f"ext:{value}", "token")
+                     for value, label in (("mp4", "MP4 文件"), ("webp", "WebP 图片"),
+                                          ("gif", "GIF 图片"), ("jpg", "JPEG 图片"),
+                                          ("png", "PNG 图片"), ("zip", "ZIP 压缩包"))
+                     if value.startswith(prefix)]
+            self._completion.show_candidates(self.search_box, [("文件扩展名", items)])
+            return
+
+        if low.startswith("favorite:"):
+            items = [(f"favorite:{value}    {label}", f"favorite:{value}", "token")
+                     for value, label in (("true", "已收藏项目"), ("false", "未收藏项目"))
+                     if value.startswith(low[len("favorite:"):])]
+            self._completion.show_candidates(self.search_box, [("项目收藏", items)])
+            return
+
+        # 内置文件类型条件：补全完整表达式，可直接收藏或组合 AND/OR/NOT。
+        if low.startswith("has:"):
+            items = [(f"has:{value}    {label}", f"has:{value}", "token")
+                     for value, label in (("video", "有视频"), ("archive", "有压缩包"),
+                                          ("external", "有外部链接文件"))
+                     if value.startswith(low[4:])]
+            self._completion.show_candidates(self.search_box, [("文件类型", items)])
+            return
+
         # 1) tag: 语境 → 标签值候选
-        if low.startswith("tag:"):
-            prefix = token[4:]
+        if low.startswith(("tag:", "tag=")):
+            prefix = token[4:].strip('"\'')
             items: list[tuple[str, str, str]] = []
             for name, cnt in self.repo.tag_counts():
                 if not prefix or prefix.lower() in name.lower():
-                    items.append((f"#{name}    ({cnt})", f"tag:{name}", "token"))
+                    items.append((f"#{name}    ({cnt})", f"tag={quote_value(name)}", "token"))
                 if len(items) >= 8:
                     break
             self._completion.show_candidates(self.search_box, [("标签", items)])
@@ -136,6 +243,22 @@ class SearchMixin:
 
         # 3) 字段语法候选（按 token 前缀过滤）
         field_items: list[tuple[str, str, str]] = []
+        if not token or "ext".startswith(low):
+            field_items.append(("ext:    按文件扩展名筛选", "ext:", "token"))
+        if not token or "favorite".startswith(low):
+            field_items.append(("favorite:true    已收藏项目", "favorite:true", "token"))
+        if not token or "hidden".startswith(low):
+            field_items.extend([
+                ("hidden:true    仅隐藏项目", "hidden:true", "token"),
+                ("hidden:false    仅未隐藏项目（默认）", "hidden:false", "token"),
+                ("hidden:all    包含隐藏和未隐藏项目", "hidden:all", "token"),
+            ])
+        if not token or "has".startswith(low):
+            field_items.extend([
+                ("has:video    有视频", "has:video", "token"),
+                ("has:archive    有压缩包", "has:archive", "token"),
+                ("has:external    有外部链接文件", "has:external", "token"),
+            ])
         if not token or "tag".startswith(low):
             field_items.append(("tag:    按标签筛选", "tag:", "token"))
         for f in all_fields:
@@ -270,6 +393,7 @@ class SearchMixin:
     def _delete_saved_search(self, name: str) -> None:
         raw = self.repo.get_setting(SAVED_SEARCHES_SETTING_KEY, "[]")
         self.repo.set_setting(SAVED_SEARCHES_SETTING_KEY, remove_saved_search(raw, name))
+        self._refresh_tag_tree()
         self.statusBar().showMessage(f"已删除收藏「{name}」", 3000)
 
 
@@ -309,5 +433,6 @@ class SearchMixin:
                 return
         new_raw, overwritten = upsert_saved_search(raw, name, query)
         self.repo.set_setting(SAVED_SEARCHES_SETTING_KEY, new_raw)
+        self._refresh_tag_tree()
         action = "已覆盖收藏" if overwritten else "已收藏搜索"
         self.statusBar().showMessage(f"{action}「{name}」", 3000)

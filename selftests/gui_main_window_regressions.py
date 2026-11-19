@@ -2,7 +2,7 @@
 
 这组测试故意实例化 PySide6 控件，覆盖普通数据层 selftest 测不到的交互状态：
 - 搜索框 FocusIn 不再弹菜单（task #38），输入触发补全下拉，Esc 优先关补全
-- “全库”搜索应忽略左侧筛选
+- “全库”按钮一次清空查询和侧栏筛选
 - GUI 搜索路径应命中自定义字段值和文件说明
 - 项目右键菜单应固定本次右键目标，MCP 已读不能清错项目
 - MCP 未读筛选清除后应刷新列表
@@ -181,7 +181,7 @@ def test_search_completion_replaces_focus_menu(tmp: Path, t: T) -> None:
             _close_window(win)
 
 
-def test_search_all_toggle_ignores_sidebar_filter(tmp: Path, t: T) -> None:
+def test_search_all_action_clears_query_and_sidebar(tmp: Path, t: T) -> None:
     repo = Repository(connect(tmp / "cabinet.db"))
     with closing_repos(repo):
         _save_project(repo, "三体 设定集", ["领域/科幻"])
@@ -191,20 +191,16 @@ def test_search_all_toggle_ignores_sidebar_filter(tmp: Path, t: T) -> None:
         try:
             win.search_box.setText("三体")
             win._search_timer.stop()
-            win._current_filter_kind = "tag"
-            win._current_filter_value = "领域/科幻"
-            win.btn_search_all.setChecked(False)
-            win.refresh_projects()
+            win._on_tag_filter_changed("tag", "领域/科幻")
             t.assert_eq(
                 "keyword combines with sidebar filter",
                 _titles(win),
                 {"三体 设定集"},
             )
 
-            win.btn_search_all.setChecked(True)
-            win.refresh_projects()
+            win.btn_search_all.click()
             t.assert_eq(
-                "search all ignores sidebar filter",
+                "search all clears query and sidebar filter",
                 _titles(win),
                 {"三体 设定集", "三体 厨房笔记"},
             )
@@ -346,9 +342,7 @@ def test_table_context_targets_and_mcp_filter_refresh(tmp: Path, t: T) -> None:
             target = win._project_context_target_ids(win.proj_table, idx3)
             t.assert_eq("table right click unselected row targets clicked project only", target, [pid3])
 
-            win._current_filter_kind = "mcp"
-            win._current_filter_value = ""
-            win.refresh_projects()
+            win._on_tag_filter_changed("mcp", "")
             t.assert_eq("mcp filter initially shows unread projects", _titles(win), {"列表 P1", "列表 P2", "列表 P3"})
             win._on_mark_mcp_seen([pid3])
             t.assert_eq("mcp filter refresh removes cleared project", _titles(win), {"列表 P1", "列表 P2"})
@@ -583,7 +577,7 @@ def main() -> bool:
         root = Path(d)
         tests = [
             ("Search completion replaces focus menu", test_search_completion_replaces_focus_menu),
-            ("Search all toggle", test_search_all_toggle_ignores_sidebar_filter),
+            ("Search all clear action", test_search_all_action_clears_query_and_sidebar),
             ("Search toolbar button grouping", test_search_toolbar_buttons_are_grouped),
             ("GUI broad keyword search", test_gui_keyword_searches_fields_and_files),
             ("MCP seen context targets", test_mcp_seen_context_targets),

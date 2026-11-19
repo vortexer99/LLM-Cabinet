@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSpinBox,
+    QStyle,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -34,6 +35,26 @@ from ..models import Field, FieldSuggestion, Project
 from ..repository import Repository
 from .dialogs import warn
 from .widgets import StarRating
+from .web_links import open_web_url, web_url
+
+
+class _UrlEditor(QLineEdit):
+    """保留文本编辑和建议填入能力，并提供独立的打开链接按钮。"""
+
+    def __init__(self, value: str = "", parent: QWidget | None = None) -> None:
+        super().__init__(value, parent)
+        self.setPlaceholderText("https://…")
+        self._open_action = self.addAction(
+            self.style().standardIcon(QStyle.SP_ArrowForward), QLineEdit.TrailingPosition,
+        )
+        self._open_action.setText("打开链接")
+        self._open_action.setToolTip("在默认浏览器中打开链接（无需保存）")
+        self._open_action.triggered.connect(lambda: open_web_url(self, self.text()))
+        self.textChanged.connect(self._update_open_action)
+        self._update_open_action(value)
+
+    def _update_open_action(self, value: str) -> None:
+        self._open_action.setEnabled(web_url(value) is not None)
 
 
 # =============================================================================
@@ -262,9 +283,7 @@ class ProjectDialog(QDialog):
                 w.setValue(0)
             return w
         if t == "url":
-            w = QLineEdit(value or "")
-            w.setPlaceholderText("https://…")
-            return w
+            return _UrlEditor(value or "")
         return QLineEdit(value or "")
 
     def _read_editor(self, f: Field, w: QWidget) -> str:

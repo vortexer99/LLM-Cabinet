@@ -87,6 +87,7 @@ from .project_card import (
 from .project_dialog import ProjectDialog
 from .search_completion import SearchBoxKeyFilter, SearchCompletionPopup, current_token
 from .settings import SettingsDialog
+from .storage_cleanup import recycle_sources_with_progress
 from .workers import ExportSnapshotRepo, run_with_progress
 
 logger = logging.getLogger("llm_cabinet.ui")
@@ -370,7 +371,10 @@ class DnDMixin:
         from .import_dialog import FieldPolicyAskDialog, ImportDialog
 
         plans = scan_folders([_Path(d) for d in dirs], self.repo)
-        dlg = ImportDialog(plans, parent=self)
+        dlg = ImportDialog(
+            plans, parent=self,
+            recycle_source=self.repo.get_setting("storage_recycle_source", "0") == "1",
+        )
         if dlg.exec() != QDialog.Accepted:
             cleanup_extracted_zips(plans)
             return
@@ -430,12 +434,14 @@ class DnDMixin:
                 n_ok = 0
                 n_files_total = 0
                 last_pid: int | None = None
+                cleanup_candidates: list = []
                 for plan, project, w in prepared_projects:
                     all_warnings.extend(f"[{plan.folder.name}] {x}" for x in w)
                     if project.id in results:
                         prep, pw = results[project.id]
                         n = write_import_file_rows(
-                            self.repo, project, plan, prep, pw,
+                            self.repo, project, plan, prep, pw, library=self.library,
+                            cleanup_candidates=cleanup_candidates,
                         )
                         all_warnings.extend(f"[{plan.folder.name}] {x}" for x in pw)
                         n_ok += 1
@@ -445,6 +451,9 @@ class DnDMixin:
                         # 取消时没轮到的项目：删掉刚建的空项目行（= 未导入）
                         self.repo.delete_project(project.id)
 
+                all_warnings.extend(recycle_sources_with_progress(
+                    self, self.repo, self.library, cleanup_candidates,
+                ))
                 self.refresh_projects()
                 if last_pid is not None:
                     self._select_project_by_id(last_pid)
@@ -586,6 +595,13 @@ class DnDMixin:
         pid = self.repo.save_project(p)
         p.id = pid
         added = self._import_files(p, files, ask_label=False, storage=storage)
+        # 拖放合并新项目与文件夹/ZIP 导入使用同一库级封面策略。
+        from ..import_preferences import apply_import_auto_cover
+        try:
+            apply_import_auto_cover(self.repo, p, self.library)
+        except Exception as exc:
+            logging.exception("导入新项目后自动设置封面失败")
+            warn(self, "自动封面失败", f"项目和文件已导入，但封面未能设置：{exc}")
         self.refresh_projects()
         self._select_project_by_id(pid)
         self.statusBar().showMessage(

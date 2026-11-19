@@ -2,15 +2,22 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from typing import Iterable, Optional
 
 from .models import Field, FieldSuggestion, FileItem, LLMTask, PendingFile, Project
+from .project_sizes import SIZE_SETTING_KEY, ProjectSize, records_fingerprint
 from .search import AndNode, NotNode, OrNode, SearchNode, TermNode
+from .utils import ARCHIVE_EXTS, VIDEO_EXTS
 
 
 class Repository:
     def __init__(self, conn: sqlite3.Connection):
         self.conn = conn
+
+    def change_token(self) -> tuple[int, int]:
+        """轻量检测本连接写入及其他连接提交，用于界面刷新失效判断。"""
+        return self.conn.total_changes, int(self.conn.execute("PRAGMA data_version").fetchone()[0])
 
     # ------------------------------------------------------------------ projects
     def _attach_project_extras(self, projects: list[Project]) -> list[Project]:
@@ -101,16 +108,46 @@ class Repository:
         解析器只负责把字符串变成 AST；这里负责字段解析与参数化 SQL。
         所有标签条件都用 EXISTS，保证 ``tag:A AND tag:B`` 能匹配同时拥有
         两个标签的项目。
+        默认排除隐藏项目；表达式任意位置显式使用有效 hidden 条件时，
+        按完整表达式查询全库，保留 OR / NOT 的原有语义。
         """
         sql = "SELECT p.* FROM projects p"
         params: list = []
+        conditions: list[str] = []
         if ast is not None:
             where, params = self._compile_search_node(ast)
-            sql += f" WHERE {where}"
+            conditions.append(f"({where})")
+        if not self._has_hidden_search_term(ast):
+            conditions.append(f"NOT ({self._project_hidden_condition()})")
+        if conditions:
+            sql += " WHERE " + " AND ".join(conditions)
         sql += " ORDER BY p.updated_at DESC, p.id DESC"
         rows = self.conn.execute(sql, params).fetchall()
         return self._attach_project_extras(
             [self._row_to_project(r) for r in rows]
+        )
+
+    @staticmethod
+    def _project_hidden_condition() -> str:
+        """返回项目别名 p 的隐藏条件，只依赖本库元数据。"""
+        return (
+            "EXISTS (SELECT 1 FROM project_settings ps_hidden"
+            " WHERE ps_hidden.project_id=p.id"
+            " AND ps_hidden.key='project_hidden' AND ps_hidden.value='1')"
+        )
+
+    @classmethod
+    def _has_hidden_search_term(cls, node: SearchNode | None) -> bool:
+        """只让有效的显式 hidden 条件放宽默认可见范围。"""
+        if isinstance(node, (AndNode, OrNode)):
+            return any(cls._has_hidden_search_term(item) for item in node.items)
+        if isinstance(node, NotNode):
+            return cls._has_hidden_search_term(node.item)
+        return (
+            isinstance(node, TermNode)
+            and (node.field or "").strip().casefold() == "hidden"
+            and node.op in {":", "="}
+            and (node.value or "").strip().casefold() in {"true", "false", "1", "0", "all"}
         )
 
     def _compile_search_node(self, node: SearchNode) -> tuple[str, list]:
@@ -185,10 +222,50 @@ class Repository:
                 " SELECT 1 FROM project_tags pt WHERE pt.project_id = p.id"
                 ")"
             ), []
+        if kind in {"untagged", "review", "mcp"}:
+            if term.op not in {":", "="} or value.casefold() not in {"true", "false", "1", "0"}:
+                return "1=0", []
+            condition = {
+                "untagged": "NOT EXISTS (SELECT 1 FROM project_tags pt WHERE pt.project_id=p.id)",
+                "review": "EXISTS (SELECT 1 FROM project_field_suggestions s WHERE s.project_id=p.id AND s.status='pending')",
+                "mcp": "p.mcp_modified_at IS NOT NULL",
+            }[kind]
+            return (condition if value.casefold() in {"true", "1"} else f"NOT ({condition})"), []
         if kind == "tag":
             return self._compile_tag_search(term.op, value, prefix=False)
         if kind == "tag_prefix":
             return self._compile_tag_search(":", value, prefix=True)
+        if kind == "has_file_type":
+            return self._compile_file_type_search(term.op, value)
+        if kind == "file_extension":
+            # 按登记路径末尾精确匹配，不读取文件；点号可省略，大小写不敏感。
+            extension = value.lower().removeprefix(".")
+            if term.op not in {":", "="} or not extension or any(
+                char in extension for char in "/\\\x00"
+            ):
+                return "1=0", []
+            suffix = "." + extension
+            return (
+                "EXISTS (SELECT 1 FROM files f_ext WHERE f_ext.project_id=p.id "
+                "AND substr(lower(f_ext.path), -?)=?)"
+            ), [len(suffix), suffix]
+        if kind == "hidden":
+            folded = value.casefold()
+            if term.op not in {":", "="} or folded not in {"true", "false", "1", "0", "all"}:
+                return "1=0", []
+            if folded == "all":
+                return "1=1", []
+            condition = self._project_hidden_condition()
+            return (condition if folded in {"true", "1"} else f"NOT ({condition})"), []
+        if kind == "favorite":
+            if term.op not in {":", "="} or value.casefold() not in {"true", "false", "1", "0"}:
+                return "1=0", []
+            exists = (
+                "EXISTS (SELECT 1 FROM project_settings ps_favorite"
+                " WHERE ps_favorite.project_id = p.id AND ps_favorite.key = ?"
+                " AND ps_favorite.value = ?)"
+            )
+            return (exists if value.casefold() in {"true", "1"} else f"NOT ({exists})"), ["project_favorite", "1"]
         if kind == "project":
             return self._compile_project_column_search(field["column"], term.op, value)
         if kind == "field":
@@ -210,6 +287,14 @@ class Repository:
             "description": {"kind": "project", "column": "description_md", "type": "textarea"},
             "tag": {"kind": "tag"},
             "tags": {"kind": "tag"},
+            "has": {"kind": "has_file_type"},
+            "ext": {"kind": "file_extension"},
+            "favorite": {"kind": "favorite"},
+            "hidden": {"kind": "hidden"},
+            "tag_prefix": {"kind": "tag_prefix"},
+            "untagged": {"kind": "untagged"},
+            "review": {"kind": "review"},
+            "mcp": {"kind": "mcp"},
             # 下面是 UI/后端组合左侧筛选用的内部字段，不暴露给用户文档。
             "__tag_prefix": {"kind": "tag_prefix"},
             "__untagged": {"kind": "internal_untagged"},
@@ -238,6 +323,37 @@ class Repository:
                 return {"kind": "field", "field_id": f.id, "type": f.type}
         return {"kind": "unknown"}
 
+    @staticmethod
+    def _compile_file_type_search(op: str, value: str) -> tuple[str, list]:
+        """按登记类型搜索，兼容旧 other 记录的路径后缀，不访问磁盘或改写数据。"""
+        if op not in {":", "="}:
+            return "1=0", []
+        if value.casefold() in {"external", "外部链接"}:
+            # 按文件实际存储模式判断，项目默认模式与来源网址均不能代表外部文件。
+            return (
+                "EXISTS (SELECT 1 FROM files f_has"
+                " WHERE f_has.project_id = p.id AND f_has.is_relative = ?)"
+            ), [0]
+        kinds = {"video": "video", "视频": "video", "archive": "archive", "压缩包": "archive"}
+        kind = kinds.get(value.casefold())
+        if kind is None:
+            return "1=0", []
+        extensions = VIDEO_EXTS if kind == "video" else ARCHIVE_EXTS
+        suffix_parts: list[str] = []
+        params: list = [kind, "other"]
+        for extension in sorted(extensions):
+            suffix_parts.append("substr(lower(f_has.path), -?) = ?")
+            params.extend((len(extension), extension))
+        suffix_sql = " OR ".join(suffix_parts) or "1=0"
+        return (
+            "EXISTS ("
+            " SELECT 1 FROM files f_has"
+            " WHERE f_has.project_id = p.id"
+            " AND (f_has.kind = ? OR (f_has.kind = ?"
+            f" AND ({suffix_sql})))"
+            ")"
+        ), params
+
     def _compile_project_column_search(
         self, column: str, op: str, value: str,
     ) -> tuple[str, list]:
@@ -258,9 +374,9 @@ class Repository:
                 " SELECT 1 FROM project_tags pt"
                 " JOIN tags t ON t.id = pt.tag_id"
                 " WHERE pt.project_id = p.id"
-                " AND (t.name = ? OR t.name LIKE ?)"
+                " AND (t.name = ? OR t.name LIKE ? ESCAPE '\\')"
                 ")"
-            ), [value, f"{value}/%"]
+            ), [value, value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"]
         if op == ":":
             cmp_sql = "t.name LIKE ?"
             params = [f"%{value}%"]
@@ -387,6 +503,47 @@ class Repository:
 
     def count_projects_total(self) -> int:
         return self.conn.execute("SELECT COUNT(*) AS c FROM projects").fetchone()["c"]
+
+    def visible_tag_counts(self) -> list[tuple[str, int]]:
+        """返回可见项目的标签计数，保留没有可见项目的零计数标签。"""
+        rows = self.conn.execute(
+            """SELECT t.name, COUNT(pt.project_id) AS c
+               FROM tags t
+               LEFT JOIN project_tags pt ON pt.tag_id=t.id
+                 AND NOT EXISTS (
+                   SELECT 1 FROM project_settings ps_hidden
+                   WHERE ps_hidden.project_id=pt.project_id
+                     AND ps_hidden.key='project_hidden' AND ps_hidden.value='1'
+                 )
+               GROUP BY t.id ORDER BY t.name"""
+        ).fetchall()
+        return [(r["name"], int(r["c"])) for r in rows]
+
+    def visible_sidebar_counts(self) -> dict[str, int]:
+        """一次 SQL 聚合侧栏可见项目计数及全库隐藏数，不读取文件。"""
+        row = self.conn.execute(
+            f"""WITH flags AS (
+                 SELECT p.id, p.mcp_modified_at,
+                   {self._project_hidden_condition()} AS hidden,
+                   NOT EXISTS (SELECT 1 FROM project_tags pt WHERE pt.project_id=p.id) AS untagged,
+                   EXISTS (SELECT 1 FROM project_field_suggestions s
+                           WHERE s.project_id=p.id AND s.status='pending') AS pending_review,
+                   EXISTS (SELECT 1 FROM project_settings ps_favorite
+                           WHERE ps_favorite.project_id=p.id AND ps_favorite.key='project_favorite'
+                             AND ps_favorite.value='1') AS favorite
+                 FROM projects p
+               )
+               SELECT COUNT(CASE WHEN NOT hidden THEN 1 END) AS total,
+                 COUNT(CASE WHEN NOT hidden AND untagged THEN 1 END) AS untagged,
+                 COUNT(CASE WHEN NOT hidden AND pending_review THEN 1 END) AS pending_review,
+                 COUNT(CASE WHEN NOT hidden AND mcp_modified_at IS NOT NULL THEN 1 END) AS mcp_modified,
+                 COUNT(CASE WHEN NOT hidden AND favorite THEN 1 END) AS favorites,
+                 COUNT(CASE WHEN hidden THEN 1 END) AS hidden
+               FROM flags"""
+        ).fetchone()
+        return {key: int(row[key]) for key in (
+            "total", "untagged", "pending_review", "mcp_modified", "favorites", "hidden",
+        )}
 
     def count_user_added_fields(self) -> int:
         """统计用户额外添加的字段数（task #15 T2 横幅显示条件用）。
@@ -1212,8 +1369,21 @@ class Repository:
         row = self.conn.execute("SELECT COUNT(*) AS c FROM files").fetchone()
         return int(row["c"])
 
-    def count_files_by_project(self) -> dict[int, int]:
-        """一次 GROUP BY 查出每个项目的文件数（task #33，替代逐项目 list_files）。"""
+    def count_files_by_project(self, project_ids: list[int] | None = None) -> dict[int, int]:
+        """批量统计文件数；指定项目时利用 project_id 索引，避免扫描全库。"""
+        if project_ids is not None:
+            ids = list(dict.fromkeys(project_ids))
+            counts: dict[int, int] = {}
+            # 兼容 SQLite 较低的绑定变量上限；空结果不执行文件查询。
+            for start in range(0, len(ids), 900):
+                batch = ids[start:start + 900]
+                placeholders = ",".join("?" for _ in batch)
+                rows = self.conn.execute(
+                    f"SELECT project_id AS pid, COUNT(*) AS c FROM files "
+                    f"WHERE project_id IN ({placeholders}) GROUP BY project_id", batch,
+                ).fetchall()
+                counts.update({int(r["pid"]): int(r["c"]) for r in rows})
+            return counts
         rows = self.conn.execute(
             "SELECT project_id AS pid, COUNT(*) AS c FROM files GROUP BY project_id"
         ).fetchall()
@@ -1263,6 +1433,45 @@ class Repository:
             (f.path, int(f.is_relative), f.label, f.kind, f.ord, f.subfolder, f.id),
         )
         self.conn.commit()
+
+    def add_files_atomic(
+        self, project_id: int, files: list[FileItem],
+        project_settings: dict[str, str] | None = None,
+        *, description_append: str | None = None,
+    ) -> list[int]:
+        """原子登记整批解压文件与目录偏好，失败时不留下部分文件记录。"""
+        if self.conn.in_transaction:
+            raise RuntimeError("当前存在未提交事务，无法登记解压文件。")
+        if any(file.project_id != project_id for file in files):
+            raise ValueError("解压文件必须属于同一个目标项目。")
+        ids: list[int] = []
+        with self.conn:
+            if self.get_project(project_id) is None:
+                raise ValueError("目标项目已不存在。")
+            for file in files:
+                cur = self.conn.execute(
+                    "INSERT INTO files(project_id,path,is_relative,label,kind,ord,subfolder,origin) "
+                    "VALUES(?,?,?,?,?,?,?,?)",
+                    (project_id, file.path, int(file.is_relative), file.label, file.kind,
+                     file.ord, file.subfolder, file.origin),
+                )
+                ids.append(int(cur.lastrowid))
+            for key, value in (project_settings or {}).items():
+                self.conn.execute(
+                    "INSERT INTO project_settings(project_id,key,value) VALUES(?,?,?) "
+                    "ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value",
+                    (project_id, key, value),
+                )
+            if description_append is not None:
+                row = self.conn.execute("SELECT description_md FROM projects WHERE id=?", (project_id,)).fetchone()
+                original = row["description_md"] or ""
+                separator = "" if not original or original.endswith("\n") else "\n"
+                self.conn.execute(
+                    "UPDATE projects SET description_md=? WHERE id=?",
+                    (original + separator + description_append, project_id),
+                )
+            self.conn.execute("UPDATE projects SET updated_at=datetime('now') WHERE id=?", (project_id,))
+        return ids
 
     def delete_file(self, fid: int) -> None:
         self.conn.execute("DELETE FROM files WHERE id=?", (fid,))
@@ -1349,6 +1558,128 @@ class Repository:
         self.conn.commit()
 
     # ------------------------------------------------------------------ project_settings
+    def project_size_files(self, project_ids: list[int]) -> dict[int, list[FileItem]]:
+        """快照指定项目的登记文件；只查数据库，不接触文件系统。"""
+        ids = list(dict.fromkeys(project_ids))
+        files: dict[int, list[FileItem]] = {pid: [] for pid in ids}
+        for start in range(0, len(ids), 900):
+            batch = ids[start:start + 900]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self.conn.execute(
+                f"SELECT * FROM files WHERE project_id IN ({placeholders}) ORDER BY project_id,id", batch,
+            ).fetchall()
+            for row in rows:
+                files[int(row["project_id"])].append(self._row_to_file(row))
+        return files
+
+    def project_sizes(self, project_ids: list[int]) -> dict[int, ProjectSize]:
+        """批量读缓存，并按登记指纹标记失效；筛选刷新绝不同步 stat。"""
+        ids = list(dict.fromkeys(project_ids))
+        sizes: dict[int, ProjectSize] = {}
+        for start in range(0, len(ids), 900):
+            batch = ids[start:start + 900]
+            placeholders = ",".join("?" for _ in batch)
+            rows = self.conn.execute(
+                f"SELECT project_id,value FROM project_settings WHERE key=? "
+                f"AND project_id IN ({placeholders})", [SIZE_SETTING_KEY, *batch],
+            ).fetchall()
+            for row in rows:
+                size = ProjectSize.from_json(row["value"])
+                if size is not None:
+                    sizes[int(row["project_id"])] = size
+        # 从未统计的项目无需读取登记文件，常规筛选保持轻量。
+        records: dict[int, list[tuple[int, str, bool]]] = {pid: [] for pid in sizes}
+        cached_ids = list(sizes)
+        for start in range(0, len(cached_ids), 900):
+            batch = cached_ids[start:start + 900]
+            placeholders = ",".join("?" for _ in batch)
+            for row in self.conn.execute(
+                f"SELECT id,project_id,path,is_relative FROM files "
+                f"WHERE project_id IN ({placeholders})", batch,
+            ):
+                records[int(row["project_id"])].append(
+                    (int(row["id"]), row["path"], bool(row["is_relative"])),
+                )
+        return {pid: replace(size, stale=size.fingerprint != records_fingerprint(records[pid]))
+                for pid, size in sizes.items()}
+
+    def save_project_sizes(self, sizes: dict[int, ProjectSize]) -> None:
+        """主线程原子保存完整统计，不改变项目元数据或更新时间。"""
+        if self.conn.in_transaction:
+            raise RuntimeError("项目体积保存需要独立事务，请先完成当前写入。")
+        with self.conn:
+            for pid, size in sizes.items():
+                self.conn.execute(
+                    "INSERT INTO project_settings(project_id,key,value) "
+                    "SELECT id,?,? FROM projects WHERE id=? "
+                    "ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value",
+                    (SIZE_SETTING_KEY, size.to_json(), pid),
+                )
+
+    def hidden_project_ids(self) -> set[int]:
+        """一次读取本库隐藏标记，不改变项目元数据。"""
+        rows = self.conn.execute(
+            "SELECT ps.project_id FROM project_settings ps JOIN projects p ON p.id=ps.project_id "
+            "WHERE ps.key=? AND ps.value=?", ("project_hidden", "1"),
+        ).fetchall()
+        return {int(row["project_id"]) for row in rows}
+
+    def set_projects_hidden(self, project_ids: list[int], hidden: bool) -> int:
+        """原子更新隐藏标记，去重并忽略不存在项目；取消隐藏删除设置键。"""
+        if self.conn.in_transaction:
+            raise RuntimeError("隐藏状态保存需要独立事务，请先完成当前写入。")
+        changed = 0
+        with self.conn:
+            for pid in dict.fromkeys(project_ids):
+                if self.conn.execute("SELECT 1 FROM projects WHERE id=?", (pid,)).fetchone() is None:
+                    continue
+                current = self.get_project_setting(pid, "project_hidden", "0") == "1"
+                if hidden:
+                    if current:
+                        continue
+                    self.conn.execute(
+                        "INSERT INTO project_settings(project_id,key,value) VALUES(?,?,?) "
+                        "ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value",
+                        (pid, "project_hidden", "1"),
+                    )
+                else:
+                    self.conn.execute("DELETE FROM project_settings WHERE project_id=? AND key=?",
+                                      (pid, "project_hidden"))
+                changed += int(current != hidden)
+        return changed
+
+    def favorite_project_ids(self) -> set[int]:
+        """一次读取本库收藏，不改变项目更新时间或字段。"""
+        rows = self.conn.execute(
+            "SELECT ps.project_id FROM project_settings ps JOIN projects p ON p.id=ps.project_id "
+            "WHERE ps.key=? AND ps.value=?", ("project_favorite", "1"),
+        ).fetchall()
+        return {int(row["project_id"]) for row in rows}
+
+    def set_projects_favorite(self, project_ids: list[int], favorite: bool) -> int:
+        """原子更新收藏，忽略不存在的项目；逐条绑定避免大批量参数上限。"""
+        if self.conn.in_transaction:
+            raise RuntimeError("收藏保存需要独立事务，请先完成当前写入。")
+        changed = 0
+        with self.conn:
+            for pid in dict.fromkeys(project_ids):
+                if self.conn.execute("SELECT 1 FROM projects WHERE id=?", (pid,)).fetchone() is None:
+                    continue
+                current = self.get_project_setting(pid, "project_favorite", "0") == "1"
+                if current == favorite:
+                    continue
+                if favorite:
+                    self.conn.execute(
+                        "INSERT INTO project_settings(project_id,key,value) VALUES(?,?,?) "
+                        "ON CONFLICT(project_id,key) DO UPDATE SET value=excluded.value",
+                        (pid, "project_favorite", "1"),
+                    )
+                else:
+                    self.conn.execute("DELETE FROM project_settings WHERE project_id=? AND key=?",
+                                      (pid, "project_favorite"))
+                changed += 1
+        return changed
+
     def get_project_setting(
         self, project_id: int, key: str, default: str = "",
     ) -> str:

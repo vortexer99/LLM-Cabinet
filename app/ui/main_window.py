@@ -90,6 +90,7 @@ from .export_dialog import ExportDialog
 from .settings import SettingsDialog
 from .palette import current as _current_palette
 from .tag_tree import TagTree
+from .file_type_filter import FileTypeFilter
 from .widgets import ClickableLabel, DropZone  # noqa: F401  # DropZone 在 _build_ui 使用
 
 
@@ -114,6 +115,10 @@ class MainWindow(
     MAIN_SPLITTER_DEFAULT_SIZES = [200, 800, 400]
 
     MAIN_SPLITTER_MIN_SIZE = 80
+
+    RIGHT_SPLITTER_SETTING_KEY = "right_splitter_sizes"
+
+    RIGHT_SPLITTER_DEFAULT_SIZES = [320, 480]
 
     WINDOW_GEOMETRY_SETTING_KEY = "main_window_geometry"
 
@@ -185,8 +190,20 @@ class MainWindow(
         self._mcp_timer.start(10_000)  # 每 10 秒
         self._check_mcp_activity()
 
+        # 分栏必须等窗口尺寸和控件布局就绪后恢复，避免隐藏阶段按临时尺寸压缩。
+        self._initial_layout_restored = False
         # task #41 T1：恢复上次的窗口位置/尺寸/最大化状态
         self._restore_window_geometry()
+
+
+    def showEvent(self, ev) -> None:  # noqa: N802
+        super().showEvent(ev)
+        if self._initial_layout_restored:
+            return
+        self._initial_layout_restored = True
+        self.centralWidget().layout().activate()
+        self._main_splitter.setSizes(self._load_main_splitter_sizes())
+        self._right_v_split.setSizes(self._load_right_splitter_sizes())
 
 
     def _restore_window_geometry(self) -> None:
@@ -203,7 +220,13 @@ class MainWindow(
 
 
     def closeEvent(self, ev) -> None:  # noqa: N802
+        self._preview_focus.restore()
+        self.preview.shutdown()
         try:
+            # 关闭时再保存实际尺寸，覆盖窗口缩放等没有触发 splitterMoved 的变化。
+            if self._initial_layout_restored:
+                self._on_main_splitter_moved(0, 0)
+                self._on_right_splitter_moved(0, 0)
             self.repo.set_setting(
                 self.WINDOW_GEOMETRY_SETTING_KEY,
                 bytes(self.saveGeometry().toHex()).decode("ascii"),
@@ -253,6 +276,7 @@ class MainWindow(
             getter=self.repo.get_setting,
         )
         self.tag_tree.filter_changed.connect(self._on_tag_filter_changed)
+        self.tag_tree.filter_combined.connect(self._on_tag_filter_combined)
         self.tag_tree.projects_dropped_on_tag.connect(self._on_projects_dropped_on_tag)
         self.tag_tree.tag_action_requested.connect(self._on_tag_action)
         self._current_filter_kind: str = "all"
@@ -263,6 +287,9 @@ class MainWindow(
         ll = QVBoxLayout(left)
         ll.setContentsMargins(8, 10, 4, 10)
         ll.setSpacing(8)
+        self.file_type_filter = FileTypeFilter()
+        self.file_type_filter.changed.connect(self._on_file_type_filter_changed)
+        ll.addWidget(self.file_type_filter)
         lbl_lib = QLabel("标签筛选")
         lbl_lib.setProperty("h2", True)
         ll.addWidget(lbl_lib)
@@ -280,7 +307,7 @@ class MainWindow(
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(200)
-        self._search_timer.timeout.connect(self.refresh_projects)
+        self._search_timer.timeout.connect(self._refresh_filtered_projects)
         self.search_box.textChanged.connect(lambda _text: self._search_timer.start())
         # task #38 T2：即时补全下拉（字段语法 / 标签值 / 历史收藏）
         self._completion = SearchCompletionPopup(self)
@@ -298,16 +325,15 @@ class MainWindow(
 
         self.btn_save_search = QToolButton()
         self.btn_save_search.setText("☆")
-        self.btn_save_search.setToolTip("收藏当前搜索表达式")
+        self.btn_save_search.setToolTip("收藏当前搜索表达式，并添加到左侧自定义筛选")
         self.btn_save_search.setFixedSize(28, 28)
         self.btn_save_search.clicked.connect(self._save_current_search)
 
         self.btn_search_all = QToolButton()
         self.btn_search_all.setText("全库")
-        self.btn_search_all.setToolTip("搜索全部项目（忽略左侧筛选）")
-        self.btn_search_all.setCheckable(True)
+        self.btn_search_all.setToolTip("清除搜索与筛选，显示全部项目")
         self.btn_search_all.setFixedSize(46, 28)
-        self.btn_search_all.clicked.connect(lambda _checked=False: self.refresh_projects())
+        self.btn_search_all.clicked.connect(lambda _checked=False: self._set_filter_query(None))
 
         self.btn_view_grid = QToolButton()
         self.btn_view_grid.setText("▦")
@@ -360,6 +386,16 @@ class MainWindow(
         self.lbl_count = QLabel("")
         self.lbl_count.setProperty("muted", True)
         info_row.addWidget(self.lbl_count)
+        self.btn_favorite = QPushButton("☆ 收藏")
+        self.btn_favorite.setToolTip("收藏／取消收藏选中项目（Ctrl+D）；多选可批量收藏")
+        self.btn_favorite.setEnabled(False)
+        self.btn_favorite.clicked.connect(lambda _checked=False: self.action_toggle_project_favorite())
+        info_row.addWidget(self.btn_favorite)
+        self.btn_random_project = QPushButton("随便看看")
+        self.btn_random_project.setToolTip("随机选择当前筛选结果中的一个项目，可能再次选中当前项目")
+        self.btn_random_project.setEnabled(False)
+        self.btn_random_project.clicked.connect(self.action_random_project)
+        info_row.addWidget(self.btn_random_project)
 
         # —— 项目视图（网格 + 列表，共享同一 model 与 selection model）
         self.proj_model = ProjectModel()
@@ -370,6 +406,7 @@ class MainWindow(
         self.proj_view.setModel(self.proj_model)
         self.proj_view.setModelColumn(0)
         self._proj_delegate = ProjectCardDelegate(self.proj_view)
+        self._proj_delegate.favorite_toggled.connect(self.action_toggle_project_favorite)
         self.proj_view.setItemDelegate(self._proj_delegate)
         self.proj_view.setViewMode(QListView.IconMode)
         self.proj_view.setResizeMode(QListView.Adjust)
@@ -391,6 +428,8 @@ class MainWindow(
         self.proj_table.setShowGrid(False)
         self.proj_table.setAlternatingRowColors(True)
         self.proj_table.setSortingEnabled(False)
+        self.proj_table.horizontalHeader().setSectionsClickable(True)
+        self.proj_table.horizontalHeader().sectionClicked.connect(self._on_project_header_clicked)
         # 列总宽超出视口时显示水平滚动条
         self.proj_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.proj_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -402,11 +441,12 @@ class MainWindow(
         self.proj_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         self.proj_table.setContextMenuPolicy(Qt.CustomContextMenu)
         self.proj_table.customContextMenuRequested.connect(self._project_context_menu)
-        self.proj_table.doubleClicked.connect(lambda _i: self.action_edit_project())
+        self.proj_table.doubleClicked.connect(self._on_project_table_double_clicked)
 
         # 让两个视图共享 selection model（同一行选中状态同步）
         self.proj_table.setSelectionModel(self.proj_view.selectionModel())
         self.proj_view.selectionModel().currentChanged.connect(self._on_project_selected)
+        self.proj_view.selectionModel().selectionChanged.connect(self._update_favorite_button)
 
         # DnD helper（网格视图）
         self._proj_dnd = ProjectViewDnD(self.proj_view, ProjectModel.RoleId)
@@ -465,7 +505,7 @@ class MainWindow(
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         splitter.setStretchFactor(2, 0)
-        splitter.setSizes(self._load_main_splitter_sizes())
+        splitter.setSizes(self.MAIN_SPLITTER_DEFAULT_SIZES)
         splitter.splitterMoved.connect(self._on_main_splitter_moved)
         splitter.setHandleWidth(1)
 
@@ -478,11 +518,18 @@ class MainWindow(
 
         sb = QStatusBar()
         self.setStatusBar(sb)
+        from .preview_focus import PreviewFocusController
+        self._preview_focus = PreviewFocusController(self)
+        self.preview.focus_requested.connect(self._preview_focus.toggle_focus)
+        self.preview.fullscreen_requested.connect(self._preview_focus.toggle_fullscreen)
+        self.preview.escape_requested.connect(self._preview_focus.escape)
         # 快捷键（task #38 T3 Ctrl+F；task #41 T3 Delete / F2 系列）
         from PySide6.QtGui import QShortcut
         self._sc_focus_search = QShortcut(QKeySequence("Ctrl+F"), self)
         self._sc_focus_search.setContext(Qt.WidgetWithChildrenShortcut)
         self._sc_focus_search.activated.connect(self._focus_search)
+        self._sc_favorite = QShortcut(QKeySequence("Ctrl+D"), self)
+        self._sc_favorite.activated.connect(lambda: self.action_toggle_project_favorite())
         # Delete：WidgetShortcut 语境——内联编辑器获得焦点时不触发
         for w, slot in (
             (self.proj_view, self.action_delete_project),
@@ -533,9 +580,9 @@ class MainWindow(
             return None
         valid_sizes: list[int] = []
         for size in sizes:
-            if not isinstance(size, int):
+            if type(size) is not int:
                 return None
-            if size < self.MAIN_SPLITTER_MIN_SIZE:
+            if not self.MAIN_SPLITTER_MIN_SIZE <= size <= 16_777_215:
                 return None
             valid_sizes.append(size)
         return valid_sizes if sum(valid_sizes) > 0 else None
@@ -555,6 +602,8 @@ class MainWindow(
 
 
     def _on_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        if getattr(self, "_preview_focus", None) is not None and self._preview_focus.focused:
+            return
         sizes = self._valid_main_splitter_sizes(self._main_splitter_sizes())
         if sizes is None:
             return
@@ -566,3 +615,35 @@ class MainWindow(
         if splitter is None or not sizes or sum(sizes) <= 0:
             return
         splitter.setSizes(sizes)
+
+
+    def _valid_right_splitter_sizes(self, sizes: object) -> list[int] | None:
+        """上下分栏允许收起一侧，但拒绝非法值与全部收起。"""
+        if (not isinstance(sizes, list) or len(sizes) != 2
+                or any(type(size) is not int or not 0 <= size <= 16_777_215 for size in sizes)
+                or sum(sizes) <= 0):
+            return None
+        return list(sizes)
+
+
+    def _load_right_splitter_sizes(self) -> list[int]:
+        raw = self.repo.get_setting(self.RIGHT_SPLITTER_SETTING_KEY, "")
+        if raw:
+            try:
+                sizes = self._valid_right_splitter_sizes(json.loads(raw))
+            except (ValueError, TypeError):
+                sizes = None
+            if sizes is not None:
+                return sizes
+        return list(self.RIGHT_SPLITTER_DEFAULT_SIZES)
+
+
+    def _on_right_splitter_moved(self, _pos: int, _index: int) -> None:
+        if getattr(self, "_preview_focus", None) is not None and self._preview_focus.focused:
+            return
+        # 弹出期间的占位控件不代表文件列表，保留弹出前的分栏尺寸。
+        if self._files_detach_window is not None:
+            return
+        sizes = self._valid_right_splitter_sizes(self._right_v_split.sizes())
+        if sizes is not None:
+            self.repo.set_setting(self.RIGHT_SPLITTER_SETTING_KEY, json.dumps(sizes))

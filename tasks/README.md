@@ -50,6 +50,33 @@
 | [41-window-state-and-polish.md](./41-window-state-and-polish.md) | 窗口状态持久化与细节打磨合集（geometry / 快捷键 / splitter hack / 字号） | S+M | P2 | ✅ 2026-08-01（v0.6 未发布） |
 | [42-api-key-secure-storage.md](./42-api-key-secure-storage.md) | API Key 安全存储（keyring + 明文迁移 + PRIVACY 同步） | S | P2 | ✅ 2026-08-01（v0.6 未发布） |
 | [43-skill-cli.md](./43-skill-cli.md) | Skill + CLI 入口（复用工具层与审计，保留 MCP） | M | P1 | ✅ 2026-11-15（Unreleased） |
+| [44-library-media-preferences.md](./44-library-media-preferences.md) | 库级自动封面与视频自动播放 | S | P1 | ✅ 2026-11-15（Unreleased） |
+| [45-preview-file-navigation.md](./45-preview-file-navigation.md) | 预览区上一文件 / 下一文件 | S | P1 | ✅ 2026-11-15（Unreleased） |
+| [46-storage-recycle-source.md](./46-storage-recycle-source.md) | 库级仓储成功后回收原文件 | S | P1 | ✅ 2026-11-15（Unreleased） |
+| [47-video-auto-cover.md](./47-video-auto-cover.md) | 自动封面的视频首帧子选项 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [48-archive-extraction.md](./48-archive-extraction.md) | 压缩包识别、右键解压与成功密码记录 | M | P1 | ✅ 2026-11-16（Unreleased） |
+| [49-project-file-type-filters.md](./49-project-file-type-filters.md) | 项目文件类型筛选与 has 搜索 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [50-project-favorites-random.md](./50-project-favorites-random.md) | 项目收藏与随便看看 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [51-filter-performance.md](./51-filter-performance.md) | 标签筛选刷新与封面加载性能优化 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [52-animated-image-preview.md](./52-animated-image-preview.md) | 动态 WebP／GIF 播放预览 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [53-preview-wheel-navigation.md](./53-preview-wheel-navigation.md) | 库级预览滚轮切换文件 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [54-project-sizes.md](./54-project-sizes.md) | 项目体积缓存列、后台更新与数值排序 | M | P1 | ✅ 2026-11-16（Unreleased） |
+| [55-project-column-sorting.md](./55-project-column-sorting.md) | 项目列表全列类型排序 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [56-search-filter-sync.md](./56-search-filter-sync.md) | 搜索框与侧栏条件统一 | M | P1 | ✅ 2026-11-16（Unreleased） |
+| [57-extension-search.md](./57-extension-search.md) | 扩展名组合搜索与命名收藏 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [58-saved-search-sidebar.md](./58-saved-search-sidebar.md) | 左侧自定义筛选入口 | S | P1 | ✅ 2026-11-16（Unreleased） |
+| [59-focus-preview.md](./59-focus-preview.md) | 专注预览、全屏与自动选择首文件 | M | P1 | ✅ 2026-11-17（Unreleased） |
+| [60-search-popup-dismiss.md](./60-search-popup-dismiss.md) | 搜索补全关闭与清空按钮同步 | S | P1 | ✅ 2026-11-17（Unreleased） |
+| [61-video-end-action.md](./61-video-end-action.md) | 视频播放结束动作偏好 | S | P1 | ✅ 2026-11-17（Unreleased） |
+| [62-direct-storage-move.md](./62-direct-storage-move.md) | 直接移动转仓储与完整错误详情 | M | P1 | ✅ 2026-11-17（Unreleased） |
+| [63-cover-file-preferences.md](./63-cover-file-preferences.md) | 封面文件默认隐藏与替换偏好 | S | P1 | ✅ 2026-11-18（Unreleased） |
+| [64-project-description-tags.md](./64-project-description-tags.md) | 项目简介标签展示与快捷筛选 | S | P1 | ✅ 2026-11-18（Unreleased） |
+| [65-library-restart.md](./65-library-restart.md) | 修复切换库自动重启入口 | S | P1 | ✅ 2026-11-18（Unreleased） |
+| [66-tag-tristate.md](./66-tag-tristate.md) | 左侧标签包含／排除／不筛选轮切 | S | P1 | ✅ 2026-11-19（Unreleased） |
+| [67-tag-modifier-filters.md](./67-tag-modifier-filters.md) | Shift／Ctrl 标签 AND／OR 组合 | S | P1 | ✅ 2026-11-19（Unreleased） |
+| [68-project-field-filter.md](./68-project-field-filter.md) | 项目右键筛选同字段值 | S | P1 | ✅ 2026-11-19（Unreleased） |
+| [69-offline-preview.md](./69-offline-preview.md) | 外置媒体离线预览与恢复 | M | P1 | ✅ 完成 |
+| [70-project-hidden.md](./70-project-hidden.md) | 隐藏项目与恢复入口 | S | P1 | ✅ 2026-11-19（Unreleased） |
 
 ## 约定
 

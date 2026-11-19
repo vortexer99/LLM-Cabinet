@@ -2,13 +2,13 @@
 
 提供五类节点：
 - 全部
-- 未分类
+- 未分类、隐藏项目
 - 待审阅 LLM 建议
 - 标签（按字母排序，括号显示项目数；支持 ``/`` 分隔的层级折叠 — task #06）
 - 未使用的标签
 
 发出 `filter_changed(filter_kind, value)` 信号：
-  filter_kind: "all" | "untagged" | "review" | "tag" | "tag_prefix"
+  filter_kind: "all" | "favorite" | "hidden" | "untagged" | "review" | "tag" | "tag_prefix" | "not_tag" | "not_tag_prefix"
   value: tag 名称（kind=="tag"）或前缀（kind=="tag_prefix"）
 
 层级折叠（task #06）：
@@ -23,6 +23,7 @@ from __future__ import annotations
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QAbstractItemView, QHeaderView, QTreeWidget, QTreeWidgetItem
 
 from .dnd import PROJECT_IDS_MIME, decode_project_ids
@@ -37,12 +38,14 @@ SETTING_COLLAPSED_PREFIXES = "tag_tree_collapsed_prefixes"
 
 class TagTree(QTreeWidget):
     filter_changed = Signal(str, str)  # kind, value
+    filter_combined = Signal(str, str, str)  # kind, value, all/any
     projects_dropped_on_tag = Signal(list, str)  # project_ids, tag
     # task #39：标签管理右键动作（action: rename/merge/delete, kind: tag/tag_prefix, value）
     tag_action_requested = Signal(str, str, str)
 
     KIND_ROLE = Qt.UserRole + 1
     VALUE_ROLE = Qt.UserRole + 2
+    DISPLAY_ROLE = Qt.UserRole + 3
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -61,6 +64,7 @@ class TagTree(QTreeWidget):
         self.setColumnCount(1)
         self.header().setSectionResizeMode(QHeaderView.Stretch)
         self.itemSelectionChanged.connect(self._on_selection)
+        self.itemClicked.connect(self._on_item_clicked)
         self.itemExpanded.connect(self._on_item_toggle)
         self.itemCollapsed.connect(self._on_item_toggle)
         # task #39：标签节点右键菜单（重命名/合并/删除）
@@ -68,10 +72,19 @@ class TagTree(QTreeWidget):
         self.customContextMenuRequested.connect(self._on_context_menu)
 
         self._suspend_signal = False
+        self._mouse_selecting = False
+        self._click_allowed = True
+        self._click_modifiers = Qt.NoModifier
+        self._tag_states: dict[tuple[str, str], str] = {}
+        self._tag_items: dict[tuple[str, str], QTreeWidgetItem] = {}
+        self._filter_state: tuple[str, str] = ("all", "")
+        self._active_tag_item: QTreeWidgetItem | None = None
+        self._tag_state_icons = self._make_filter_icons()
         # 持久化标签前缀的折叠状态：{prefix: collapsed_bool}
         # 默认 False（展开）；只把"用户折叠过"的前缀写出来
         self._collapsed_prefixes: set[str] = set()
         self._setting_io: Optional[_SettingIO] = None  # 注入式，避免硬依赖 Repository
+        self.saved_searches: list[dict[str, str]] = []
 
     # ============================================================
     # 折叠状态持久化（轻量依赖注入，避免硬连 Repository）
@@ -108,14 +121,26 @@ class TagTree(QTreeWidget):
         untagged: int,
         pending_review: int = 0,
         mcp_modified: int = 0,
+        favorites: int = 0,
+        saved_searches: list[dict[str, str]] | None = None,
+        hidden: int = 0,
     ) -> None:
         """重建整棵树，尽量保留当前选中项。"""
         cur_kind, cur_value = self.current_filter()
+        tag_states = dict(self._tag_states)
         self._suspend_signal = True
+        self._active_tag_item = None
+        self._modifier_click_item = None
+        self._tag_states = {}
+        self._tag_items = {}
         self.clear()
+        self.saved_searches = list(saved_searches or [])
 
         root_all = self._make_item("📚  全部项目", total, "all", "")
         self.addTopLevelItem(root_all)
+
+        item_favorite = self._make_item("★  收藏项目", favorites, "favorite", "")
+        self.addTopLevelItem(item_favorite)
 
         item_untagged = self._make_item("⊘  未分类", untagged, "untagged", "")
         self.addTopLevelItem(item_untagged)
@@ -125,6 +150,26 @@ class TagTree(QTreeWidget):
 
         item_mcp = self._make_item("🤖  未读MCP修改", mcp_modified, "mcp", "")
         self.addTopLevelItem(item_mcp)
+
+        item_hidden = self._make_item("隐藏项目", hidden, "hidden", "")
+        item_hidden.setToolTip(0, "仅显示隐藏项目；在项目右键菜单中取消隐藏。普通分类和搜索默认排除隐藏项目。")
+        self.addTopLevelItem(item_hidden)
+
+        if self.saved_searches:
+            group = QTreeWidgetItem(["自定义筛选"])
+            group.setFlags(group.flags() & ~Qt.ItemIsSelectable)
+            font = group.font(0)
+            font.setBold(True)
+            group.setFont(0, font)
+            group.setForeground(0, self.palette().mid())
+            self.addTopLevelItem(group)
+            for saved in self.saved_searches:
+                item = QTreeWidgetItem([f"☆  {saved['name']}"])
+                item.setData(0, self.KIND_ROLE, "saved_search")
+                item.setData(0, self.VALUE_ROLE, saved["name"])
+                item.setToolTip(0, saved["query"])
+                group.addChild(item)
+            group.setExpanded(True)
 
         # 标签分组节点
         if tag_counts:
@@ -145,18 +190,25 @@ class TagTree(QTreeWidget):
 
         # 恢复选中
         target = root_all
-        if cur_kind == "untagged":
+        if cur_kind == "favorite":
+            target = item_favorite
+        elif cur_kind == "untagged":
             target = item_untagged
         elif cur_kind == "review":
             target = item_review
         elif cur_kind == "mcp":
             target = item_mcp
-        elif cur_kind == "tag":
+        elif cur_kind == "hidden":
+            target = item_hidden
+        elif cur_kind in {"tag", "not_tag"}:
             target = self._find_tag_item(cur_value) or root_all
-        elif cur_kind == "tag_prefix":
+        elif cur_kind in {"tag_prefix", "not_tag_prefix"}:
             target = self._find_prefix_item(cur_value) or root_all
+        elif cur_kind == "saved_search":
+            target = self._find_item_by_kind_value(cur_kind, cur_value) or root_all
         target.setSelected(True)
         self.setCurrentItem(target)
+        self.sync_filter_state(cur_kind, cur_value, tag_states)
         self._suspend_signal = False
 
     def _populate_used_tags(
@@ -234,18 +286,99 @@ class TagTree(QTreeWidget):
     def current_filter(self) -> tuple[str, str]:
         it = self.currentItem()
         if it is None:
-            return ("all", "")
+            return self._filter_state
+        if not it.isSelected():
+            # 键盘轮切到不筛选后仍让标签保有焦点，供下一次 Enter/空格继续轮切。
+            return self._filter_state
         kind = it.data(0, self.KIND_ROLE) or "all"
         value = it.data(0, self.VALUE_ROLE) or ""
+        if self._filter_state == ("not_" + kind, value):
+            return self._filter_state
         return (kind, value)
+
+    def sync_filter_state(
+        self, kind: str, value: str, states: dict[tuple[str, str], str] | None = None,
+    ) -> None:
+        """从搜索表达式恢复状态；角色保留原标签，排除只改变展示。"""
+        blocked = self.blockSignals(True)
+        try:
+            self._active_tag_item = None
+            self._filter_state = (kind, value)
+            projected = {} if states is None else states
+            item = self._find_item_by_kind_value(kind.removeprefix("not_"), value)
+            self.clearSelection()
+            self.setCurrentItem(item)
+            if item is not None:
+                item.setSelected(True)
+                if kind.removeprefix("not_") in {"tag", "tag_prefix"}:
+                    excluded = kind.startswith("not_")
+                    state = "exclude" if excluded else "include"
+                    if states is None:
+                        projected = {(kind.removeprefix("not_"), value): state}
+                    self._active_tag_item = item
+            self.set_tag_states(projected)
+        finally:
+            self.blockSignals(blocked)
+
+    def set_tag_states(self, states: dict[tuple[str, str], str]) -> None:
+        """为组合表达式同时显示各标签的包含/排除标记，不改变查询选择。"""
+        if states == self._tag_states:
+            return
+        previous = self._tag_states
+        self._tag_states = dict(states)
+        for selection in previous.keys() | states.keys():
+            if previous.get(selection) == states.get(selection):
+                continue
+            item = self._tag_items.get(selection)
+            if item is None:
+                continue
+            state = states.get(selection, "all")
+            item.setIcon(0, self._tag_state_icons[state])
+            text = item.data(0, self.DISPLAY_ROLE)
+            item.setText(0, text + ("  · 不包含" if state == "exclude" else ""))
+            item.setToolTip(0, self._tag_tooltip(state))
 
     # ============================================================
     # helpers
     # ============================================================
+    def _make_filter_icons(self) -> dict[str, QIcon]:
+        """绘制真实 Qt 状态图标，避免依赖系统字体中的符号字形。"""
+        icons: dict[str, QIcon] = {}
+        for state, color in (("all", self.palette().mid().color()),
+                             ("include", QColor("#16815e")),
+                             ("exclude", QColor("#be3345"))):
+            pixmap = QPixmap(18, 18)
+            pixmap.fill(Qt.transparent)
+            painter = QPainter(pixmap)
+            painter.setRenderHint(QPainter.Antialiasing)
+            painter.setPen(QPen(color, 1.8, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+            if state == "all":
+                painter.drawEllipse(4, 4, 10, 10)
+            elif state == "include":
+                painter.drawLine(3, 9, 7, 13)
+                painter.drawLine(7, 13, 15, 5)
+            else:
+                painter.drawLine(4, 9, 14, 9)
+            painter.end()
+            icons[state] = QIcon(pixmap)
+        return icons
+
+    @staticmethod
+    def _tag_tooltip(state: str) -> str:
+        current = {"all": "不筛选", "include": "包含", "exclude": "不包含"}[state]
+        return (f"当前：{current}。点击或按 Enter / 空格：包含 → 不包含 → 不筛选。"
+                "Shift+点击：AND（同时满足）；Ctrl+点击：OR（满足任一）。"
+                "Enter / 空格也支持修饰键；具体组合关系见搜索框。")
+
     def _make_item(self, text: str, count: int, kind: str, value: str) -> QTreeWidgetItem:
         it = QTreeWidgetItem([f"{text}    {count}"])
         it.setData(0, self.KIND_ROLE, kind)
         it.setData(0, self.VALUE_ROLE, value)
+        it.setData(0, self.DISPLAY_ROLE, it.text(0))
+        if kind in {"tag", "tag_prefix"}:
+            self._tag_items[(kind, value)] = it
+            it.setIcon(0, self._tag_state_icons["all"])
+            it.setToolTip(0, self._tag_tooltip("all"))
         return it
 
     def _find_tag_item(self, name: str) -> QTreeWidgetItem | None:
@@ -257,6 +390,8 @@ class TagTree(QTreeWidget):
     def _find_item_by_kind_value(
         self, kind: str, value: str,
     ) -> QTreeWidgetItem | None:
+        if kind in {"tag", "tag_prefix"}:
+            return self._tag_items.get((kind, value))
         for i in range(self.topLevelItemCount()):
             top = self.topLevelItem(i)
             found = self._dfs_find(top, kind, value)
@@ -279,11 +414,102 @@ class TagTree(QTreeWidget):
         return None
 
     def _on_selection(self) -> None:
-        if self._suspend_signal:
+        if self._suspend_signal or self._mouse_selecting:
             return
-        kind, value = self.current_filter()
+        # 方向键与程序选择仍按原逻辑正向定位；轮切只来自明确激活。
+        item = self.currentItem()
+        if item is None:
+            return
+        kind = item.data(0, self.KIND_ROLE)
+        value = item.data(0, self.VALUE_ROLE) or ""
         if kind:
+            self.sync_filter_state(kind, value)
             self.filter_changed.emit(kind, value)
+
+    def _on_item_clicked(self, item: QTreeWidgetItem, _column: int) -> None:
+        if self._suspend_signal or not self._click_allowed:
+            return
+        self._activate_filter_item(item, self._click_modifiers)
+
+    def _activate_filter_item(self, item: QTreeWidgetItem, modifiers=Qt.NoModifier) -> None:
+        """标签激活按包含→不包含→不筛选轮切，其余节点维持单态。"""
+        kind = item.data(0, self.KIND_ROLE)
+        value = item.data(0, self.VALUE_ROLE) or ""
+        if not kind:
+            return
+        if kind in {"tag", "tag_prefix"}:
+            if modifiers & (Qt.ShiftModifier | Qt.ControlModifier):
+                mode = "all" if modifiers & Qt.ShiftModifier else "any"
+                self.filter_combined.emit(kind, value, mode)
+                return
+            if self._filter_state == (kind, value):
+                kind = "not_" + kind
+            elif self._filter_state == ("not_" + kind, value):
+                kind, value = "all", ""
+        self.sync_filter_state(kind, value)
+        self.filter_changed.emit(kind, value)
+
+    def mousePressEvent(self, event):  # noqa: N802
+        # 点击标签时 selectionChanged 在 itemClicked 之前发生，只在激活时刷新一次。
+        item = self.itemAt(event.position().toPoint())
+        self._click_allowed = (
+            event.button() == Qt.LeftButton and item is not None
+            and event.position().x() >= self.visualItemRect(item).left()
+        )
+        self._click_modifiers = event.modifiers()
+        if event.button() != Qt.LeftButton:
+            event.accept()
+            return
+        if (self._click_allowed and item.data(0, self.KIND_ROLE) in {"tag", "tag_prefix"}
+                and self._click_modifiers & (Qt.ShiftModifier | Qt.ControlModifier)):
+            # 修饰激活由 release 一次发出；不让 Qt 的范围选择/切换选择先改动条件。
+            self.setFocus(Qt.MouseFocusReason)
+            self._modifier_click_item = item
+            event.accept()
+            return
+        self._mouse_selecting = True
+        try:
+            super().mousePressEvent(event)
+        finally:
+            self._mouse_selecting = False
+
+    def mouseReleaseEvent(self, event):  # noqa: N802
+        item = getattr(self, "_modifier_click_item", None)
+        self._modifier_click_item = None
+        if item is not None and event.button() == Qt.LeftButton:
+            if self.itemAt(event.position().toPoint()) is item:
+                self._activate_filter_item(item, self._click_modifiers)
+            event.accept()
+            return
+        # 单次鼠标激活只在 itemClicked 中处理，屏蔽 release 引起的额外选择通知。
+        self._mouse_selecting = True
+        try:
+            super().mouseReleaseEvent(event)
+        finally:
+            self._mouse_selecting = False
+
+    def keyPressEvent(self, event):  # noqa: N802
+        if event.key() in {Qt.Key_Return, Qt.Key_Enter, Qt.Key_Space}:
+            item = self.currentItem()
+            if item is not None and item.data(0, self.KIND_ROLE) in {"tag", "tag_prefix"}:
+                if event.isAutoRepeat():
+                    event.accept()
+                    return
+                kind = item.data(0, self.KIND_ROLE)
+                value = item.data(0, self.VALUE_ROLE) or ""
+                self._activate_filter_item(item, event.modifiers())
+                if self._filter_state[0] in {"all", "query"}:
+                    # 查询同步会选中全库；只恢复键盘焦点，不把标签重新加入查询。
+                    target = self._find_item_by_kind_value(kind, value)
+                    blocked = self.blockSignals(True)
+                    try:
+                        self.setCurrentItem(target)
+                        self.clearSelection()
+                    finally:
+                        self.blockSignals(blocked)
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def _on_item_toggle(self, item: QTreeWidgetItem) -> None:
         """记住用户对"前缀节点"的折叠偏好。"""

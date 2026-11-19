@@ -1,28 +1,37 @@
 """项目数据模型 + 网格卡片委托。
 
 ProjectModel 是动态多列模型：每个列对应一个 fields 表中的可见字段，按 ord 顺序。
-+ 额外两列固定在最后：标签 / 文件数（这两个不是 fields，但常用）。
++ 额外列固定在最后：文件数 / 更新时间 / 项目体积。
 
 网格视图（QListView IconMode）使用 ProjectCardDelegate 自定义绘制。
 列表视图（QTableView）按列原生显示文本。
 """
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import replace
+from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
+
 from PySide6.QtCore import (
     QAbstractTableModel,
+    QEvent,
     QModelIndex,
     QMimeData,
     QPointF,
     QRect,
     QSize,
+    Signal,
     Qt,
 )
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
-from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem
+from PySide6.QtWidgets import QStyle, QStyledItemDelegate, QStyleOptionViewItem, QToolTip
 
 from ..models import Field, Project
-from ..utils import utc_to_local_str
+from ..project_sizes import ProjectSize
+from ..utils import human_size, utc_to_local_str
 from .dnd import PROJECT_IDS_MIME
+from .file_sorting import natural_name_key
 from .palette import current as _current_palette
 
 # 网格卡片
@@ -35,10 +44,12 @@ RADIUS = 8
 # 附加列（不属于 fields，但常用）
 EXTRA_COL_FILES = "__files__"
 EXTRA_COL_UPDATED = "__updated__"
+EXTRA_COL_SIZE = "__size__"
 
 EXTRA_COL_NAMES = {
     EXTRA_COL_FILES: "文件数",
     EXTRA_COL_UPDATED: "更新时间",
+    EXTRA_COL_SIZE: "项目体积",
 }
 
 
@@ -46,12 +57,19 @@ class ProjectModel(QAbstractTableModel):
     RoleId = Qt.UserRole + 1
     RoleProject = Qt.UserRole + 2
     RoleCover = Qt.UserRole + 3
+    RoleFavorite = Qt.UserRole + 4
+    RoleSizeBytes = Qt.UserRole + 5
 
     def __init__(self):
         super().__init__()
         self._projects: list[Project] = []
-        self._covers: dict[int, QPixmap] = {}
+        self._covers: dict[int, QPixmap | None] = {}
+        self._cover_loader: Callable[[Project], QPixmap | None] | None = None
         self._file_counts: dict[int, int] = {}
+        self._favorite_ids: set[int] = set()
+        self._project_sizes: dict[int, ProjectSize] = {}
+        self.sort_key: str | None = None
+        self.sort_order = Qt.AscendingOrder
         # 列定义：list of (kind, payload)
         # kind == "field":  payload = Field
         # kind == "extra":  payload = EXTRA_COL_* 常量
@@ -65,8 +83,12 @@ class ProjectModel(QAbstractTableModel):
         if include_extras:
             cols.append(("extra", EXTRA_COL_FILES))
             cols.append(("extra", EXTRA_COL_UPDATED))
+            cols.append(("extra", EXTRA_COL_SIZE))
         self.beginResetModel()
         self._cols = cols
+        if self.sort_key not in {self.column_key(c) for c in range(len(cols))}:
+            self.sort_key = None
+        self._sort_rows()
         self.endResetModel()
 
     def column_kind(self, col: int) -> tuple[str, object] | None:
@@ -77,7 +99,7 @@ class ProjectModel(QAbstractTableModel):
     def column_key(self, col: int) -> str:
         """返回列的稳定 key，用于持久化可见列。
         - field: 带 key 的字段返回 f.key（如 'title'/'tags'/'author'），其余返回 'user:<id>'
-        - extra: 返回 __files__ / __updated__
+        - extra: 返回 __files__ / __updated__ / __size__
         """
         ck = self.column_kind(col)
         if ck is None:
@@ -103,20 +125,136 @@ class ProjectModel(QAbstractTableModel):
         return f.name
 
     # ---- 数据 ----
+    def set_favorite_ids(self, ids: set[int]) -> None:
+        """更新星标不重置模型，保留当前选中项及媒体播放。"""
+        changed = self._favorite_ids ^ ids
+        self._favorite_ids = set(ids)
+        for row, project in enumerate(self._projects):
+            if project.id in changed:
+                self.dataChanged.emit(self.index(row, 0), self.index(row, self.columnCount() - 1))
+
     def set_data(
         self,
         projects: list[Project],
         covers: dict[int, QPixmap],
         file_counts: dict[int, int] | None = None,
+        cover_loader: Callable[[Project], QPixmap | None] | None = None,
+        project_sizes: dict[int, ProjectSize] | None = None,
     ) -> None:
         self.beginResetModel()
-        self._projects = projects
-        self._covers = covers
+        self._projects = list(projects)
+        # 每轮数据使用独立缓存；键存在即代表已加载，空封面也只查询一次。
+        self._covers = dict(covers)
+        self._cover_loader = cover_loader
         self._file_counts = file_counts or {}
+        self._project_sizes = dict(project_sizes or {})
+        self._sort_rows()
         self.endResetModel()
+
+    def update_project_sizes(self, sizes: dict[int, ProjectSize | None]) -> None:
+        """局部替换缓存并保持当前排序；不重置模型或读取封面。"""
+        for pid, size in sizes.items():
+            if size is None:
+                self._project_sizes.pop(pid, None)
+            else:
+                self._project_sizes[pid] = size
+            index = self.index_of_id(pid)
+            if index.isValid():
+                self.dataChanged.emit(index, self.index(index.row(), self.columnCount() - 1))
+        if self.sort_key == EXTRA_COL_SIZE:
+            self._apply_sort()
+
+    def _sort_value(self, project: Project, column: int) -> tuple | Decimal | datetime | int | None:
+        """按原始数据和字段类型比较，星标、单位和截断文案不参与排序。"""
+        kind, field = self.column_kind(column)
+        if kind == "extra":
+            if field == EXTRA_COL_SIZE:
+                size = self._project_sizes.get(project.id)
+                return size.bytes if size is not None else None
+            if field == EXTRA_COL_FILES:
+                return self._file_counts.get(project.id, 0)
+            value = project.updated_at
+            field_type = "date"
+        else:
+            field_type = field.type
+            if field.is_required and field.key == "title":
+                value = project.title
+            elif field.is_required and field.key == "description":
+                value = project.description_md
+            elif field.is_required and field.key == "tags":
+                value = "\n".join(sorted(project.tags, key=natural_name_key))
+            else:
+                value = project.field_values.get(field.id, "")
+        value = str(value or "").strip()
+        if not value:
+            return None
+        if field_type in ("number", "rating"):
+            try:
+                number = Decimal(value)
+                return number if number.is_finite() else None
+            except InvalidOperation:
+                return None
+        if field_type == "date":
+            try:
+                date = datetime.fromisoformat(value.replace("/", "-"))
+                # 老记录无时区；与带时区 ISO 时间统一按 UTC 比较。
+                return date.replace(tzinfo=timezone.utc) if date.tzinfo is None else date.astimezone(timezone.utc)
+            except (ValueError, OverflowError):
+                return None
+        return natural_name_key(value)
+
+    def _sort_rows(self) -> None:
+        """各列按类型排序，空值及无法解析的值在升降序中都放末尾。"""
+        column = next((c for c in range(len(self._cols)) if self.column_key(c) == self.sort_key), None)
+        if column is None:
+            return
+        known, unknown = [], []
+        for project in self._projects:
+            value = self._sort_value(project, column)
+            if value is None:
+                unknown.append(project)
+            else:
+                known.append((value, project))
+        known.sort(key=lambda item: item[0], reverse=self.sort_order == Qt.DescendingOrder)
+        self._projects = [project for _, project in known] + unknown
+
+    def _apply_sort(self) -> None:
+        self.layoutAboutToBeChanged.emit()
+        old_indexes = self.persistentIndexList()
+        identities = [(self._projects[index.row()].id, index.column()) for index in old_indexes]
+        self._sort_rows()
+        rows = {p.id: row for row, p in enumerate(self._projects)}
+        self.changePersistentIndexList(
+            old_indexes, [self.index(rows[pid], col) for pid, col in identities],
+        )
+        self.layoutChanged.emit()
+
+    def sort(self, column: int, order: Qt.SortOrder = Qt.AscendingOrder) -> None:
+        """按列类型排序，持久索引随行迁移以保留多选和当前项。"""
+        if self.column_kind(column) is None:
+            return
+        self.sort_key = self.column_key(column)
+        self.sort_order = order
+        self._apply_sort()
 
     def rowCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else len(self._projects)
+
+    def update_project(self, project: Project, cover: QPixmap | None, file_count: int) -> None:
+        """局部更新项目封面与计数，不重置模型或触发重新选择项目。"""
+        index = self.index_of_id(project.id)
+        if not index.isValid():
+            return
+        self._projects[index.row()] = project
+        size = self._project_sizes.get(project.id)
+        if size is not None and self._file_counts.get(project.id, 0) != file_count:
+            self._project_sizes[project.id] = replace(size, stale=True)
+        # 局部更新提供的是最终结果，包括空封面，不能再回退到旧加载器。
+        self._covers[project.id] = cover
+        self._file_counts[project.id] = file_count
+        self.dataChanged.emit(index, self.index(index.row(), self.columnCount() - 1))
+        if self.sort_key is not None:
+            self._apply_sort()
 
     def columnCount(self, parent: QModelIndex = QModelIndex()) -> int:
         return 0 if parent.isValid() else max(1, len(self._cols))
@@ -136,7 +274,16 @@ class ProjectModel(QAbstractTableModel):
         if role == self.RoleProject:
             return p
         if role == self.RoleCover:
-            return self._covers.get(p.id) if p.id is not None else None
+            if p.id is None:
+                return None
+            if p.id not in self._covers and self._cover_loader is not None:
+                self._covers[p.id] = self._cover_loader(p)
+            return self._covers.get(p.id)
+        if role == self.RoleFavorite:
+            return p.id in self._favorite_ids
+        if role == self.RoleSizeBytes:
+            size = self._project_sizes.get(p.id)
+            return size.bytes if size is not None else None
 
         col = index.column()
         ck = self.column_kind(col)
@@ -206,7 +353,11 @@ class ProjectModel(QAbstractTableModel):
                     v = raw
 
         if role == Qt.DisplayRole:
+            if f.is_title and p.id in self._favorite_ids:
+                return "★ " + v
             return v
+        if role == Qt.ToolTipRole and f.type == "url" and v:
+            return f"双击在默认浏览器中打开链接\n{v}"
         if role == Qt.TextAlignmentRole:
             if f.type in ("rating", "number"):
                 return int(Qt.AlignCenter)
@@ -221,6 +372,28 @@ class ProjectModel(QAbstractTableModel):
         return None
 
     def _extra_data(self, p: Project, key: str, role: int):
+        if key == EXTRA_COL_SIZE:
+            size = self._project_sizes.get(p.id)
+            if role == Qt.DisplayRole:
+                if size is None:
+                    return "未统计"
+                text = human_size(size.bytes)
+                if size.missing:
+                    text = f"已知 {text}（缺失 {size.missing}）"
+                if size.stale:
+                    text += "（待更新）"
+                return text
+            if role == Qt.ToolTipRole:
+                if size is None:
+                    return "右键项目 → 更新项目体积，统计已登记的链接和仓储文件。"
+                lines = [f"已知大小：{size.bytes:,} 字节", f"缺失或不可访问：{size.missing} 个",
+                         f"统计时间：{utc_to_local_str(size.checked_at)}"]
+                if size.stale:
+                    lines.append("文件登记已变化，请右键更新项目体积。")
+                lines.append("缓存不会自动跟踪磁盘上的变化；外部修改后请手动更新。")
+                return "\n".join(lines)
+            if role == Qt.TextAlignmentRole:
+                return int(Qt.AlignRight | Qt.AlignVCenter)
         if role == Qt.DisplayRole:
             if key == EXTRA_COL_FILES:
                 return str(self._file_counts.get(p.id, 0)) if p.id is not None else ""
@@ -245,6 +418,53 @@ class ProjectModel(QAbstractTableModel):
 # ===================================================================== delegate
 class ProjectCardDelegate(QStyledItemDelegate):
     """网格卡片：封面 + 标题 + 第一个可见非标题字段 + 评分（若有）。"""
+
+    favorite_toggled = Signal(int)
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self._view = parent
+        self._viewport = parent.viewport() if parent is not None else None
+        self._pressed_favorite: int | None = None
+        if parent is not None:
+            parent.viewport().installEventFilter(self)
+
+    @staticmethod
+    def favorite_rect(rect: QRect) -> QRect:
+        """星标点击区和绘制区域共享坐标，随卡片滚动。"""
+        return QRect(rect.right() - 44, rect.top() + 12, 28, 28)
+
+    def eventFilter(self, obj, event) -> bool:
+        # 在视图处理鼠标前接管星标，避免收藏误触发选中、拖拽或双击编辑。
+        if self._view is not None and obj is self._viewport:
+            kind = event.type()
+            if kind in (QEvent.MouseButtonPress, QEvent.MouseButtonRelease,
+                        QEvent.MouseButtonDblClick, QEvent.MouseMove, QEvent.ToolTip):
+                pos = event.pos() if kind == QEvent.ToolTip else event.position().toPoint()
+                index = self._view.indexAt(pos)
+                hit = index.isValid() and self.favorite_rect(self._view.visualRect(index)).contains(pos)
+                if kind == QEvent.ToolTip and hit:
+                    text = "取消收藏" if index.data(ProjectModel.RoleFavorite) else "收藏项目"
+                    QToolTip.showText(event.globalPos(), text, self._view)
+                    return True
+                if kind == QEvent.MouseMove and self._pressed_favorite is not None:
+                    return True
+                if kind == QEvent.MouseButtonPress and event.button() == Qt.LeftButton and hit:
+                    self._pressed_favorite = index.data(ProjectModel.RoleId)
+                    return True
+                if kind == QEvent.MouseButtonDblClick and event.button() == Qt.LeftButton and hit:
+                    self._pressed_favorite = None
+                    return True
+                if kind == QEvent.MouseButtonRelease and event.button() == Qt.LeftButton:
+                    pressed = self._pressed_favorite
+                    self._pressed_favorite = None
+                    if pressed is not None:
+                        if hit and index.data(ProjectModel.RoleId) == pressed:
+                            self.favorite_toggled.emit(pressed)
+                        return True
+                    if hit:
+                        return True
+        return super().eventFilter(obj, event)
 
     def sizeHint(self, _opt: QStyleOptionViewItem, _idx: QModelIndex) -> QSize:
         return QSize(CARD_W, CARD_H)
@@ -330,4 +550,15 @@ class ProjectCardDelegate(QStyledItemDelegate):
         # 看到评分）；如需恢复，需通过 delegate 注入字段表查 rating fid 后从
         # p.field_values 读。
 
+        # 卡片星标始终可见，使用不透明背景避免封面颜色影响可读性。
+        star_rect = self.favorite_rect(opt.rect)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(pal.bg1))
+        painter.drawRoundedRect(star_rect, 6, 6)
+        star_font = QFont(painter.font())
+        star_font.setPointSize(16)
+        painter.setFont(star_font)
+        favorite = bool(idx.data(ProjectModel.RoleFavorite))
+        painter.setPen(QColor(pal.warn if favorite else pal.fg1))
+        painter.drawText(star_rect, Qt.AlignCenter, "★" if favorite else "☆")
         painter.restore()

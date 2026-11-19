@@ -1,6 +1,7 @@
 """通用工具函数。"""
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import sys
@@ -10,6 +11,7 @@ from pathlib import Path
 # 文件类型判定
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp", ".tiff", ".ico"}
 VIDEO_EXTS = {".mp4", ".mkv", ".avi", ".mov", ".wmv", ".flv", ".webm", ".m4v"}
+ARCHIVE_EXTS = {".zip", ".7z", ".rar", ".tar", ".gz", ".bz2", ".xz", ".tgz", ".tbz", ".tbz2", ".txz"}
 PDF_EXTS = {".pdf"}
 DOC_EXTS = {
     ".txt", ".md", ".markdown", ".rtf",
@@ -153,13 +155,15 @@ CODE_EXTS: dict[str, str] = {
 
 
 def detect_kind(path: str | Path) -> str:
-    """根据扩展名返回文件大类：image / video / pdf / doc / code / other。"""
+    """根据扩展名返回文件大类：image / video / archive / pdf / doc / code / other。"""
     p = Path(path)
     ext = p.suffix.lower()
     if ext in IMAGE_EXTS:
         return "image"
     if ext in VIDEO_EXTS:
         return "video"
+    if ext in ARCHIVE_EXTS:
+        return "archive"
     if ext in PDF_EXTS:
         return "pdf"
     if ext in DOC_EXTS:
@@ -317,19 +321,23 @@ def human_size(n: int | float) -> str:
     return f"{f:.1f} PB"
 
 
-def move_to_trash(path: str | Path) -> str:
+def move_to_trash(path: str | Path, *, allow_delete: bool = True) -> str:
     """把文件移入系统回收站（task #37）。
 
     回收站不可用（U盘 / 网络盘 / 未安装 Send2Trash 等）时回退为直接删除。
     返回 ``"trash"``（进了回收站）或 ``"deleted"``（已直接删除）；
-    两者都失败时抛出 ``OSError``。
+    两者都失败时抛出 ``OSError``。``allow_delete=False`` 时只允许回收站，
+    回收失败会保留原文件并抛出 ``OSError``。
     """
     p = Path(path)
     try:
         from send2trash import send2trash
         send2trash(str(p))
         return "trash"
-    except Exception:
+    except Exception as exc:
+        if not allow_delete:
+            raise OSError(f"移动到回收站失败，已保留原文件：{p}（{exc}）") from exc
+        logging.getLogger(__name__).warning("移动到回收站失败，回退直接删除：%s", p, exc_info=True)
         p.unlink()
         return "deleted"
 

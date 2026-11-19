@@ -32,6 +32,7 @@ from .llm import load_config
 from .llm.queue import LLMTaskQueue
 from .repository import Repository
 from .ui.main_window import MainWindow
+from .ui.dialogs import warn
 from .ui.theme import apply_theme
 from .utils import app_icon_path
 
@@ -294,27 +295,32 @@ def _resolve_active_library_root(
 
 
 def _restart_self(*, extra_args: Optional[list[str]] = None) -> None:
-    """重启当前进程。PyInstaller onefile 下 sys.executable 是 exe 路径，os.execv 正常工作。
-
-    ``extra_args`` 用于追加本次重启需要的额外命令行参数（比如 ``--welcome``
-    强制走 Welcome 兜底）；会在 ``sys.argv`` 之后追加 + 去重。
-
-    会过滤掉 ``--welcome`` —— 该参数仅对**本次**启动有效（一次性"强制 Welcome"
-    意图），重启时若 ``extra_args`` 里没显式带，必须把它去掉，否则用户从 Welcome
-    选了库进主界面后再做切换/重启又会再次被踹回 Welcome。
-    """
+    """源码通过顶层入口重启，打包版直接启动自身；欢迎页参数仅生效一次。"""
+    argv: list[str] = []
     try:
-        argv = [a for a in sys.argv if a != "--welcome"]
+        # -m 启动时 argv[0] 是 app/main.py，直接执行会丢失包上下文。
+        # 使用绝对 run.py，既保留包导入，也不依赖当前工作目录。
+        arguments = [a for a in sys.argv[1:] if a != "--welcome"]
         for a in (extra_args or []):
-            if a not in argv:
-                argv.append(a)
-        os.execv(sys.executable, [sys.executable, *argv])
+            if a not in arguments:
+                arguments.append(a)
+        if getattr(sys, "frozen", False):
+            # 打包版 argv[0] 已是可执行文件，不能再作为业务参数重复传入。
+            argv = [sys.executable, *arguments]
+        else:
+            entry = Path(__file__).resolve().parent.parent / "run.py"
+            argv = [sys.executable, str(entry), *arguments]
+            if not entry.is_file():
+                raise FileNotFoundError(f"找不到应用重启入口：{entry}")
+        os.execv(sys.executable, argv)
     except Exception as e:
-        log.error("重启失败：%s", e)
+        log.exception("自动重启失败")
         # 退而求其次：弹窗提示用户手动重启
-        QMessageBox.warning(
+        warn(
             None, "需要手动重启",
-            f"切换库需要重启应用，自动重启失败：{e}\n请手动关闭并重新打开。",
+            "目标库已保存，但自动重启失败。请手动重新打开应用。",
+            detailed=(f"失败阶段：启动应用重启入口\n解释器／程序：{sys.executable}\n"
+                      f"启动参数：{argv!r}\n原因：{type(e).__name__}: {e}"),
         )
 
 

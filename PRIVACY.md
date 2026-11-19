@@ -2,7 +2,7 @@
 
 > 简体中文版本：[PRIVACY.zh-CN.md](PRIVACY.zh-CN.md)
 
-Last updated: 2026-09-09
+Last updated: 2026-11-16
 
 LLM Cabinet is a **local desktop application**. This document explains what the app stores on your machine, and what data leaves your machine when you use the *"LLM metadata suggestion"* feature.
 
@@ -18,6 +18,8 @@ The following data lives **only on your local disk** and is never proactively up
   - Tag relations, field definitions, user settings
   - LLM task history (request payloads, raw responses, parsed suggestions, token usage)
   - LLM API config — **including API keys**
+
+- **Archive passwords (optional)**: not saved by default. If you enable recording successful extraction passwords, the archive name and successful password are appended to the project description as plaintext. These entries are included in project exports/backups and whenever you share the description or initiate an LLM request containing it. Disabling the option does not erase existing entries. Extraction is local and does not upload archives or passwords.
 
 - **Library directory**: `%APPDATA%/LLMCabinet/library/` (or whatever you choose in settings)
   - File copies for projects in `copy` mode
