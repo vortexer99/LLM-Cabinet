@@ -11,7 +11,7 @@ English · [简体中文](README.zh-CN.md)
 
 </div>
 
-**v0.7.0** (2026-11-20) adds project favorites and hiding, combined search filters, fullscreen media previews, archive extraction, and a CLI for managing libraries. See the [changelog](CHANGELOG.md#070---2026-11-20) for details.
+**v0.7.1** (2026-11-20) fixes a Windows packaging error. The 0.7 series adds project favorites and hiding, combined search filters, fullscreen media previews, archive extraction, and a CLI for managing libraries. See the [changelog](CHANGELOG.md#071---2026-11-20) for details.
 
 We plan to phase out built-in model adapters, API key settings, and the LLM request queue so that external tools and AI assistants become the primary way to access project libraries through the CLI or MCP.
 

@@ -8,6 +8,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-11-20
+
 ### Fixed
 - Windows 发布构建使用 UTF-8 运行 7-Zip 准备脚本，修复英文环境中输出中文提示时中断打包的问题。
 
@@ -344,7 +346,8 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 📦 schema v1 — 初始 schema。
 
-[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.0...HEAD
+[Unreleased]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.1...HEAD
+[0.7.1]: https://github.com/vortexer99/llm-cabinet/compare/v0.7.0...v0.7.1
 [0.7.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/vortexer99/llm-cabinet/compare/v0.4.1...v0.5.0
