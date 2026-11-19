@@ -8,6 +8,9 @@ schema 变化的发布需要在条目里显式标注 `📦 schema vX → vY` 并
 
 ## [Unreleased]
 
+### Fixed
+- Windows 发布构建使用 UTF-8 运行 7-Zip 准备脚本，修复英文环境中输出中文提示时中断打包的问题。
+
 ## [0.7.0] - 2026-11-20
 
 ### Added

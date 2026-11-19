@@ -72,7 +72,7 @@ jobs:
 
       # PyInstaller 单 exe；参数与 README.zh-CN.md 中保持一致
       - name: Prepare verified official 7-Zip runtime
-        run: python tools/prepare_7zip.py
+        run: python -X utf8 tools/prepare_7zip.py
 
       - name: Build with PyInstaller
         shell: pwsh
